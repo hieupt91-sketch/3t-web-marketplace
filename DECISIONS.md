@@ -28,3 +28,13 @@ Ngày 23/10/2026. Đây là baseline đề xuất kỹ thuật theo yêu cầu n
 | ADR-017 | Artifact site tĩnh lưu theo digest nội dung; source_sha của version = digest cây tệp | Nén lại cùng nội dung → cùng version; cùng semver khác nội dung bị từ chối (AT-30) |
 | ADR-018 | Kết quả nghiệp vụ (rejected/needs_configuration) đánh dấu job succeeded; lỗi hạ tầng mới retry | Hàng dead-letter chỉ chứa việc cần vận hành can thiệp |
 | ADR-019 | Chụp ảnh chạy Chromium trên worker với chặn mạng ngoài origin preview | Chấp nhận cho mẫu do đội 3T nhập; source không tin cậy phải chuyển vào executor cách ly |
+
+## Quyết định khi triển khai M3 (23/10/2026)
+
+| ADR | Quyết định | Lý do / hệ quả |
+|---|---|---|
+| ADR-020 | `plan_prices` dùng khoảng hiệu lực [from, to) + exclusion constraint (btree_gist) chống chồng lấn; đổi giá tự đóng khoảng cũ | Giữ lịch sử giá, đơn cũ snapshot không đổi; "áp dụng cho đơn mới từ…" (A08) |
+| ADR-021 | Kích hoạt gói đòi có giá hiện hành ở currency nền tảng; gói không giá không hiển thị cho khách | Không công bố gói lỗi/thiếu giá (REQ-11, §7 docs/01) |
+| ADR-022 | `template_editor` có `pricing:write` ("giá nháp"); chỉ `template:publish` mới công bố | Khớp bảng vai trò docs/01 §1; tách soạn thảo và phát hành |
+| ADR-023 | Công bố gộp A06/A08/A09 trong một trang `/admin/templates/{id}` theo ETag mẫu | Một nguồn sự thật, tránh xung đột revision giữa nhiều màn |
+| ADR-024 | Timestamp trả API chuẩn hóa ISO 8601 UTC (Z), kể cả giá trị lấy từ jsonb | Khớp hợp đồng docs/04 §1 |

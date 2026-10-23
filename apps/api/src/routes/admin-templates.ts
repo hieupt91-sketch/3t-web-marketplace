@@ -1,0 +1,361 @@
+import type { FastifyInstance } from 'fastify';
+import { emitEvent, isUniqueViolation, publishReadiness, tx, writeAudit, type Queryable } from '@3t/core';
+import { DEFAULT_LOCALE } from '@3t/i18n';
+import { requirePermission } from '../app.ts';
+import { AppError, errors } from '../errors.ts';
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const PLATFORM_CURRENCY = 'VND';
+const LOCALES = ['vi', 'en'] as const;
+const INTERVALS = ['one_time', 'monthly', 'yearly'] as const;
+
+function requireIfMatch(header: string | undefined): number {
+  const match = header?.match(/^(?:W\/)?"(\d+)"$/);
+  if (!match) throw new AppError(428, 'request.if_match_required');
+  return Number(match[1]);
+}
+
+function assertId(id: string) {
+  if (!UUID.test(id)) throw errors.notFound();
+}
+
+async function loadTemplate(db: Queryable, id: string, lock = false) {
+  assertId(id);
+  const { rows } = await db.query<{ id: string; slug: string; status: string; category_id: string | null; published_version_id: string | null; row_version: number }>(
+    `SELECT id, slug, status, category_id, published_version_id, row_version FROM templates WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
+    [id],
+  );
+  if (!rows[0]) throw errors.notFound();
+  return rows[0];
+}
+
+/** amount in minor units as a non-negative integer string (docs/02 §4: never a float). */
+function parseAmountMinor(value: unknown): string {
+  if (typeof value !== 'string' || !/^\d{1,18}$/.test(value)) throw errors.validation([{ field: 'amount_minor', code: 'invalid' }]);
+  return String(BigInt(value));
+}
+
+export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
+  const { db } = app.deps;
+
+  app.get<{ Params: { id: string } }>('/templates/:id/detail', async (request, reply) => {
+    requirePermission(request, 'template:read');
+    const template = await loadTemplate(db, request.params.id);
+    const [translations, versions, plans, readiness] = await Promise.all([
+      db.query(
+        `SELECT locale, title, summary, description, slug, seo_title, seo_description, status, source_revision, updated_at
+         FROM template_translations WHERE template_id = $1 ORDER BY locale`,
+        [template.id],
+      ),
+      db.query(
+        `SELECT v.id, v.semver, v.adapter, v.status, v.source_sha, v.created_at,
+                (SELECT p.host_label FROM previews p WHERE p.version_id = v.id AND p.status = 'active' LIMIT 1) AS preview_label
+         FROM template_versions v WHERE v.template_id = $1 ORDER BY v.created_at DESC`,
+        [template.id],
+      ),
+      db.query(
+        `SELECT p.id, p.code, p.deployment_mode, p.name_json, p.status, p.limits_json, p.row_version,
+                COALESCE((SELECT jsonb_agg(jsonb_build_object('id', pp.id, 'currency', pp.currency, 'amount_minor', pp.amount_minor::text,
+                          'interval', pp.interval, 'effective_from', pp.effective_from, 'effective_to', pp.effective_to) ORDER BY pp.effective_from DESC)
+                          FROM plan_prices pp WHERE pp.plan_id = p.id), '[]'::jsonb) AS prices
+         FROM plans p WHERE p.template_id = $1 ORDER BY p.deployment_mode, p.code`,
+        [template.id],
+      ),
+      publishReadiness(db, template.id, DEFAULT_LOCALE, PLATFORM_CURRENCY),
+    ]);
+    // jsonb renders timestamptz with a +00:00 offset; the API contract is ISO 8601 UTC with Z.
+    const toZ = (v: string | null) => (v ? new Date(v).toISOString() : null);
+    const planRows = (plans.rows as { prices: { effective_from: string; effective_to: string | null }[] }[]).map((plan) => ({
+      ...plan,
+      prices: plan.prices.map((price) => ({ ...price, effective_from: toZ(price.effective_from), effective_to: toZ(price.effective_to) })),
+    }));
+    reply.header('etag', `"${template.row_version}"`);
+    return {
+      data: {
+        id: template.id,
+        slug: template.slug,
+        status: template.status,
+        category_id: template.category_id,
+        published_version_id: template.published_version_id,
+        translations: translations.rows,
+        versions: versions.rows,
+        plans: planRows,
+        publish: readiness,
+      },
+      meta: { request_id: request.id, revision: template.row_version },
+    };
+  });
+
+  app.patch<{ Params: { id: string }; Body: { category_id: string | null } }>(
+    '/templates/:id',
+    { schema: { body: { type: 'object', additionalProperties: false, properties: { category_id: { type: ['string', 'null'] } } } } },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'template:write');
+      const expected = requireIfMatch(request.headers['if-match']);
+      const next = await tx(db, async (client) => {
+        const template = await loadTemplate(client, request.params.id, true);
+        if (template.row_version !== expected) throw errors.preconditionFailed();
+        if (request.body.category_id) {
+          const cat = await client.query('SELECT 1 FROM template_categories WHERE id = $1', [request.body.category_id]);
+          if (cat.rowCount === 0) throw errors.validation([{ field: 'category_id', code: 'not_found' }]);
+        }
+        const { rows } = await client.query<{ row_version: number }>(
+          'UPDATE templates SET category_id = $2, row_version = row_version + 1 WHERE id = $1 RETURNING row_version',
+          [template.id, request.body.category_id ?? null],
+        );
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.updated', resourceType: 'template', resourceId: template.id, traceId: request.id, diff: request.body });
+        return rows[0]!.row_version;
+      });
+      reply.header('etag', `"${next}"`);
+      return { data: { status: 'updated' }, meta: { request_id: request.id, revision: next } };
+    },
+  );
+
+  // A06/A22 — localized metadata. Editing a translation never overwrites another locale.
+  app.put<{ Params: { id: string; locale: string }; Body: { title: string; summary?: string; description?: string; slug: string; seo_title?: string; seo_description?: string; status: 'draft' | 'reviewed' | 'published' } }>(
+    '/templates/:id/translations/:locale',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['title', 'slug', 'status'],
+          properties: {
+            title: { type: 'string', minLength: 1, maxLength: 200 },
+            summary: { type: 'string', maxLength: 500 },
+            description: { type: 'string', maxLength: 20000 },
+            slug: { type: 'string', pattern: '^[a-z0-9]+(-[a-z0-9]+)*$', maxLength: 120 },
+            seo_title: { type: 'string', maxLength: 200 },
+            seo_description: { type: 'string', maxLength: 400 },
+            status: { enum: ['draft', 'reviewed', 'published'] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'translation:write');
+      const { id, locale } = request.params;
+      if (!LOCALES.includes(locale as (typeof LOCALES)[number])) throw errors.notFound();
+      const body = request.body;
+      try {
+        const result = await tx(db, async (client) => {
+          const template = await loadTemplate(client, id, true);
+          const { rows } = await client.query<{ status: string; updated_at: Date }>(
+            `INSERT INTO template_translations (template_id, locale, title, summary, description, slug, seo_title, seo_description, status, source_revision)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 1)
+             ON CONFLICT (template_id, locale) DO UPDATE SET
+               title = EXCLUDED.title, summary = EXCLUDED.summary, description = EXCLUDED.description, slug = EXCLUDED.slug,
+               seo_title = EXCLUDED.seo_title, seo_description = EXCLUDED.seo_description, status = EXCLUDED.status
+             RETURNING status, updated_at`,
+            [template.id, locale, body.title.trim(), body.summary ?? null, body.description ?? null, body.slug, body.seo_title ?? null, body.seo_description ?? null, body.status],
+          );
+          await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.translation_saved', resourceType: 'template', resourceId: template.id, traceId: request.id, diff: { locale, status: body.status } });
+          return rows[0]!;
+        });
+        return reply.status(200).send({ data: { locale, status: result.status, updated_at: result.updated_at.toISOString() } });
+      } catch (error) {
+        if (isUniqueViolation(error, 'template_translations_locale_slug_uq')) throw errors.conflict('translation.slug_taken');
+        throw error;
+      }
+    },
+  );
+
+  // A08 — plans. A plan is created as a draft; it must have a current price before activation.
+  app.post<{ Params: { id: string }; Body: { code: string; deployment_mode: 'selfhost' | 'hosted'; name: Record<string, string>; limits?: Record<string, unknown> } }>(
+    '/templates/:id/plans',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['code', 'deployment_mode', 'name'],
+          properties: {
+            code: { type: 'string', pattern: '^[a-z][a-z0-9]*(-[a-z0-9]+)*$', maxLength: 60 },
+            deployment_mode: { enum: ['selfhost', 'hosted'] },
+            name: { type: 'object', additionalProperties: { type: 'string', minLength: 1, maxLength: 120 }, propertyNames: { enum: ['vi', 'en'] }, minProperties: 1 },
+            limits: { type: 'object' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'pricing:write');
+      const body = request.body;
+      if (!(DEFAULT_LOCALE in body.name)) throw errors.validation([{ field: 'name', code: 'default_locale_required' }]);
+      try {
+        const plan = await tx(db, async (client) => {
+          const template = await loadTemplate(client, request.params.id, true);
+          const { rows } = await client.query<{ id: string }>(
+            `INSERT INTO plans (template_id, code, deployment_mode, name_json, limits_json) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [template.id, body.code, body.deployment_mode, body.name, body.limits ?? {}],
+          );
+          await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'plan.created', resourceType: 'plan', resourceId: rows[0]!.id, traceId: request.id, diff: { code: body.code, deployment_mode: body.deployment_mode } });
+          return rows[0]!;
+        });
+        return reply.status(201).send({ data: { id: plan.id, status: 'draft' } });
+      } catch (error) {
+        if (isUniqueViolation(error, 'plans_template_code_uq')) throw errors.conflict('plan.code_taken');
+        throw error;
+      }
+    },
+  );
+
+  app.patch<{ Params: { planId: string }; Body: { name?: Record<string, string>; limits?: Record<string, unknown>; status?: 'draft' | 'active' | 'archived' } }>(
+    '/plans/:planId',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          minProperties: 1,
+          properties: {
+            name: { type: 'object', additionalProperties: { type: 'string', minLength: 1, maxLength: 120 }, propertyNames: { enum: ['vi', 'en'] }, minProperties: 1 },
+            limits: { type: 'object' },
+            status: { enum: ['draft', 'active', 'archived'] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'pricing:write');
+      assertId(request.params.planId);
+      const expected = requireIfMatch(request.headers['if-match']);
+      const next = await tx(db, async (client) => {
+        const { rows } = await client.query<{ id: string; template_id: string; deployment_mode: string; row_version: number }>(
+          'SELECT id, template_id, deployment_mode, row_version FROM plans WHERE id = $1 FOR UPDATE',
+          [request.params.planId],
+        );
+        const plan = rows[0];
+        if (!plan) throw errors.notFound();
+        if (plan.row_version !== expected) throw errors.preconditionFailed();
+        // Activation requires a current price in the platform currency (otherwise the plan is invisible to buyers).
+        if (request.body.status === 'active') {
+          const priced = await client.query(
+            `SELECT 1 FROM plan_prices WHERE plan_id = $1 AND currency = $2 AND effective_from <= now() AND (effective_to IS NULL OR effective_to > now())`,
+            [plan.id, PLATFORM_CURRENCY],
+          );
+          if (priced.rowCount === 0) throw errors.conflict('plan.no_current_price');
+        }
+        const updated = await client.query<{ row_version: number }>(
+          `UPDATE plans SET name_json = COALESCE($2, name_json), limits_json = COALESCE($3, limits_json),
+                  status = COALESCE($4, status), row_version = row_version + 1 WHERE id = $1 RETURNING row_version`,
+          [plan.id, request.body.name ?? null, request.body.limits ?? null, request.body.status ?? null],
+        );
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'plan.updated', resourceType: 'plan', resourceId: plan.id, traceId: request.id, diff: request.body });
+        return updated.rows[0]!.row_version;
+      });
+      reply.header('etag', `"${next}"`);
+      return { data: { status: 'updated' }, meta: { request_id: request.id, revision: next } };
+    },
+  );
+
+  // A08 — add a price with an effective time; the previously open price of the same
+  // (currency, interval) is capped at the new start, so existing orders keep their snapshot.
+  app.post<{ Params: { planId: string }; Body: { currency?: string; amount_minor: string; interval: 'one_time' | 'monthly' | 'yearly'; effective_from?: string } }>(
+    '/plans/:planId/prices',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['amount_minor', 'interval'],
+          properties: {
+            currency: { enum: ['VND'] },
+            amount_minor: { type: 'string' },
+            interval: { enum: ['one_time', 'monthly', 'yearly'] },
+            effective_from: { type: 'string', format: 'date-time' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'pricing:write');
+      assertId(request.params.planId);
+      const amount = parseAmountMinor(request.body.amount_minor);
+      const currency = request.body.currency ?? PLATFORM_CURRENCY;
+      const interval = request.body.interval;
+      if (!INTERVALS.includes(interval)) throw errors.validation([{ field: 'interval', code: 'invalid' }]);
+      const from = request.body.effective_from ? new Date(request.body.effective_from) : new Date();
+      if (Number.isNaN(from.getTime())) throw errors.validation([{ field: 'effective_from', code: 'invalid' }]);
+      try {
+        const price = await tx(db, async (client) => {
+          const plan = await client.query<{ id: string }>('SELECT id FROM plans WHERE id = $1 FOR UPDATE', [request.params.planId]);
+          if (plan.rowCount === 0) throw errors.notFound();
+          // Close any price that is open at `from` for the same key so ranges never overlap.
+          await client.query(
+            `UPDATE plan_prices SET effective_to = $4
+             WHERE plan_id = $1 AND currency = $2 AND interval = $3
+               AND effective_from < $4 AND (effective_to IS NULL OR effective_to > $4)`,
+            [request.params.planId, currency, interval, from.toISOString()],
+          );
+          const { rows } = await client.query<{ id: string }>(
+            `INSERT INTO plan_prices (plan_id, currency, amount_minor, interval, effective_from) VALUES ($1, $2, $3, $4, $5) RETURNING id`,
+            [request.params.planId, currency, amount, interval, from.toISOString()],
+          );
+          await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'plan.price_added', resourceType: 'plan', resourceId: request.params.planId, traceId: request.id, diff: { currency, amount_minor: amount, interval, effective_from: from.toISOString() } });
+          return rows[0]!;
+        });
+        return reply.status(201).send({ data: { id: price.id, amount_minor: amount, currency, interval, effective_from: from.toISOString() } });
+      } catch (error) {
+        if (isUniqueViolation(error) || (error as { code?: string }).code === '23P01') throw errors.conflict('price.overlap');
+        throw error;
+      }
+    },
+  );
+
+  // A09 — publish gates. Red gate blocks; publishing makes the ready version and its demo public.
+  app.post<{ Params: { id: string } }>('/templates/:id/publish', async (request, reply) => {
+    const auth = requirePermission(request, 'template:publish');
+    const expected = requireIfMatch(request.headers['if-match']);
+    const result = await tx(db, async (client) => {
+      const template = await loadTemplate(client, request.params.id, true);
+      if (template.row_version !== expected) throw errors.preconditionFailed();
+      const readiness = await publishReadiness(client, template.id, DEFAULT_LOCALE, PLATFORM_CURRENCY);
+      if (!readiness.ready) throw new AppError(409, 'template.publish_gate_failed', readiness.gates.filter((g) => !g.passed).map((g) => ({ field: g.code, code: 'gate_failed' })));
+      const version = await client.query<{ id: string }>(
+        `SELECT v.id FROM template_versions v JOIN previews p ON p.version_id = v.id AND p.status = 'active'
+         WHERE v.template_id = $1 AND v.status IN ('ready', 'published') ORDER BY v.created_at DESC LIMIT 1`,
+        [template.id],
+      );
+      const versionId = version.rows[0]!.id;
+      await client.query("UPDATE template_versions SET status = 'published' WHERE id = $1 AND status = 'ready'", [versionId]);
+      await client.query("UPDATE previews SET visibility = 'public' WHERE version_id = $1 AND status = 'active'", [versionId]);
+      const updated = await client.query<{ row_version: number }>(
+        "UPDATE templates SET status = 'published', published_version_id = $2, row_version = row_version + 1 WHERE id = $1 RETURNING row_version",
+        [template.id, versionId],
+      );
+      await emitEvent(client, 'template.published', 'template', template.id, { template_id: template.id, version_id: versionId });
+      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.published', resourceType: 'template', resourceId: template.id, traceId: request.id, diff: { version_id: versionId } });
+      return updated.rows[0]!.row_version;
+    });
+    reply.header('etag', `"${result}"`);
+    return { data: { status: 'published' }, meta: { request_id: request.id, revision: result } };
+  });
+
+  // Archive stops new sales but keeps the published version for existing buyers (docs/04 §5).
+  app.post<{ Params: { id: string } }>('/templates/:id/archive', async (request, reply) => {
+    const auth = requirePermission(request, 'template:publish');
+    const expected = requireIfMatch(request.headers['if-match']);
+    const next = await tx(db, async (client) => {
+      const template = await loadTemplate(client, request.params.id, true);
+      if (template.row_version !== expected) throw errors.preconditionFailed();
+      if (template.status !== 'published') throw errors.conflict('template.not_published');
+      const updated = await client.query<{ row_version: number }>(
+        "UPDATE templates SET status = 'archived', row_version = row_version + 1 WHERE id = $1 RETURNING row_version",
+        [template.id],
+      );
+      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.archived', resourceType: 'template', resourceId: template.id, traceId: request.id });
+      return updated.rows[0]!.row_version;
+    });
+    reply.header('etag', `"${next}"`);
+    return { data: { status: 'archived' }, meta: { request_id: request.id, revision: next } };
+  });
+
+  // Public category tree management is minimal for M3 (owner seeds categories).
+  app.get('/categories', async (request) => {
+    requirePermission(request, 'template:read');
+    const { rows } = await db.query('SELECT id, code, parent_id FROM template_categories ORDER BY code');
+    return { data: rows, page: { next_cursor: null, has_more: false } };
+  });
+
+}

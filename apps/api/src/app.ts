@@ -11,6 +11,7 @@ import { authRoutes } from './routes/auth.ts';
 import { meRoutes } from './routes/me.ts';
 import { adminImportRoutes } from './routes/admin-imports.ts';
 import { adminCatalogRoutes } from './routes/admin-catalog.ts';
+import { adminTemplateRoutes } from './routes/admin-templates.ts';
 import { jobRoutes } from './routes/jobs.ts';
 
 export const SESSION_COOKIE = 'mp_session';
@@ -246,6 +247,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(meRoutes);
       await api.register(adminImportRoutes, { prefix: '/admin' });
       await api.register(adminCatalogRoutes, { prefix: '/admin' });
+      await api.register(adminTemplateRoutes, { prefix: '/admin' });
       await api.register(jobRoutes);
     },
     { prefix: '/api/v1' },

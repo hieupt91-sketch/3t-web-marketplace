@@ -70,7 +70,7 @@ function TemplatesInner() {
               {rows.map((row) => (
                 <tr key={row.id}>
                   <td>
-                    <strong>{row.titles[locale] ?? row.titles.vi ?? row.slug}</strong>
+                    <Link href={`/admin/templates/${row.id}`}><strong>{row.titles[locale] ?? row.titles.vi ?? row.slug}</strong></Link>
                     <div className="mono muted">{row.slug}</div>
                   </td>
                   <td><StatusBadge tone={templateTone(row.status)}>{t(`ui.template.status.${row.status}`)}</StatusBadge></td>

@@ -1,8 +1,36 @@
 import type { FastifyInstance } from 'fastify';
+import { loadActivePlans, startingPrices } from '@3t/core';
 import { DEFAULT_LOCALE, LOCALES, type Locale } from '@3t/i18n';
 import { ADAPTERS, IMPLEMENTED_ADAPTERS } from '@3t/template-sdk';
 import { errors } from '../errors.ts';
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
+
+const PLATFORM_CURRENCY = 'VND';
+
+/** Lowest current price per (template, deployment_mode) for a set of templates, in one query. */
+async function startingPricesFor(
+  db: FastifyInstance['deps']['db'],
+  templateIds: string[],
+): Promise<Map<string, { deployment_mode: string; amount_minor: string; currency: string; interval: string }[]>> {
+  const result = new Map<string, { deployment_mode: string; amount_minor: string; currency: string; interval: string }[]>();
+  if (templateIds.length === 0) return result;
+  const { rows } = await db.query<{ template_id: string; deployment_mode: string; amount_minor: string; interval: string }>(
+    `SELECT DISTINCT ON (p.template_id, p.deployment_mode)
+            p.template_id, p.deployment_mode, pp.amount_minor::text AS amount_minor, pp.interval
+     FROM plans p
+     JOIN plan_prices pp ON pp.plan_id = p.id AND pp.currency = $2
+       AND pp.effective_from <= now() AND (pp.effective_to IS NULL OR pp.effective_to > now())
+     WHERE p.template_id = ANY($1::uuid[]) AND p.status = 'active'
+     ORDER BY p.template_id, p.deployment_mode, pp.amount_minor ASC`,
+    [templateIds, PLATFORM_CURRENCY],
+  );
+  for (const row of rows) {
+    const list = result.get(row.template_id) ?? [];
+    list.push({ deployment_mode: row.deployment_mode, amount_minor: row.amount_minor, currency: PLATFORM_CURRENCY, interval: row.interval });
+    result.set(row.template_id, list);
+  }
+  return result;
+}
 
 interface PublicTemplateRow {
   id: string;
@@ -21,7 +49,7 @@ interface PublicTemplateRow {
  * Localised summary with explicit fallback metadata (docs/07 §3): when the requested locale has
  * no published translation the response says so instead of passing Vietnamese off as English.
  */
-function toSummary(row: PublicTemplateRow, locale: Locale) {
+function toSummary(row: PublicTemplateRow, locale: Locale, startingPricesList: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[] = []) {
   const translated = row.requested_title !== null;
   return {
     id: row.id,
@@ -36,7 +64,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale) {
     modes: row.manifest_json.export?.modes ?? [],
     content_locales: row.manifest_json.locales?.supported ?? [],
     capabilities: row.manifest_json.capabilities ?? [],
-    starting_prices: [],
+    starting_prices: startingPricesList,
   };
 }
 
@@ -87,7 +115,23 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     params.push(limit + 1);
     sql += ` ORDER BY t.created_at DESC, t.id DESC LIMIT $${params.length}`;
     const { rows } = await db.query<PublicTemplateRow>(sql, params);
-    return page(rows, limit, (row) => toSummary(row, request.locale));
+    const prices = await startingPricesFor(db, rows.slice(0, limit).map((r) => r.id));
+    return page(rows, limit, (row) => toSummary(row, request.locale, prices.get(row.id) ?? []));
+  });
+
+  app.get<{ Params: { id: string } }>('/plans/:id', async (request) => {
+    if (!/^[0-9a-f-]{36}$/.test(request.params.id)) throw errors.notFound();
+    const { rows } = await db.query<{ template_id: string; template_status: string }>(
+      `SELECT p.template_id, t.status AS template_status FROM plans p JOIN templates t ON t.id = p.template_id
+       WHERE p.id = $1 AND p.status = 'active'`,
+      [request.params.id],
+    );
+    const plan = rows[0];
+    if (!plan || plan.template_status !== 'published') throw errors.notFound();
+    const plans = await loadActivePlans(db, plan.template_id, PLATFORM_CURRENCY);
+    const found = plans.find((p) => p.id === request.params.id);
+    if (!found) throw errors.notFound();
+    return { data: found, meta: { request_id: request.id, revision: null } };
   });
 
   app.get<{ Params: { slug: string } }>('/templates/:slug', async (request) => {
@@ -100,6 +144,10 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     );
     const row = rows[0];
     if (!row) throw errors.notFound();
-    return { data: { ...toSummary(row, request.locale), plans: [] }, meta: { request_id: request.id, revision: null } };
+    const plans = await loadActivePlans(db, row.id, PLATFORM_CURRENCY);
+    return {
+      data: { ...toSummary(row, request.locale, startingPrices(plans)), plans },
+      meta: { request_id: request.id, revision: null },
+    };
   });
 }

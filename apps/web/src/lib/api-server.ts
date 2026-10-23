@@ -14,7 +14,16 @@ export interface TemplateSummary {
   modes: string[];
   content_locales: string[];
   capabilities: string[];
-  starting_prices: { amount_minor: string; currency: string }[];
+  starting_prices: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[];
+}
+
+export interface PublicPlan {
+  id: string;
+  code: string;
+  deployment_mode: 'selfhost' | 'hosted';
+  name: Record<string, string>;
+  limits: Record<string, unknown>;
+  prices: { interval: 'one_time' | 'monthly' | 'yearly'; amount_minor: string; currency: string }[];
 }
 
 export type PublicResult<T> = { ok: true; data: T; page?: { next_cursor: string | null; has_more: boolean } } | { ok: false; status: number; requestId: string | null };

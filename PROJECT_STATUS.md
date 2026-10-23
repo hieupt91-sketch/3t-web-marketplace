@@ -1,6 +1,6 @@
 # Trạng thái dự án
 
-Ngày cập nhật: 23/10/2026 (Asia/Ho_Chi_Minh). Đặc tả 1.0. Nhánh: `feat/foundation`.
+Ngày cập nhật: 23/10/2026 (Asia/Ho_Chi_Minh). Đặc tả 1.0. Nhánh: `feat/foundation` (M1–M3).
 
 ## Đã triển khai và kiểm thử
 
@@ -20,9 +20,17 @@ Ngày cập nhật: 23/10/2026 (Asia/Ho_Chi_Minh). Đặc tả 1.0. Nhánh: `fea
 - Preview server: origin riêng theo hostname ngẫu nhiên 160-bit, chặn `..`/dotfile, không liệt kê thư mục, noindex, `frame-ancestors` chỉ portal.
 - UI: P01–P03 (chỉ dữ liệu đã publish; chưa có mẫu publish nên hiển thị trạng thái rỗng thật), U01–U05, U06 (phiên; đổi mật khẩu qua email), C01 (trạng thái rỗng), A01 (chỉ số liệu có thật), A02, A03 (ZIP; GitHub ghi rõ chưa triển khai), A04 (form cấu hình allowlist), A05 (timeline, lỗi, preview iframe sandbox, ảnh chụp, log, manifest).
 
+**M3 — Catalog (lát cắt công bố, 23/10/2026)**
+
+- `migrations/0002_catalog_pricing.sql`: `plans` (deployment_mode selfhost/hosted, status draft/active/archived, limits_json, row_version) và `plan_prices` (giá hiệu lực theo khoảng, exclusion constraint chống chồng lấn cùng plan/currency/interval bằng btree_gist); seed `terms.version`.
+- API quản trị: `GET /admin/templates/{id}/detail` (bản dịch, phiên bản, gói+toàn bộ giá, cổng công bố), `PATCH /admin/templates/{id}` (ETag), `PUT /admin/templates/{id}/translations/{locale}` (slug unique theo locale → 409), `GET|POST /admin/templates/{id}/plans`, `PATCH /admin/plans/{id}` (kích hoạt đòi giá hiện hành), `POST /admin/plans/{id}/prices` (đổi giá tự đóng khoảng cũ, chồng lấn → 409), `POST .../publish` (gate đỏ chặn, công bố làm version + demo công khai), `POST .../archive`.
+- API công khai: `/templates/{slug}` trả plans + current prices; `/templates` trả `starting_prices`; `GET /plans/{id}`. Giá là chuỗi minor units, VND.
+- Cổng công bố (A09): demo_ready, default_translation, has_priced_plan, export_modes. Quyền: `template_editor` được tạo gói/giá nháp (pricing:write = "giá nháp"), chỉ `template:publish` mới công bố.
+- UI: A02 danh sách mẫu (link chi tiết), A06/A08/A09 gộp ở `/admin/templates/{id}` (LocaleTabs vi/en, biên tập bản dịch, gói + bảng giá hiệu lực + kích hoạt, checklist cổng + publish/archive). Công khai P02 (giá "từ" trên thẻ), P03 (PriceBreakdown, nhãn chưa có checkout), P04 so sánh gói.
+
 ## Bằng chứng kiểm thử (máy dev, PostgreSQL 16 cục bộ)
 
-`pnpm run check` PASS: docs validator; typecheck mọi package; i18n lint; 82 test (sdk 30, core 6, i18n 4, preview 12, api 14, tích hợp 16). `next build` PASS.
+`pnpm run check` PASS: docs validator; typecheck mọi package; i18n lint (482 khóa); 89 test (sdk 30, core 6, i18n 4, preview 12, api 14, tích hợp 23 gồm 16 import + 7 catalog). `next build` PASS. Đã chạy lượt trình duyệt M3: đăng nhập → biên tập bản dịch → thêm gói + giá → kích hoạt → công bố → thấy mẫu kèm giá 1.500.000 đ ở P02/P03.
 
 | Kịch bản | Bằng chứng tự động |
 |---|---|
@@ -59,9 +67,9 @@ pnpm run check
 ## Bước tiếp theo đề xuất
 
 1. Review/merge `feat/foundation`; bật CI và xác nhận chạy xanh trên GitHub.
-2. M3: A06/A08/A09 (bản dịch, giá, publish gates) để mẫu đầu tiên xuất hiện ở P02/P03; D01 shell demo công khai.
-3. Thiết kế executor build cách ly (VM/sandbox riêng) trước khi bật `vite-static`.
-4. Chốt nhà cung cấp email và thanh toán sandbox cho M4.
+2. Hoàn thiện M3 còn lại: D01–D04 (shell demo công khai), P05–P09 (how-it-works/help/partners/policies/contact — cần module CMS nền tảng), A07 (màn versions đầy đủ), filter catalog ngoài search, sitemap/hreflang.
+3. M4 — COMMERCE: quote/order/payment adapter sandbox, entitlement, tải bộ cài. Cần chốt provider thanh toán và email trước.
+4. Thiết kế executor build cách ly (VM/sandbox riêng) trước khi bật `vite-static`/`next-standalone`/`node-http`.
 
 ## Quyết định chưa chốt
 

@@ -1,7 +1,9 @@
 import type { Metadata } from 'next';
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
-import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
+import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
+import { PriceBreakdown } from '@/components/price-breakdown';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
 
@@ -22,7 +24,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function TemplateDetail({ params }: Props) {
   const { locale, slug } = await params;
   const t = (key: string, p?: Record<string, string>) => translate(locale, key, p);
-  const result = await fetchPublic<TemplateSummary & { plans: unknown[] }>(`/templates/${encodeURIComponent(slug)}`, locale);
+  const result = await fetchPublic<TemplateSummary & { plans: PublicPlan[] }>(`/templates/${encodeURIComponent(slug)}`, locale);
   if (!result.ok) {
     if (result.status === 404) notFound();
     return (
@@ -42,9 +44,19 @@ export default async function TemplateDetail({ params }: Props) {
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>
         <p className="muted">{t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}</p>
       </section>
-      <section className="card stack">
-        <h2 style={{ marginTop: 0 }}>{t('ui.detail.plans')}</h2>
-        <p className="muted" style={{ margin: 0 }}>{t('ui.detail.no_plans')}</p>
+      <section className="stack">
+        <h2 style={{ marginBottom: 0 }}>{t('ui.detail.plans')}</h2>
+        {template.plans.length === 0 ? (
+          <p className="muted" style={{ margin: 0 }}>{t('ui.detail.no_plans')}</p>
+        ) : (
+          <>
+            <div className="grid-cards">
+              {template.plans.map((plan) => <PriceBreakdown key={plan.id} plan={plan} locale={locale} />)}
+            </div>
+            <p className="muted">{t('ui.detail.checkout_pending')}</p>
+            {template.plans.length > 1 ? <p><Link href={`/${locale}/plans/compare?template=${template.slug}`}>{t('ui.detail.compare')}</Link></p> : null}
+          </>
+        )}
       </section>
     </div>
   );
