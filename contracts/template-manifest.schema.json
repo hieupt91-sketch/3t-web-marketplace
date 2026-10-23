@@ -1,0 +1,495 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "3T template manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "const": 1
+    },
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$"
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-[0-9A-Za-z.-]+)?$"
+    },
+    "name": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "summary": {
+      "type": "object",
+      "minProperties": 1,
+      "additionalProperties": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "adapter": {
+      "enum": [
+        "static-html",
+        "vite-static",
+        "next-standalone",
+        "node-http"
+      ]
+    },
+    "projectRoot": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z]:).+$"
+    },
+    "build": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "script": {
+          "type": "string",
+          "minLength": 1
+        },
+        "outputDir": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z]:).+$"
+        },
+        "toolchain": {
+          "type": "string",
+          "minLength": 1
+        },
+        "packageManager": {
+          "enum": [
+            "npm",
+            "pnpm",
+            "yarn"
+          ]
+        },
+        "lockfile": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z]:).+$"
+        }
+      },
+      "required": [
+        "script",
+        "outputDir",
+        "toolchain",
+        "packageManager",
+        "lockfile"
+      ]
+    },
+    "runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entry": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z]:).+$"
+        },
+        "spaFallback": {
+          "type": "boolean"
+        },
+        "port": {
+          "type": "integer",
+          "minimum": 1024,
+          "maximum": 65535
+        },
+        "start": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "healthPath": {
+          "type": "string",
+          "pattern": "^/[a-zA-Z0-9_/-]*$"
+        },
+        "writePaths": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "/data",
+              "/uploads",
+              "/tmp"
+            ]
+          }
+        }
+      },
+      "required": []
+    },
+    "database": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "engine": {
+          "enum": [
+            "none",
+            "sqlite",
+            "postgres"
+          ]
+        },
+        "fileName": {
+          "type": "string",
+          "pattern": "^[a-zA-Z0-9_-]+\\.(sqlite|db)$"
+        },
+        "migrate": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "seedDemo": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "items": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      },
+      "required": [
+        "engine"
+      ]
+    },
+    "demo": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "mode": {
+          "enum": [
+            "publicReadonly",
+            "isolatedAdmin"
+          ]
+        },
+        "ttlHours": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 168
+        },
+        "seedProfile": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "mode",
+        "ttlHours"
+      ]
+    },
+    "locales": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "default": {
+          "type": "string",
+          "pattern": "^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+        },
+        "supported": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z]{2,3}(?:-[A-Za-z0-9]{2,8})*$"
+          }
+        },
+        "contentMode": {
+          "enum": [
+            "static",
+            "runtime"
+          ]
+        }
+      },
+      "required": [
+        "default",
+        "supported",
+        "contentMode"
+      ]
+    },
+    "capabilities": {
+      "type": "array",
+      "uniqueItems": true,
+      "items": {
+        "enum": [
+          "landing",
+          "catalog",
+          "cms.pages",
+          "cms.products",
+          "cms.articles",
+          "cms.media",
+          "cms.translations",
+          "admin",
+          "contact",
+          "shop.cart",
+          "shop.checkout"
+        ]
+      }
+    },
+    "env": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "name": {
+            "type": "string",
+            "pattern": "^[A-Z][A-Z0-9_]*$"
+          },
+          "scope": {
+            "enum": [
+              "public",
+              "server"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "secret": {
+            "type": "boolean"
+          },
+          "description": {
+            "type": "string",
+            "minLength": 1
+          },
+          "defaultValue": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "name",
+          "scope",
+          "required",
+          "secret",
+          "description"
+        ],
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "secret": {
+                  "const": true
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "scope": {
+                  "const": "server"
+                }
+              },
+              "not": {
+                "required": [
+                  "defaultValue"
+                ]
+              }
+            }
+          }
+        ]
+      }
+    },
+    "export": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "modes": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "selfhost",
+              "hosted"
+            ]
+          }
+        },
+        "sourceRoot": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$))(?!.*\\\\)(?![A-Za-z]:).+$"
+        }
+      },
+      "required": [
+        "modes",
+        "sourceRoot"
+      ]
+    }
+  },
+  "required": [
+    "schemaVersion",
+    "slug",
+    "version",
+    "name",
+    "summary",
+    "adapter",
+    "projectRoot",
+    "runtime",
+    "database",
+    "demo",
+    "locales",
+    "capabilities",
+    "env",
+    "export"
+  ],
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "adapter": {
+            "const": "static-html"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "build"
+          ]
+        },
+        "properties": {
+          "runtime": {
+            "required": [
+              "entry"
+            ],
+            "not": {
+              "required": [
+                "start"
+              ]
+            }
+          },
+          "database": {
+            "properties": {
+              "engine": {
+                "const": "none"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "adapter": {
+            "const": "vite-static"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "build"
+        ],
+        "properties": {
+          "runtime": {
+            "required": [
+              "entry"
+            ],
+            "not": {
+              "required": [
+                "start"
+              ]
+            }
+          },
+          "database": {
+            "properties": {
+              "engine": {
+                "const": "none"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "adapter": {
+            "enum": [
+              "node-http",
+              "next-standalone"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "build"
+        ],
+        "properties": {
+          "runtime": {
+            "required": [
+              "port",
+              "start",
+              "healthPath"
+            ],
+            "not": {
+              "required": [
+                "entry"
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "database": {
+            "properties": {
+              "engine": {
+                "enum": [
+                  "sqlite",
+                  "postgres"
+                ]
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "database": {
+            "required": [
+              "migrate",
+              "seedDemo"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "database": {
+            "properties": {
+              "engine": {
+                "const": "sqlite"
+              }
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "database": {
+            "required": [
+              "fileName"
+            ]
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,44 @@
+{
+  "schemaVersion": 1,
+  "slug": "landing-fixture",
+  "version": "1.0.0",
+  "name": {
+    "vi": "Mẫu kiểm thử landing",
+    "en": "Landing test fixture"
+  },
+  "summary": {
+    "vi": "Dữ liệu minh họa kiểm tra nhận diện HTML.",
+    "en": "A fixture for validating HTML import."
+  },
+  "adapter": "static-html",
+  "projectRoot": "site",
+  "runtime": {
+    "entry": "index.html",
+    "spaFallback": false
+  },
+  "database": {
+    "engine": "none"
+  },
+  "demo": {
+    "mode": "publicReadonly",
+    "ttlHours": 24
+  },
+  "locales": {
+    "default": "vi",
+    "supported": [
+      "vi"
+    ],
+    "contentMode": "static"
+  },
+  "capabilities": [
+    "landing"
+  ],
+  "env": [],
+  "export": {
+    "modes": [
+      "selfhost",
+      "hosted"
+    ],
+    "sourceRoot": "."
+  }
+}

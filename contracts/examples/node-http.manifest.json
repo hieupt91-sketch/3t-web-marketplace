@@ -1,0 +1,84 @@
+{
+  "schemaVersion": 1,
+  "slug": "node-http-example",
+  "version": "1.0.0",
+  "name": {
+    "vi": "Mẫu kiểm thử landing",
+    "en": "Landing test fixture"
+  },
+  "summary": {
+    "vi": "Dữ liệu minh họa kiểm tra nhận diện HTML.",
+    "en": "A fixture for validating HTML import."
+  },
+  "adapter": "node-http",
+  "projectRoot": ".",
+  "runtime": {
+    "port": 3000,
+    "start": [
+      "node",
+      "dist/server.js"
+    ],
+    "healthPath": "/healthz",
+    "writePaths": [
+      "/data",
+      "/uploads",
+      "/tmp"
+    ]
+  },
+  "database": {
+    "engine": "sqlite",
+    "fileName": "site.sqlite",
+    "migrate": [
+      "node",
+      "scripts/migrate.js"
+    ],
+    "seedDemo": [
+      "node",
+      "scripts/seed-demo.js"
+    ]
+  },
+  "demo": {
+    "mode": "isolatedAdmin",
+    "ttlHours": 24,
+    "seedProfile": "synthetic"
+  },
+  "locales": {
+    "default": "vi",
+    "supported": [
+      "vi",
+      "en"
+    ],
+    "contentMode": "runtime"
+  },
+  "capabilities": [
+    "landing",
+    "admin",
+    "catalog",
+    "cms.products",
+    "cms.media",
+    "cms.translations"
+  ],
+  "env": [
+    {
+      "name": "SESSION_SECRET",
+      "scope": "server",
+      "required": true,
+      "secret": true,
+      "description": "Generate independently per instance; never commit a value."
+    }
+  ],
+  "export": {
+    "modes": [
+      "selfhost",
+      "hosted"
+    ],
+    "sourceRoot": "."
+  },
+  "build": {
+    "script": "build",
+    "outputDir": "dist",
+    "toolchain": "node-lts-approved",
+    "packageManager": "npm",
+    "lockfile": "package-lock.json"
+  }
+}
