@@ -15,7 +15,9 @@ export function passwordIssues(password: unknown, email: string | null): string[
   const issues: string[] = [];
   if ([...password].length < 12) issues.push('too_short');
   if ([...password].length > 128) issues.push('too_long');
-  if (email && password.toLowerCase().includes(email.split('@')[0] ?? '\u0000')) issues.push('contains_email');
+  const local = email?.split('@')[0] ?? '';
+  // Only meaningful for distinctive local parts; "a@x.com" must not ban every password with an "a".
+  if (local.length >= 4 && password.toLowerCase().includes(local)) issues.push('contains_email');
   return issues;
 }
 

@@ -8,7 +8,7 @@
     "start": "tsx src/main.ts",
     "typecheck": "tsc -p tsconfig.json",
     "lint": "echo 'no lint rules beyond typecheck'",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@3t/core": "workspace:*",

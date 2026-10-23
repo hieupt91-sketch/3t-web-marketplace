@@ -105,8 +105,12 @@ export function formatMoney(money: Money, locale: Locale): string {
 
 export function formatDateTime(iso: string, locale: Locale, timeZone = 'Asia/Ho_Chi_Minh'): string {
   return new Intl.DateTimeFormat(locale === 'vi' ? 'vi-VN' : 'en-GB', {
-    dateStyle: 'medium',
-    timeStyle: 'short',
+    // dateStyle/timeStyle cannot be combined with timeZoneName, so fields are explicit.
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
     timeZone,
     timeZoneName: 'short',
   }).format(new Date(iso));

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { formatMoney, negotiateLocale, translate } from './index.ts';
+import { formatDateTime, formatMoney, negotiateLocale, translate } from './index.ts';
 
 describe('negotiateLocale', () => {
   it('prefers explicit, then user, then Accept-Language, then vi', () => {
@@ -24,5 +24,14 @@ describe('formatMoney', () => {
     const money = { amount_minor: '1500000', currency: 'VND' };
     expect(formatMoney(money, 'vi').replace(/\D/g, '')).toBe('1500000');
     expect(formatMoney(money, 'en').replace(/\D/g, '')).toBe('1500000');
+  });
+});
+
+describe('formatDateTime', () => {
+  it('shows the timezone explicitly and converts from UTC', () => {
+    const vi = formatDateTime('2026-10-23T17:30:00Z', 'vi');
+    expect(vi).toContain('00:30');
+    expect(vi).toMatch(/GMT\+7|ICT/);
+    expect(formatDateTime('2026-10-23T17:30:00Z', 'en', 'UTC')).toContain('17:30');
   });
 });

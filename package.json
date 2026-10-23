@@ -18,6 +18,8 @@
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",
     "test": "pnpm -r run test",
-    "check": "pnpm run docs:check && pnpm run typecheck && pnpm run lint && pnpm run test"
+    "check": "pnpm run docs:check && pnpm run typecheck && pnpm run lint && pnpm run test",
+    "dev": "bash scripts/dev-all.sh",
+    "test:integration": "pnpm --filter @3t/tests run test"
   }
 }

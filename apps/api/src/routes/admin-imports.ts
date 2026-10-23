@@ -97,8 +97,9 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
       ),
       db.query<{ id: string; metadata_json: { viewport?: string; locale?: string } }>(
         `SELECT a.id, a.metadata_json FROM artifacts a
-         WHERE a.kind = 'screenshot' AND a.metadata_json->>'import_id' = $1 ORDER BY a.created_at`,
-        [row.id],
+         WHERE a.kind = 'screenshot' AND (a.metadata_json->>'import_id' = $1 OR a.metadata_json->>'version_id' = $2)
+         ORDER BY a.created_at`,
+        [row.id, row.version_id ?? ''],
       ),
     ]);
     const detection = row.detection_json as { confidence?: string; missingFields?: string[]; candidates?: unknown[]; signals?: string[]; reason?: string; adapterImplemented?: boolean } | null;
@@ -449,7 +450,9 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
     assertId(request.params.id);
     assertId(request.params.artifactId);
     const { rows } = await db.query<{ object_key: string; size_bytes: string }>(
-      "SELECT object_key, size_bytes FROM artifacts WHERE id = $1 AND kind = 'screenshot' AND metadata_json->>'import_id' = $2",
+      `SELECT a.object_key, a.size_bytes FROM artifacts a JOIN imports i ON i.id = $2
+       WHERE a.id = $1 AND a.kind = 'screenshot'
+         AND (a.metadata_json->>'import_id' = i.id::text OR a.metadata_json->>'version_id' = i.version_id::text)`,
       [request.params.artifactId, request.params.id],
     );
     if (!rows[0]) throw errors.notFound();

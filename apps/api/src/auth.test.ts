@@ -47,6 +47,13 @@ describe('registration and verification (U01/U03, AT-13)', () => {
     );
   });
 
+  it('does not reject passwords for sharing letters with a short email local part', async () => {
+    const res = await post('/api/v1/auth/register', { email: 'ab@example.com', password: 'a long enough pass', display_name: 'AB', accept_terms: true });
+    expect(res.statusCode).toBe(202);
+    const owned = await post('/api/v1/auth/register', { email: 'lanpham@example.com', password: 'xx lanpham 2026 xx', display_name: 'L', accept_terms: true });
+    expect(owned.json().error.field_errors).toContainEqual({ field: 'password', code: 'contains_email' });
+  });
+
   it('rejects unknown fields and wrong types as validation errors', async () => {
     const res = await post('/api/v1/auth/register', { email: 'x@example.com', password: 'a long enough pass', display_name: 'X', accept_terms: true, is_admin: true });
     expect(res.statusCode).toBe(422);
