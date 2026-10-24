@@ -32,6 +32,7 @@ const NAV: Record<'account' | 'admin', NavItem[]> = {
     { href: '/admin/templates', labelKey: 'ui.admin.nav.templates', permission: 'template:read' },
     { href: '/admin/imports', labelKey: 'ui.admin.nav.imports', permission: 'template:read' },
     { href: '/admin/imports/new', labelKey: 'ui.admin.nav.import_new', permission: 'template:import' },
+    { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
   ],
 };
 

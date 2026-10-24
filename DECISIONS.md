@@ -38,3 +38,11 @@ Ngày 23/10/2026. Đây là baseline đề xuất kỹ thuật theo yêu cầu n
 | ADR-022 | `template_editor` có `pricing:write` ("giá nháp"); chỉ `template:publish` mới công bố | Khớp bảng vai trò docs/01 §1; tách soạn thảo và phát hành |
 | ADR-023 | Công bố gộp A06/A08/A09 trong một trang `/admin/templates/{id}` theo ETag mẫu | Một nguồn sự thật, tránh xung đột revision giữa nhiều màn |
 | ADR-024 | Timestamp trả API chuẩn hóa ISO 8601 UTC (Z), kể cả giá trị lấy từ jsonb | Khớp hợp đồng docs/04 §1 |
+
+## Quyết định khi triển khai M3 CMS nội dung (24/10/2026)
+
+| ADR | Quyết định | Lý do / hệ quả |
+|---|---|---|
+| ADR-025 | Nội dung trang/chính sách lưu markdown subset, render escape HTML + allowlist link ở web | An toàn XSS (docs/05 RichText), không cần sanitizer nặng; không nhận HTML tùy ý |
+| ADR-026 | `policy_versions` bất biến sau publish (trigger); đổi chính sách = tạo version mới | Đơn hàng snapshot version đã áp dụng, không sửa lịch sử (docs/04 §3) |
+| ADR-027 | Contact honeypot: điền field ẩn → đánh dấu `suspected`, vẫn nhận; response 202 chung | Không báo cho bot biết bị chặn; không nhầm liên hệ với tạo đơn (P09) |

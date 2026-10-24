@@ -37,9 +37,19 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
 }
 
 export function SiteFooter() {
-  const { t } = useT();
+  const { t, locale } = useT();
+  const links: [string, string][] = [
+    [`/${locale}/how-it-works`, 'ui.footer.how_it_works'],
+    [`/${locale}/help`, 'ui.footer.help'],
+    [`/${locale}/partners`, 'ui.footer.partners'],
+    [`/${locale}/policies/terms`, 'ui.footer.terms'],
+    [`/${locale}/contact`, 'ui.footer.contact'],
+  ];
   return (
-    <footer className="page-footer">
+    <footer className="page-footer stack">
+      <nav aria-label={t('ui.footer.nav')} className="row" style={{ justifyContent: 'center', gap: 'var(--space-4)' }}>
+        {links.map(([href, key]) => <Link key={href} href={href}>{t(key)}</Link>)}
+      </nav>
       <p>{t('ui.footer.note')}</p>
     </footer>
   );
