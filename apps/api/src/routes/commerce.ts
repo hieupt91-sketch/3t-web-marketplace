@@ -189,6 +189,33 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  app.get<{ Params: { id: string } }>('/quotes/:id', async (request) => {
+    const auth = requireUser(request);
+    assertId(request.params.id);
+    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string> }; expires_at: Date }>(
+      'SELECT buyer_id, currency, subtotal_minor::text, discount_minor::text, tax_minor::text, total_minor::text, snapshot_json, expires_at FROM quotes WHERE id = $1',
+      [request.params.id],
+    );
+    const q = rows[0];
+    if (!q || q.buyer_id !== auth.userId) throw errors.notFound();
+    return {
+      data: {
+        id: request.params.id,
+        currency: q.currency,
+        subtotal_minor: q.subtotal_minor,
+        discount_minor: q.discount_minor,
+        tax_minor: q.tax_minor,
+        total_minor: q.total_minor,
+        line_items: q.snapshot_json.lines,
+        deployment_mode: q.snapshot_json.deployment_mode,
+        plan_name: q.snapshot_json.plan_name,
+        expires_at: q.expires_at.toISOString(),
+        expired: q.expires_at <= new Date(),
+      },
+      meta: { request_id: request.id, revision: null },
+    };
+  });
+
   // POST /orders — create an order from a quote; requires a verified buyer (docs/04 §3).
   app.post<{ Body: { quote_id: string; terms_version: string } }>(
     '/orders',
@@ -455,12 +482,18 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       if (g.expired || g.used_at) throw errors.conflict('download.link_expired', true);
       if (g.ent_status !== 'active') throw errors.forbidden('entitlement.inactive');
       await client.query('UPDATE download_events SET used_at = now() WHERE id = $1', [g.id]);
-      const artifact = await client.query<{ object_key: string; size_bytes: string }>('SELECT object_key, size_bytes::text FROM artifacts WHERE id = $1', [g.artifact_id]);
+      const artifact = await client.query<{ object_key: string; size_bytes: string; slug: string; semver: string }>(
+        `SELECT a.object_key, a.size_bytes::text, t.slug, v.semver
+         FROM artifacts a JOIN download_events d ON d.artifact_id = a.id
+         JOIN template_versions v ON v.id = d.version_id JOIN templates t ON t.id = v.template_id
+         WHERE a.id = $1 AND d.id = $2`,
+        [g.artifact_id, g.id],
+      );
       return artifact.rows[0]!;
     });
     reply.header('content-type', 'application/zip');
     reply.header('content-length', grant.size_bytes);
-    reply.header('content-disposition', 'attachment');
+    reply.header('content-disposition', `attachment; filename="${grant.slug}-${grant.semver}.zip"`);
     return reply.send(store.read(grant.object_key));
   });
 

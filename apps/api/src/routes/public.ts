@@ -95,15 +95,19 @@ const TEMPLATE_SELECT = `
 export async function publicRoutes(app: FastifyInstance): Promise<void> {
   const { db, config } = app.deps;
 
-  app.get('/config/public', async () => ({
-    data: {
-      brand: { name: '3T Web Marketplace' },
-      default_locale: DEFAULT_LOCALE,
-      locales: LOCALES.filter((l) => l.enabled).map((l) => ({ code: l.code, display_name: l.displayNameNative, direction: l.direction })),
-      currency: 'VND',
-      adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
-    },
-  }));
+  app.get('/config/public', async () => {
+    const terms = await db.query<{ value_json: { current: string } }>("SELECT value_json FROM settings WHERE key = 'terms.version'");
+    return {
+      data: {
+        brand: { name: '3T Web Marketplace' },
+        default_locale: DEFAULT_LOCALE,
+        locales: LOCALES.filter((l) => l.enabled).map((l) => ({ code: l.code, display_name: l.displayNameNative, direction: l.direction })),
+        currency: config.currency,
+        terms_version: terms.rows[0]?.value_json.current ?? null,
+        adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
+      },
+    };
+  });
 
   app.get('/categories', async () => {
     const { rows } = await db.query<{ id: string; code: string; parent_id: string | null }>(

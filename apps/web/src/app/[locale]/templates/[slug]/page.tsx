@@ -58,8 +58,10 @@ export default async function TemplateDetail({ params }: Props) {
             <div className="grid-cards">
               {template.plans.map((plan) => <PriceBreakdown key={plan.id} plan={plan} locale={locale} />)}
             </div>
-            <p className="muted">{t('ui.detail.checkout_pending')}</p>
-            {template.plans.length > 1 ? <p><Link href={`/${locale}/plans/compare?template=${template.slug}`}>{t('ui.detail.compare')}</Link></p> : null}
+            <div className="row">
+              <Link className="button" href={`/checkout/configure?template=${template.slug}`}>{t('ui.detail.choose_plan')}</Link>
+              {template.plans.length > 1 ? <Link className="button button--secondary" href={`/${locale}/plans/compare?template=${template.slug}`}>{t('ui.detail.compare')}</Link> : null}
+            </div>
           </>
         )}
       </section>

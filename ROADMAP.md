@@ -18,7 +18,7 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 | M1 FOUNDATION | Monorepo, API, SQL, auth/RBAC, i18n, design tokens | ✅ Xong (còn MFA, staff mgmt) |
 | M2 IMPORT | Nhập ZIP an toàn, nhận diện, build/demo, job | 🟡 HTML tĩnh xong; Vite/Next/Node + GitHub chưa |
 | M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Công bố + demo + filter + SEO + CMS nội dung (P05–P09) xong; còn D02–D04 (chờ runtime adapter) |
-| M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | 🟡 Backend lõi xong (quote→order→pay→entitlement→download selfhost); còn UI B01–B05, refund |
+| M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | 🟡 Backend + UI checkout (B01–B04) + C02 xong; còn refund, reconciliation admin, B05 |
 | M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ⬜ Chưa |
 | M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ⬜ Chưa |
 | M7 LOCALIZE | Hoàn chỉnh VI/EN mọi UI/mail/nội dung/SEO | 🟡 Theo từng mốc |
@@ -68,7 +68,7 @@ Các bước: monorepo pnpm/TS · migration nền tảng (identity, RBAC, catalo
 
 **Mục tiêu:** mua sandbox → tải bộ cài và cài trên VPS sạch. Phụ thuộc M3; cần chốt provider thanh toán (dùng sandbox/mock trước) và email.
 
-Đã làm (M4a backend, 24/10/2026): migration 0005 (quotes, orders, order_items, payment_attempts, payment_events, entitlements, download_events); `PaymentProvider` + `MockPaymentProvider` (HMAC sandbox); API `/quotes`, `/orders`, `/orders/{id}/payment-sessions|cancel`, `/payments/mock/{ref}/confirm` (sandbox), `/payments/webhooks/{provider}`, `/me/entitlements`, `/entitlements/{id}/download-links`, `/downloads/{token}`, `/me/downloads`; sinh bộ cài self-host từ artifact tĩnh; 9 test commerce (AT-14/15/16/17/18/19) + unit payment/bundle. **Còn:** UI B01–B05 + C02–C04; refund/chargeback (AT-56); reconciliation admin (A12); hosted provisioning thuộc M5.
+Đã làm (M4a backend, 24/10/2026): migration 0005 (quotes, orders, order_items, payment_attempts, payment_events, entitlements, download_events); `PaymentProvider` + `MockPaymentProvider` (HMAC sandbox); API `/quotes`, `/orders`, `/orders/{id}/payment-sessions|cancel`, `/payments/mock/{ref}/confirm` (sandbox), `/payments/webhooks/{provider}`, `/me/entitlements`, `/entitlements/{id}/download-links`, `/downloads/{token}`, `/me/downloads`; sinh bộ cài self-host từ artifact tĩnh; 9 test commerce (AT-14/15/16/17/18/19) + unit payment/bundle. Đã làm (M4b UI): B01 configure, B02 review (terms snapshot), B03 pay (sandbox, nhãn rõ, không tin redirect), B04 result, C02 purchases + tải bộ cài; `GET /quotes/{id}`, `terms_version` trong /config/public; đã chạy trình duyệt mua → tải zip hợp lệ. **Còn:** B05 issue/refund UI; refund/chargeback backend (AT-56); reconciliation admin (A12); hosted provisioning (M5).
 
 **Các bước**
 

@@ -25,6 +25,7 @@ interface NavItem {
 const NAV: Record<'account' | 'admin', NavItem[]> = {
   account: [
     { href: '/account', labelKey: 'ui.account.nav.overview' },
+    { href: '/account/purchases', labelKey: 'ui.account.nav.purchases' },
     { href: '/account/security', labelKey: 'ui.account.nav.security' },
   ],
   admin: [
