@@ -17,7 +17,7 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 | M0 SPEC | Đặc tả, defaults, repo, manifest, UI IDs | ✅ Xong |
 | M1 FOUNDATION | Monorepo, API, SQL, auth/RBAC, i18n, design tokens | ✅ Xong (còn MFA, staff mgmt) |
 | M2 IMPORT | Nhập ZIP an toàn, nhận diện, build/demo, job | 🟡 HTML tĩnh xong; Vite/Next/Node + GitHub chưa |
-| M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Lát cắt công bố xong; còn D01–D04, P05–P09, filter, SEO |
+| M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Công bố + demo công khai + filter + SEO xong; còn D02–D04, P05–P09 (CMS) |
 | M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | ⬜ Chưa |
 | M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ⬜ Chưa |
 | M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ⬜ Chưa |
@@ -53,12 +53,13 @@ Các bước: monorepo pnpm/TS · migration nền tảng (identity, RBAC, catalo
 
 Đã đạt: migration plans/plan_prices (khoảng giá không chồng lấn); biên tập metadata + bản dịch (slug unique/locale); gói + đổi giá hiệu lực; cổng công bố (demo/dịch/giá/export) chặn gate đỏ; publish/archive; cửa hàng P02/P03 kèm giá, P04 so sánh; phân quyền giá nháp vs công bố. AT-01, AT-30, AT-32 có test; 7 test tích hợp catalog.
 
-**Còn làm để khép mốc (sẽ làm sau khi tạm dừng):**
+Đã bổ sung (24/10/2026): D01 demo công khai (iframe origin riêng, device width, open-tab, noindex); demo info trong public API; filter catalog theo mode/capability; tìm không dấu (unaccent, migration 0003); SEO sitemap.xml + robots.txt + hreflang (chỉ locale đã publish).
 
-1. D01–D04: shell demo công khai trên origin riêng, tạo phiên demo, countdown TTL, hết hạn (REQ-07/08) → AT-09, AT-11, AT-60.
+**Còn làm để khép mốc:**
+
+1. D02–D04: demo isolated admin (tạo phiên riêng, token exchange, countdown TTL, hết hạn) — cần runtime adapter của M2 (REQ-08) → AT-10, AT-11, AT-12.
 2. P05–P09: how-it-works, help, partners, policies, contact — cần module CMS nền tảng (`platform_pages`, `policy_versions`, `contact_requests`) và A27 content admin.
-3. A07 màn versions đầy đủ; filter catalog (ngành/giá/mode/capability) ngoài tìm kiếm; tìm có/không dấu.
-4. SEO: canonical/hreflang/sitemap chỉ bản tồn tại (docs/07 §7) → AT-45.
+3. A07 màn versions đầy đủ; filter theo ngành (category) khi có cây category; lọc giá.
 
 ---
 

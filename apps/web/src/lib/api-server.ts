@@ -15,6 +15,7 @@ export interface TemplateSummary {
   content_locales: string[];
   capabilities: string[];
   starting_prices: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[];
+  demo: { available: boolean; mode: string; url: string | null };
 }
 
 export interface PublicPlan {

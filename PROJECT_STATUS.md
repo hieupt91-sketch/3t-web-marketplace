@@ -27,10 +27,11 @@ Ngày cập nhật: 23/10/2026 (Asia/Ho_Chi_Minh). Đặc tả 1.0. Nhánh: `fea
 - API công khai: `/templates/{slug}` trả plans + current prices; `/templates` trả `starting_prices`; `GET /plans/{id}`. Giá là chuỗi minor units, VND.
 - Cổng công bố (A09): demo_ready, default_translation, has_priced_plan, export_modes. Quyền: `template_editor` được tạo gói/giá nháp (pricing:write = "giá nháp"), chỉ `template:publish` mới công bố.
 - UI: A02 danh sách mẫu (link chi tiết), A06/A08/A09 gộp ở `/admin/templates/{id}` (LocaleTabs vi/en, biên tập bản dịch, gói + bảng giá hiệu lực + kích hoạt, checklist cổng + publish/archive). Công khai P02 (giá "từ" trên thẻ), P03 (PriceBreakdown, nhãn chưa có checkout), P04 so sánh gói.
+- Demo công khai + catalog (24/10/2026): D01 trang demo (iframe origin riêng sandbox, device width, open-tab, noindex) + CTA "Xem demo"; public API trả `demo {available, mode, url}`; filter catalog theo mode/capability; tìm không dấu VN (`unaccent`, migration 0003); SEO `sitemap.xml` (hreflang chỉ locale đã publish) + `robots.txt`. D02–D04 (demo isolated admin) chờ runtime adapter của M2.
 
 ## Bằng chứng kiểm thử (máy dev, PostgreSQL 16 cục bộ)
 
-`pnpm run check` PASS: docs validator; typecheck mọi package; i18n lint (482 khóa); 89 test (sdk 30, core 6, i18n 4, preview 12, api 14, tích hợp 23 gồm 16 import + 7 catalog). `next build` PASS. Đã chạy lượt trình duyệt M3: đăng nhập → biên tập bản dịch → thêm gói + giá → kích hoạt → công bố → thấy mẫu kèm giá 1.500.000 đ ở P02/P03.
+`pnpm run check` PASS: docs validator; typecheck mọi package; i18n lint (494 khóa); 90 test (sdk 30, core 6, i18n 4, preview 12, api 14, tích hợp 24 gồm 16 import + 8 catalog). `next build` PASS. Đã chạy lượt trình duyệt M3: đăng nhập → biên tập bản dịch → thêm gói + giá → kích hoạt → công bố → thấy mẫu kèm giá 1.500.000 đ ở P02/P03.
 
 | Kịch bản | Bằng chứng tự động |
 |---|---|

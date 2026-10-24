@@ -159,6 +159,29 @@ describe('publish gates and catalog visibility', () => {
     expect(en.json().data[0].resolved_locale).toBe('vi');
   });
 
+  it('exposes a public demo URL, mode/capability filters and diacritic-insensitive search', async () => {
+    // Give the template a Vietnamese title to exercise unaccent search.
+    expect((await putTranslation(templateId, 'vi', { title: 'Nhà hàng Đà Lạt', slug: 'landing-vi' })).statusCode).toBe(200);
+
+    const detail = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates/landing-vi?locale=vi' });
+    expect(detail.json().data.demo).toMatchObject({ available: true, mode: 'publicReadonly' });
+    expect(detail.json().data.demo.url).toMatch(/^http:\/\/[a-z2-7]{32}\.preview\.localhost:4100\/$/);
+
+    const noDiacritics = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates?locale=vi&q=nha hang da lat' });
+    expect(noDiacritics.json().data.map((t: { slug: string }) => t.slug)).toContain('landing-vi');
+    const withDiacritics = await ctx.app.inject({ method: 'GET', url: `/api/v1/templates?locale=vi&q=${encodeURIComponent('Đà Lạt')}` });
+    expect(withDiacritics.json().data).toHaveLength(1);
+
+    const selfhost = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates?mode=selfhost' });
+    expect(selfhost.json().data).toHaveLength(1);
+    const hosted = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates?mode=hosted' });
+    expect(hosted.json().data).toEqual([]);
+    const landing = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates?capability=landing' });
+    expect(landing.json().data).toHaveLength(1);
+    const adminCap = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates?capability=admin' });
+    expect(adminCap.json().data).toEqual([]);
+  });
+
   it('caps the previous price when a new effective price is added (A08)', async () => {
     const detail = await templateDetail(templateId);
     const planId = detail.data.plans[0].id as string;

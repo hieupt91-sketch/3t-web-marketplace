@@ -27,6 +27,10 @@ export function TemplateCard({ template, locale }: { template: TemplateSummary; 
         {t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}
       </p>
       {template.translation_status === 'fallback' ? <p className="badge badge--warning" lang="vi">{t('ui.catalog.fallback_vi')}</p> : null}
+      <div className="row">
+        {template.demo.available ? <Link className="button button--secondary" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link> : null}
+        <Link className="button" href={`/${locale}/templates/${template.slug}`}>{t('ui.catalog.view_detail')}</Link>
+      </div>
     </article>
   );
 }

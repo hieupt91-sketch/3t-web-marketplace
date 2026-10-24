@@ -39,6 +39,11 @@ export default async function TemplateDetail({ params }: Props) {
       <h1 lang={template.resolved_locale}>{template.title}</h1>
       {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
       {template.summary ? <p lang={template.resolved_locale}>{template.summary}</p> : null}
+      {template.demo.available ? (
+        <div className="row">
+          <Link className="button" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link>
+        </div>
+      ) : null}
       <section className="card stack">
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.features')}</h2>
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>

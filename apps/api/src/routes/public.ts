@@ -1,11 +1,21 @@
 import type { FastifyInstance } from 'fastify';
-import { loadActivePlans, startingPrices } from '@3t/core';
+import { loadActivePlans, previewOrigin, startingPrices, type PlatformConfig } from '@3t/core';
 import { DEFAULT_LOCALE, LOCALES, type Locale } from '@3t/i18n';
 import { ADAPTERS, IMPLEMENTED_ADAPTERS } from '@3t/template-sdk';
 import { errors } from '../errors.ts';
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
 
 const PLATFORM_CURRENCY = 'VND';
+const DEPLOYMENT_MODES = ['selfhost', 'hosted'] as const;
+const CAPABILITIES = ['landing', 'catalog', 'cms.pages', 'cms.products', 'cms.articles', 'cms.media', 'cms.translations', 'admin', 'contact', 'shop.cart', 'shop.checkout'];
+
+/** Public demo info for a published template (docs/03 §7). Static templates expose a public readonly URL. */
+function demoInfo(config: PlatformConfig, row: PublicTemplateRow) {
+  const mode = row.manifest_json.demo?.mode ?? 'publicReadonly';
+  // Only publicReadonly demos are exposed directly; isolatedAdmin demos need a session (runtime adapters, not in v1).
+  const available = row.demo_label !== null && mode === 'publicReadonly';
+  return { available, mode, url: available ? `${previewOrigin(config, row.demo_label!)}/` : null };
+}
 
 /** Lowest current price per (template, deployment_mode) for a set of templates, in one query. */
 async function startingPricesFor(
@@ -36,7 +46,8 @@ interface PublicTemplateRow {
   id: string;
   created_at: Date;
   slug: string;
-  manifest_json: { export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[] };
+  manifest_json: { export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
+  demo_label: string | null;
   requested_title: string | null;
   requested_summary: string | null;
   requested_slug: string | null;
@@ -49,7 +60,7 @@ interface PublicTemplateRow {
  * Localised summary with explicit fallback metadata (docs/07 §3): when the requested locale has
  * no published translation the response says so instead of passing Vietnamese off as English.
  */
-function toSummary(row: PublicTemplateRow, locale: Locale, startingPricesList: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[] = []) {
+function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfig, startingPricesList: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[] = []) {
   const translated = row.requested_title !== null;
   return {
     id: row.id,
@@ -65,11 +76,14 @@ function toSummary(row: PublicTemplateRow, locale: Locale, startingPricesList: {
     content_locales: row.manifest_json.locales?.supported ?? [],
     capabilities: row.manifest_json.capabilities ?? [],
     starting_prices: startingPricesList,
+    demo: demoInfo(config, row),
   };
 }
 
 const TEMPLATE_SELECT = `
   SELECT t.id, t.created_at, t.slug, v.manifest_json,
+         (SELECT p.host_label FROM previews p
+          WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          rt.title AS requested_title, rt.summary AS requested_summary, rt.slug AS requested_slug,
          ft.title AS fallback_title, ft.summary AS fallback_summary, ft.slug AS fallback_slug
   FROM templates t
@@ -79,7 +93,7 @@ const TEMPLATE_SELECT = `
   WHERE t.status = 'published'`;
 
 export async function publicRoutes(app: FastifyInstance): Promise<void> {
-  const { db } = app.deps;
+  const { db, config } = app.deps;
 
   app.get('/config/public', async () => ({
     data: {
@@ -98,15 +112,28 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     return { data: rows, page: { next_cursor: null, has_more: false } };
   });
 
-  app.get<{ Querystring: { q?: string; limit?: string; cursor?: string; locale?: string } }>('/templates', async (request) => {
+  app.get<{ Querystring: { q?: string; limit?: string; cursor?: string; locale?: string; mode?: string; capability?: string } }>('/templates', async (request) => {
     const limit = parseLimit(request.query.limit);
     const cursor = decodeCursor(request.query.cursor);
     const q = typeof request.query.q === 'string' ? request.query.q.trim().slice(0, 100) : '';
+    const mode = DEPLOYMENT_MODES.includes(request.query.mode as (typeof DEPLOYMENT_MODES)[number]) ? request.query.mode : null;
+    const capability = CAPABILITIES.includes(request.query.capability ?? '') ? request.query.capability : null;
     const params: unknown[] = [request.locale];
     let sql = TEMPLATE_SELECT;
     if (q) {
+      // Diacritic-insensitive (docs/07 §5): unaccent both sides so "da lat" matches "Đà Lạt".
       params.push(`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-      sql += ` AND (COALESCE(rt.title, ft.title) ILIKE $${params.length} OR COALESCE(rt.summary, ft.summary) ILIKE $${params.length})`;
+      sql += ` AND (unaccent(COALESCE(rt.title, ft.title)) ILIKE unaccent($${params.length}) OR unaccent(COALESCE(rt.summary, ft.summary)) ILIKE unaccent($${params.length}))`;
+    }
+    if (mode) {
+      params.push(mode);
+      sql += ` AND EXISTS (SELECT 1 FROM plans pl JOIN plan_prices pr ON pr.plan_id = pl.id
+                           WHERE pl.template_id = t.id AND pl.status = 'active' AND pl.deployment_mode = $${params.length}
+                             AND pr.currency = '${PLATFORM_CURRENCY}' AND pr.effective_from <= now() AND (pr.effective_to IS NULL OR pr.effective_to > now()))`;
+    }
+    if (capability) {
+      params.push(JSON.stringify([capability]));
+      sql += ` AND v.manifest_json -> 'capabilities' @> $${params.length}::jsonb`;
     }
     if (cursor) {
       params.push(cursor.t, cursor.id);
@@ -116,7 +143,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     sql += ` ORDER BY t.created_at DESC, t.id DESC LIMIT $${params.length}`;
     const { rows } = await db.query<PublicTemplateRow>(sql, params);
     const prices = await startingPricesFor(db, rows.slice(0, limit).map((r) => r.id));
-    return page(rows, limit, (row) => toSummary(row, request.locale, prices.get(row.id) ?? []));
+    return page(rows, limit, (row) => toSummary(row, request.locale, config, prices.get(row.id) ?? []));
   });
 
   app.get<{ Params: { id: string } }>('/plans/:id', async (request) => {
@@ -146,7 +173,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw errors.notFound();
     const plans = await loadActivePlans(db, row.id, PLATFORM_CURRENCY);
     return {
-      data: { ...toSummary(row, request.locale, startingPrices(plans)), plans },
+      data: { ...toSummary(row, request.locale, config, startingPrices(plans)), plans },
       meta: { request_id: request.id, revision: null },
     };
   });

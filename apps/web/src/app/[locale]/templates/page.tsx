@@ -4,7 +4,10 @@ import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
 
-type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string }> };
+type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string; mode?: string; capability?: string }> };
+
+const MODES = ['selfhost', 'hosted'] as const;
+const CAPABILITIES = ['landing', 'catalog', 'contact', 'admin'] as const;
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale } = await params;
@@ -14,24 +17,49 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   };
 }
 
-/** P02 — template library. Only search is offered until category/price filters exist in the API. */
+/** P02 — template library with search and deployment-mode / capability filters (REQ-01). */
 export default async function Templates({ params, searchParams }: Props) {
   const { locale } = await params;
-  const { q = '', cursor } = await searchParams;
+  const { q = '', cursor, mode = '', capability = '' } = await searchParams;
   const t = (key: string, p?: Record<string, string>) => translate(locale, key, p);
   const query = new URLSearchParams({ limit: '24' });
   if (q) query.set('q', q);
+  if (MODES.includes(mode as (typeof MODES)[number])) query.set('mode', mode);
+  if (CAPABILITIES.includes(capability as (typeof CAPABILITIES)[number])) query.set('capability', capability);
   if (cursor) query.set('cursor', cursor);
   const result = await fetchPublic<TemplateSummary[]>(`/templates?${query}`, locale);
-  const next = result.ok && result.page?.next_cursor ? `/${locale}/templates?${new URLSearchParams({ ...(q ? { q } : {}), cursor: result.page.next_cursor })}` : null;
+  const base: Record<string, string> = { ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}) };
+  const next = result.ok && result.page?.next_cursor ? `/${locale}/templates?${new URLSearchParams({ ...base, cursor: result.page.next_cursor })}` : null;
+  const hasFilter = q || mode || capability;
   return (
     <div className="container stack">
       <h1>{t('ui.catalog.title')}</h1>
-      <form className="search" method="get" role="search">
-        <label htmlFor="catalog-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
-        <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
-        <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
-        {q ? <Link className="button button--secondary" href={`/${locale}/templates`}>{t('ui.catalog.reset')}</Link> : null}
+      <form className="stack" method="get" role="search">
+        <div className="search">
+          <label htmlFor="catalog-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
+          <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
+          <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
+        </div>
+        <div className="row">
+          <label className="field" style={{ minWidth: 200 }}>
+            <span>{t('ui.catalog.filter_mode')}</span>
+            <select className="select" name="mode" defaultValue={mode}>
+              <option value="">{t('ui.catalog.filter_all')}</option>
+              {MODES.map((m) => <option key={m} value={m}>{t(`ui.deployment.${m}`)}</option>)}
+            </select>
+          </label>
+          <label className="field" style={{ minWidth: 200 }}>
+            <span>{t('ui.catalog.filter_capability')}</span>
+            <select className="select" name="capability" defaultValue={capability}>
+              <option value="">{t('ui.catalog.filter_all')}</option>
+              {CAPABILITIES.map((c) => <option key={c} value={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</option>)}
+            </select>
+          </label>
+          <div className="row" style={{ alignItems: 'flex-end' }}>
+            <button className="button button--secondary" type="submit">{t('ui.catalog.apply_filter')}</button>
+            {hasFilter ? <Link className="button button--secondary" href={`/${locale}/templates`}>{t('ui.catalog.reset')}</Link> : null}
+          </div>
+        </div>
       </form>
       {!result.ok ? (
         <div className="alert alert--error" role="alert">
@@ -39,7 +67,7 @@ export default async function Templates({ params, searchParams }: Props) {
           {result.requestId ? <p><small>{t('ui.error.request_id')}: <span className="mono">{result.requestId}</span></small></p> : null}
         </div>
       ) : result.data.length === 0 ? (
-        <div className="card"><p style={{ margin: 0 }}>{q ? t('ui.catalog.empty_search', { q }) : t('ui.catalog.empty_catalog')}</p></div>
+        <div className="card"><p style={{ margin: 0 }}>{hasFilter ? t('ui.catalog.empty_search', { q: q || t('ui.catalog.these_filters') }) : t('ui.catalog.empty_catalog')}</p></div>
       ) : (
         <>
           <p className="muted" role="status">{t('ui.catalog.result_count', { count: String(result.data.length) })}</p>
