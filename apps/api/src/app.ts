@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import { hashToken, type Db, type LocalObjectStore, type PlatformConfig } from '@3t/core';
+import { hashToken, type Db, type LocalObjectStore, type MockPaymentProvider, type PlatformConfig } from '@3t/core';
 import { MESSAGES, negotiateLocale, translate, type Locale } from '@3t/i18n';
 import { AppError, errors } from './errors.ts';
 import type { Mailer } from './mail.ts';
@@ -15,6 +15,7 @@ import { adminCatalogRoutes } from './routes/admin-catalog.ts';
 import { adminContentRoutes } from './routes/admin-content.ts';
 import { adminTemplateRoutes } from './routes/admin-templates.ts';
 import { jobRoutes } from './routes/jobs.ts';
+import { commerceRoutes } from './routes/commerce.ts';
 
 export const SESSION_COOKIE = 'mp_session';
 
@@ -36,6 +37,7 @@ export interface AppDeps {
   db: Db;
   store: LocalObjectStore;
   mailer: Mailer;
+  payment: MockPaymentProvider;
 }
 
 declare module 'fastify' {
@@ -115,6 +117,9 @@ async function loadSession(request: FastifyRequest, db: Db): Promise<void> {
  */
 function checkOrigin(request: FastifyRequest, portalOrigin: string): void {
   if (!MUTATING.has(request.method)) return;
+  // Provider webhooks are server-to-server (no Origin) and are authenticated by signature, not by
+  // a session cookie, so the CSRF origin check does not apply to them.
+  if (request.url.startsWith('/api/v1/payments/webhooks/')) return;
   const origin = request.headers.origin;
   if (origin !== undefined) {
     if (origin !== portalOrigin) throw errors.forbidden('security.origin_mismatch');
@@ -253,6 +258,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(adminTemplateRoutes, { prefix: '/admin' });
       await api.register(adminContentRoutes, { prefix: '/admin' });
       await api.register(jobRoutes);
+      await api.register(commerceRoutes);
     },
     { prefix: '/api/v1' },
   );

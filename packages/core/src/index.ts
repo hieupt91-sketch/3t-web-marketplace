@@ -9,3 +9,5 @@ export * from './settings.ts';
 export * from './ingestion.ts';
 export * from './http-client.ts';
 export * from './pricing.ts';
+export * from './payment.ts';
+export * from './bundle.ts';

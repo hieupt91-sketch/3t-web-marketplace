@@ -32,7 +32,7 @@ Ngày cập nhật: 23/10/2026 (Asia/Ho_Chi_Minh). Đặc tả 1.0. Nhánh: `fea
 
 ## Bằng chứng kiểm thử (máy dev, PostgreSQL 16 cục bộ)
 
-`pnpm run check` PASS: docs validator; typecheck mọi package; i18n lint (536 khóa); 97 test (sdk 30, core 6, i18n 4, preview 12, api 14, tích hợp 31 gồm 16 import + 8 catalog + 7 content). `next build` PASS. Đã chạy lượt trình duyệt: công bố mẫu + giá → P02/P03; tạo + công bố trang CMS → render markdown ở P05; gửi form liên hệ P09.
+`pnpm run check` PASS: docs validator; typecheck mọi package; i18n lint (546 khóa); 106 test (sdk 30, core 6, i18n 4, preview 12, api 14, tích hợp 40 gồm 16 import + 8 catalog + 7 content + 9 commerce). `next build` PASS. Đã chạy lượt trình duyệt: công bố mẫu + giá → P02/P03; tạo + công bố trang CMS → render markdown ở P05; gửi form liên hệ P09.
 
 | Kịch bản | Bằng chứng tự động |
 |---|---|
@@ -76,3 +76,12 @@ pnpm run check
 ## Quyết định chưa chốt
 
 Xem `DECISIONS.md` (ADR-013 trở đi) và docs/11 §3: provider thanh toán/email, domain thương hiệu và domain preview, giá/hoa hồng, quota hosting.
+
+## M4 — Commerce (M4a backend, 24/10/2026)
+
+- migration 0005: quotes/orders/order_items/payment_attempts/payment_events/entitlements/download_events với ràng buộc tổng tiền (invariant §6.1) và entitlement unique theo order_item (§6.3).
+- `PaymentProvider` interface + `MockPaymentProvider` sandbox (HMAC + timestamp + dedupe); giá tính 100% ở backend từ giá hiện hành của gói.
+- API: POST /quotes (bound buyer, hết hạn 15'), POST /orders (yêu cầu buyer verified + terms hiện hành, idempotent), GET /orders[/{id}], POST /orders/{id}/payment-sessions|cancel, POST /payments/mock/{ref}/confirm (sandbox), POST /payments/webhooks/{provider}, GET /me/entitlements, POST /entitlements/{id}/download-links, GET /downloads/{token} (token một lần, redeem kiểm quyền), GET /me/downloads.
+- Bộ cài self-host sinh on-demand từ artifact static_site (site/ + README + manifest + CHECKSUMS, mtime cố định → hash ổn định).
+- Test: 9 tích hợp commerce (AT-14 client không đặt giá; AT-15 redirect giả không mở quyền; AT-16 webhook trùng → một entitlement; AT-17 sai tiền → needs_reconciliation; AT-18/19 tải chưa trả tiền/khác user/token hết hạn bị chặn) + unit payment (chữ ký/skew) + bundle. CSRF miễn trừ endpoint webhook (xác thực bằng chữ ký).
+- Còn: UI checkout B01–B05 + C02–C04; refund/chargeback; reconciliation admin; hosted provisioning (M5).

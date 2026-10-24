@@ -1,11 +1,12 @@
-import { LocalObjectStore, createPool, loadConfig } from '@3t/core';
+import { LocalObjectStore, MockPaymentProvider, createPool, loadConfig } from '@3t/core';
 import { buildApp } from './app.ts';
 import { DisabledMailer, FileMailer } from './mail.ts';
 
 const config = loadConfig();
 const db = createPool(config.databaseUrl);
 const app = await buildApp(
-  { config, db, store: new LocalObjectStore(config.storageDir), mailer: config.mailTransport === 'file' ? new FileMailer(config.mailDir) : new DisabledMailer() },
+  { config, db, store: new LocalObjectStore(config.storageDir), mailer: config.mailTransport === 'file' ? new FileMailer(config.mailDir) : new DisabledMailer(),
+    payment: new MockPaymentProvider(config.mockPaymentSecret, config.portalOrigin) },
   { logger: true },
 );
 const port = Number(process.env.API_PORT ?? 4000);

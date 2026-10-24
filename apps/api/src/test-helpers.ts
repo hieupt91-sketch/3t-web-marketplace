@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { LocalObjectStore, hashPassword, loadConfig, type Db, type PlatformConfig } from '@3t/core';
+import { LocalObjectStore, MockPaymentProvider, hashPassword, loadConfig, type Db, type PlatformConfig } from '@3t/core';
 import { createTestDatabase } from '@3t/core/testing';
 import { buildApp } from './app.ts';
 import { MemoryMailer } from './mail.ts';
@@ -16,6 +16,7 @@ export interface TestContext {
   config: PlatformConfig;
   store: LocalObjectStore;
   mailer: MemoryMailer;
+  payment: MockPaymentProvider;
   close: () => Promise<void>;
 }
 
@@ -34,7 +35,8 @@ export async function createTestContext(overrides: Partial<PlatformConfig> = {})
   });
   const store = new LocalObjectStore(config.storageDir);
   const mailer = new MemoryMailer();
-  const app = await buildApp({ config, db: pool, store, mailer });
+  const payment = new MockPaymentProvider(config.mockPaymentSecret, config.portalOrigin);
+  const app = await buildApp({ config, db: pool, store, mailer, payment });
   return {
     app,
     db: pool,
@@ -42,6 +44,7 @@ export async function createTestContext(overrides: Partial<PlatformConfig> = {})
     config,
     store,
     mailer,
+    payment,
     close: async () => {
       await app.close();
       await drop();

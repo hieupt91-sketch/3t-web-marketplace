@@ -46,3 +46,13 @@ Ngày 23/10/2026. Đây là baseline đề xuất kỹ thuật theo yêu cầu n
 | ADR-025 | Nội dung trang/chính sách lưu markdown subset, render escape HTML + allowlist link ở web | An toàn XSS (docs/05 RichText), không cần sanitizer nặng; không nhận HTML tùy ý |
 | ADR-026 | `policy_versions` bất biến sau publish (trigger); đổi chính sách = tạo version mới | Đơn hàng snapshot version đã áp dụng, không sửa lịch sử (docs/04 §3) |
 | ADR-027 | Contact honeypot: điền field ẩn → đánh dấu `suspected`, vẫn nhận; response 202 chung | Không báo cho bot biết bị chặn; không nhầm liên hệ với tạo đơn (P09) |
+
+## Quyết định khi triển khai M4 COMMERCE (24/10/2026)
+
+| ADR | Quyết định | Lý do / hệ quả |
+|---|---|---|
+| ADR-028 | `PaymentProvider` interface + `MockPaymentProvider` sandbox ký HMAC; chưa tích hợp provider thật | Chạy đủ luồng verify webhook (chữ ký + timestamp + dedupe) khi chưa có tài khoản merchant (docs/08 §1) |
+| ADR-029 | Giá tính 100% ở backend từ giá hiện hành của gói; quote bound theo buyer + hết hạn 15 phút | Không tin total/giá từ client (invariant §6.1, AT-14) |
+| ADR-030 | Cấp quyền chỉ từ sự kiện đã verify; entitlement unique theo order_item; webhook trùng/sai thứ tự idempotent | Redirect success giả không mở quyền (AT-15/16); tiền sai → needs_reconciliation (AT-17) |
+| ADR-031 | Bộ cài self-host sinh on-demand từ artifact static_site (site/ + README + manifest + CHECKSUMS), mtime cố định để hash ổn định | Bàn giao tải được cho mẫu tĩnh ngay; adapter runtime bổ sung compose/migration sau |
+| ADR-032 | Tải qua token một lần hash trong DB, hết hạn 5 phút, redeem kiểm quyền lại mỗi lần | Không lộ URL storage; chặn tải khi chưa trả tiền/khác user (AT-18/19) |

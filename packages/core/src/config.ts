@@ -26,6 +26,12 @@ export interface PlatformConfig {
   screenshotsEnabled: boolean;
   /** scrypt cost; lowered only in tests. */
   passwordHashCost: number;
+  /** Platform selling currency (VND). */
+  currency: string;
+  /** Sandbox payment secret; a real provider replaces the mock at the integration milestone. */
+  mockPaymentSecret: string;
+  /** Minutes a payment window stays open for an order. */
+  paymentWindowMinutes: number;
 }
 
 function env(name: string, fallback?: string): string {
@@ -55,6 +61,9 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     chromiumPath: process.env.CHROMIUM_PATH || null,
     screenshotsEnabled: env('SCREENSHOTS', 'off') === 'on',
     passwordHashCost: Number(env('PASSWORD_HASH_COST', '131072')),
+    currency: env('PLATFORM_CURRENCY', 'VND'),
+    mockPaymentSecret: env('MOCK_PAYMENT_SECRET', mode === 'production' ? undefined : 'dev-mock-payment-secret'),
+    paymentWindowMinutes: Number(env('PAYMENT_WINDOW_MINUTES', '30')),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');
