@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 1,
+  "slug": "vite-landing-fixture",
+  "version": "1.0.0",
+  "name": { "vi": "Mẫu Vite kiểm thử", "en": "Vite test fixture" },
+  "summary": { "vi": "Kiểm tra adapter vite-static.", "en": "Tests the vite-static adapter." },
+  "adapter": "vite-static",
+  "projectRoot": ".",
+  "build": { "script": "build", "outputDir": "dist", "toolchain": "node22", "packageManager": "npm", "lockfile": "package-lock.json" },
+  "runtime": { "entry": "index.html", "spaFallback": false },
+  "database": { "engine": "none" },
+  "demo": { "mode": "publicReadonly", "ttlHours": 24 },
+  "locales": { "default": "vi", "supported": ["vi"], "contentMode": "static" },
+  "capabilities": ["landing"],
+  "env": [],
+  "export": { "modes": ["selfhost", "hosted"], "sourceRoot": "." }
+}

@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "slug": "node-service-fixture",
+  "version": "1.0.0",
+  "name": {
+    "vi": "Dịch vụ Node kiểm thử",
+    "en": "Node test fixture"
+  },
+  "summary": {
+    "vi": "Kiểm tra adapter node-http.",
+    "en": "Tests the node-http adapter."
+  },
+  "adapter": "node-http",
+  "projectRoot": ".",
+  "runtime": {
+    "start": [
+      "node",
+      "server.mjs"
+    ],
+    "healthPath": "/__health",
+    "port": 3000
+  },
+  "database": {
+    "engine": "none"
+  },
+  "demo": {
+    "mode": "isolatedAdmin",
+    "ttlHours": 2
+  },
+  "locales": {
+    "default": "vi",
+    "supported": [
+      "vi"
+    ],
+    "contentMode": "runtime"
+  },
+  "capabilities": [
+    "admin"
+  ],
+  "env": [],
+  "export": {
+    "modes": [
+      "hosted"
+    ],
+    "sourceRoot": "."
+  },
+  "build": {
+    "script": "build",
+    "outputDir": "dist",
+    "toolchain": "node22",
+    "packageManager": "npm",
+    "lockfile": "package-lock.json"
+  }
+}

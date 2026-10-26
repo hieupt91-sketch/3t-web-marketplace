@@ -11,7 +11,7 @@ export type Adapter = 'static-html' | 'vite-static' | 'next-standalone' | 'node-
 export const ADAPTERS: readonly Adapter[] = ['static-html', 'vite-static', 'next-standalone', 'node-http'];
 
 /** Adapters whose build/run pipeline is implemented and tested in this release. */
-export const IMPLEMENTED_ADAPTERS: readonly Adapter[] = ['static-html'];
+export const IMPLEMENTED_ADAPTERS: readonly Adapter[] = ['static-html', 'vite-static', 'node-http', 'next-standalone'];
 
 export interface TemplateManifest {
   schemaVersion: 1;

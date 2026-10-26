@@ -17,6 +17,8 @@ import { adminTemplateRoutes } from './routes/admin-templates.ts';
 import { jobRoutes } from './routes/jobs.ts';
 import { commerceRoutes } from './routes/commerce.ts';
 import { adminCommerceRoutes } from './routes/admin-commerce.ts';
+import { adminGithubRoutes } from './routes/admin-github.ts';
+import { adminDemoRoutes, demoSessionRoutes } from './routes/demo-sessions.ts';
 
 export const SESSION_COOKIE = 'mp_session';
 
@@ -120,7 +122,7 @@ function checkOrigin(request: FastifyRequest, portalOrigin: string): void {
   if (!MUTATING.has(request.method)) return;
   // Provider webhooks are server-to-server (no Origin) and are authenticated by signature, not by
   // a session cookie, so the CSRF origin check does not apply to them.
-  if (request.url.startsWith('/api/v1/payments/webhooks/') || request.url.startsWith('/api/v1/payments/refund-webhooks/')) return;
+  if (request.url.startsWith('/api/v1/payments/webhooks/') || request.url.startsWith('/api/v1/payments/refund-webhooks/') || request.url.startsWith('/api/v1/admin/imports/github-webhook')) return;
   const origin = request.headers.origin;
   if (origin !== undefined) {
     if (origin !== portalOrigin) throw errors.forbidden('security.origin_mismatch');
@@ -261,6 +263,9 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(jobRoutes);
       await api.register(commerceRoutes);
       await api.register(adminCommerceRoutes, { prefix: '/admin' });
+      await api.register(adminGithubRoutes, { prefix: '/admin' });
+      await api.register(demoSessionRoutes);
+      await api.register(adminDemoRoutes, { prefix: '/admin' });
     },
     { prefix: '/api/v1' },
   );

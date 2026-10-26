@@ -16,8 +16,8 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 |---|---|---|
 | M0 SPEC | Đặc tả, defaults, repo, manifest, UI IDs | ✅ Xong |
 | M1 FOUNDATION | Monorepo, API, SQL, auth/RBAC, i18n, design tokens | ✅ Xong (còn MFA, staff mgmt) |
-| M2 IMPORT | Nhập ZIP an toàn, nhận diện, build/demo, job | 🟡 HTML tĩnh xong; Vite/Next/Node + GitHub chưa |
-| M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Công bố + demo + filter + SEO + CMS nội dung (P05–P09) xong; còn D02–D04 (chờ runtime adapter) |
+| M2 IMPORT | Nhập ZIP an toàn, nhận diện, build/demo, job | ✅ Executor cách ly + 4 adapter + GitHub + demo isolated + retry checkpoint (26/10/2026) |
+| M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Công bố + demo + filter + SEO + CMS nội dung (P05–P09) xong; còn A07, A26, filter mở rộng |
 | M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | 🟡 Backend + UI checkout (B01–B04) + C02 xong; còn refund, reconciliation admin, B05 |
 | M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ⬜ Chưa |
 | M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ⬜ Chưa |

@@ -40,7 +40,7 @@ describe('detectAdapter', () => {
       'package.json': JSON.stringify({ scripts: { build: 'vite build' }, devDependencies: { vite: '1' } }),
     });
     const result = await detectAdapter(root, paths);
-    expect(result).toMatchObject({ status: 'needs_configuration', adapter: 'vite-static', adapterImplemented: false });
+    expect(result).toMatchObject({ status: 'needs_configuration', adapter: 'vite-static', adapterImplemented: true });
     expect(result.missingFields).toContain('/build/lockfile');
   });
 

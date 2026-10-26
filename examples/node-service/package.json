@@ -1,0 +1,7 @@
+{
+  "name": "node-service",
+  "version": "1.0.0",
+  "private": true,
+  "main": "server.mjs",
+  "scripts": {}
+}

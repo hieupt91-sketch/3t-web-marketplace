@@ -25,6 +25,9 @@ interface ImportRow {
   id: string;
   actor_id: string;
   source_kind: string;
+  repo_id: string | null;
+  commit_sha: string | null;
+  subdir: string | null;
   name_hint: string;
   digest: string;
   status: string;
@@ -108,6 +111,9 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
     return {
       id: row.id,
       source_kind: row.source_kind,
+      repo_id: row.repo_id,
+      commit_sha: row.commit_sha,
+      subdir: row.subdir,
       name: row.name_hint,
       digest: row.digest,
       status: row.status,

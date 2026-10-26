@@ -57,9 +57,12 @@ export const IMPORT_ERROR_OUTCOME: Record<string, 'rejected' | 'needs_configurat
   health_failed: 'failed',
   smoke_failed: 'failed',
   persistence_failed: 'failed',
+  install_failed: 'failed',
+  build_failed: 'failed',
+  build_timeout: 'failed',
 };
 
 /** Codes worth an automatic retry (transient infrastructure failures). */
-export const RETRYABLE_IMPORT_ERRORS = new Set(['source_unavailable', 'artifact_store_error', 'provision_failed', 'health_failed', 'persistence_failed', 'internal_error']);
+export const RETRYABLE_IMPORT_ERRORS = new Set(['source_unavailable', 'artifact_store_error', 'provision_failed', 'health_failed', 'persistence_failed', 'internal_error', 'build_timeout']);
 
 export const IMPORT_JOB_TYPE = 'import.process';

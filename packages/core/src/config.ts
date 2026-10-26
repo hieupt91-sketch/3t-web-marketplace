@@ -26,6 +26,12 @@ export interface PlatformConfig {
   screenshotsEnabled: boolean;
   /** scrypt cost; lowered only in tests. */
   passwordHashCost: number;
+  /** Base URL for the GitHub REST API (overridable for tests / GHES). */
+  githubApiBaseUrl: string;
+  /** HMAC secret for GitHub push webhooks; empty disables the webhook endpoint. */
+  githubWebhookSecret: string;
+  /** Cap on concurrently active demo sessions (D02 capacity). */
+  demoMaxActiveSessions: number;
   /** Platform selling currency (VND). */
   currency: string;
   /** Sandbox payment secret; a real provider replaces the mock at the integration milestone. */
@@ -64,6 +70,9 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     currency: env('PLATFORM_CURRENCY', 'VND'),
     mockPaymentSecret: env('MOCK_PAYMENT_SECRET', mode === 'production' ? undefined : 'dev-mock-payment-secret'),
     paymentWindowMinutes: Number(env('PAYMENT_WINDOW_MINUTES', '30')),
+    githubApiBaseUrl: env('GITHUB_API_BASE_URL', 'https://api.github.com'),
+    githubWebhookSecret: env('GITHUB_WEBHOOK_SECRET', ''),
+    demoMaxActiveSessions: Number(env('DEMO_MAX_ACTIVE_SESSIONS', '20')),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');
