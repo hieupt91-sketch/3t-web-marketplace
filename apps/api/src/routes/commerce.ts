@@ -60,6 +60,113 @@ function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: QuoteLine[]
 }
 
 /**
+ * Fulfil a paid order: one entitlement per order item (unique per item, invariant §6.3),
+ * order marked paid, outbox event + audit. Callers must already hold the order row lock
+ * and have decided the order may move to paid.
+ */
+export async function fulfillOrder(client: PoolClient, orderId: string, buyerId: string, traceId: string): Promise<void> {
+  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number } }>(
+    'SELECT id, template_id, version_id, deployment_mode, snapshot_json FROM order_items WHERE order_id = $1',
+    [orderId],
+  );
+  for (const item of items.rows) {
+    const updatesMonths = item.snapshot_json.updates_months ?? null;
+    const instanceLimit = item.snapshot_json.instance_limit ?? 1;
+    await client.query(
+      `INSERT INTO entitlements (order_item_id, user_id, template_id, version_id, mode, status, instance_limit, updates_until, runtime_expires_at)
+       VALUES ($1, $2, $3, $4, $5, 'active', $6,
+               CASE WHEN $7::int IS NULL THEN NULL ELSE now() + make_interval(months => $7::int) END,
+               NULL)
+       ON CONFLICT (order_item_id) DO NOTHING`,
+      [item.id, buyerId, item.template_id, item.version_id, item.deployment_mode, instanceLimit, updatesMonths],
+    );
+  }
+  await client.query("UPDATE orders SET status = 'paid', paid_at = now(), row_version = row_version + 1 WHERE id = $1", [orderId]);
+  await emitEvent(client, 'order.paid', 'order', orderId, { order_id: orderId, buyer_id: buyerId });
+  await writeAudit(client, { actorType: 'system', actorId: null, action: 'order.paid', resourceType: 'order', resourceId: orderId, traceId });
+}
+
+/** Recompute an order's refund-derived status from its confirmed refunds (AT-56). */
+export async function recomputeOrderRefundStatus(client: PoolClient, orderId: string): Promise<string> {
+  const order = await client.query<{ status: string; total_minor: string }>(
+    "SELECT status, total_minor::text FROM orders WHERE id = $1 FOR UPDATE",
+    [orderId],
+  );
+  const o = order.rows[0]!;
+  if (o.status !== 'paid' && o.status !== 'refund_pending' && o.status !== 'partially_refunded' && o.status !== 'refunded') return o.status;
+  const sums = await client.query<{ confirmed: string; active: string }>(
+    `SELECT COALESCE(SUM(amount_minor) FILTER (WHERE status = 'confirmed'), 0)::text AS confirmed,
+            COUNT(*) FILTER (WHERE status IN ('requested', 'pending'))::text AS active
+     FROM refunds WHERE order_id = $1`,
+    [orderId],
+  );
+  const confirmed = BigInt(sums.rows[0]!.confirmed);
+  const total = BigInt(o.total_minor);
+  let next: string;
+  if (confirmed >= total && total > 0n) next = 'refunded';
+  else if (confirmed > 0n) next = 'partially_refunded';
+  else if (sums.rows[0]!.active !== '0') next = 'refund_pending';
+  else next = 'paid';
+  if (next !== o.status) {
+    await client.query('UPDATE orders SET status = $2, row_version = row_version + 1 WHERE id = $1', [orderId, next]);
+    if (next === 'refunded') {
+      // Revoke only this order's entitlements (one per order item, invariant §6.3).
+      await client.query(
+        `UPDATE entitlements SET status = 'revoked', row_version = row_version + 1
+         WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = $1) AND status = 'active'`,
+        [orderId],
+      );
+    }
+  }
+  return next;
+}
+
+/**
+ * Process a verified provider refund event (AT-56): dedupe by provider event id, and apply a
+ * confirmed refund exactly once. A failed event only marks the refund failed; a later confirmed
+ * event still applies. Full refunds revoke the order's entitlements, once.
+ */
+export async function processRefundEvent(db: Db, provider: string, rawBody: string, event: { providerEventId: string; refundRef: string; status: 'confirmed' | 'failed'; amountMinor: string; currency: string }): Promise<'processed' | 'duplicate' | 'ignored'> {
+  const bodyHash = hashToken(rawBody).toString('hex');
+  return tx(db, async (client) => {
+    const inserted = await client.query(
+      `INSERT INTO refund_events (provider, provider_event_id, refund_id, raw_body_hash)
+       VALUES ($1, $2, NULL, $3) ON CONFLICT (provider, provider_event_id) DO NOTHING RETURNING id`,
+      [provider, event.providerEventId, bodyHash],
+    );
+    if (inserted.rowCount === 0) return 'duplicate';
+    const found = await client.query<{ id: string; order_id: string; status: string; amount_minor: string; currency: string }>(
+      'SELECT id, order_id, status, amount_minor::text, currency FROM refunds WHERE provider = $1 AND provider_ref = $2 FOR UPDATE',
+      [provider, event.refundRef],
+    );
+    const refund = found.rows[0];
+    if (!refund) {
+      await client.query("UPDATE refund_events SET processing_status = 'ignored' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
+      return 'ignored';
+    }
+    await client.query('UPDATE refund_events SET refund_id = $3, processing_status = $4 WHERE provider = $1 AND provider_event_id = $2', [provider, event.providerEventId, refund.id, 'processed']);
+    if (refund.status === 'confirmed') return 'processed'; // already applied; never reverse twice
+    if (event.status === 'failed') {
+      if (refund.status === 'pending') await client.query("UPDATE refunds SET status = 'failed' WHERE id = $1", [refund.id]);
+      await writeAudit(client, { actorType: 'system', actorId: null, action: 'refund.failed', resourceType: 'refund', resourceId: refund.id, traceId: event.providerEventId });
+      await recomputeOrderRefundStatus(client, refund.order_id);
+      return 'processed';
+    }
+    // Confirmed: amount/currency must match the approved refund, else leave for reconciliation.
+    if (event.currency !== refund.currency || BigInt(event.amountMinor) !== BigInt(refund.amount_minor)) {
+      await client.query("UPDATE refund_events SET processing_status = 'ignored' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
+      return 'ignored';
+    }
+    if (refund.status !== 'pending') return 'processed'; // requested/rejected refunds are not settled by the provider
+    await client.query("UPDATE refunds SET status = 'confirmed' WHERE id = $1", [refund.id]);
+    const orderStatus = await recomputeOrderRefundStatus(client, refund.order_id);
+    await emitEvent(client, orderStatus === 'refunded' ? 'order.refunded' : 'order.partially_refunded', 'order', refund.order_id, { order_id: refund.order_id, refund_id: refund.id });
+    await writeAudit(client, { actorType: 'system', actorId: null, action: 'refund.confirmed', resourceType: 'refund', resourceId: refund.id, traceId: event.providerEventId });
+    return 'processed';
+  });
+}
+
+/**
  * Process a verified payment event (docs/08 §1): dedupe, check amount/currency, and on settlement
  * create one entitlement per order item and mark the order paid — all idempotent. A duplicate or
  * out-of-order event never regresses a paid order or duplicates an entitlement (invariant §6.3).
@@ -111,25 +218,7 @@ async function processPaymentEvent(db: Db, provider: string, rawBody: string, ev
       return 'processed';
     }
 
-    const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number } }>(
-      'SELECT id, template_id, version_id, deployment_mode, snapshot_json FROM order_items WHERE order_id = $1',
-      [o.id],
-    );
-    for (const item of items.rows) {
-      const updatesMonths = item.snapshot_json.updates_months ?? null;
-      const instanceLimit = item.snapshot_json.instance_limit ?? 1;
-      await client.query(
-        `INSERT INTO entitlements (order_item_id, user_id, template_id, version_id, mode, status, instance_limit, updates_until, runtime_expires_at)
-         VALUES ($1, $2, $3, $4, $5, 'active', $6,
-                 CASE WHEN $7::int IS NULL THEN NULL ELSE now() + make_interval(months => $7::int) END,
-                 NULL)
-         ON CONFLICT (order_item_id) DO NOTHING`,
-        [item.id, o.buyer_id, item.template_id, item.version_id, item.deployment_mode, instanceLimit, updatesMonths],
-      );
-    }
-    await client.query("UPDATE orders SET status = 'paid', paid_at = now(), row_version = row_version + 1 WHERE id = $1", [o.id]);
-    await emitEvent(client, 'order.paid', 'order', o.id, { order_id: o.id, buyer_id: o.buyer_id });
-    await writeAudit(client, { actorType: 'system', actorId: null, action: 'order.paid', resourceType: 'order', resourceId: o.id, traceId: event.providerEventId });
+    await fulfillOrder(client, o.id, o.buyer_id, event.providerEventId);
     await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
     return 'processed';
   });
@@ -333,6 +422,66 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     return { data: { status: 'cancelled' } };
   });
 
+  // Buyer view of an order's payment attempts (B05 issue screen; no bank internals exposed).
+  app.get<{ Params: { id: string } }>('/orders/:id/payment-attempts', async (request) => {
+    const auth = requireUser(request);
+    assertId(request.params.id);
+    const order = await db.query('SELECT id FROM orders WHERE id = $1 AND buyer_id = $2', [request.params.id, auth.userId]);
+    if (!order.rows[0]) throw errors.notFound();
+    const { rows } = await db.query<{ id: string; provider: string; provider_ref: string | null; amount_minor: string; currency: string; status: string; created_at: Date }>(
+      'SELECT id, provider, provider_ref, amount_minor::text, currency, status, created_at FROM payment_attempts WHERE order_id = $1 ORDER BY created_at DESC',
+      [request.params.id],
+    );
+    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString() })), page: { next_cursor: null, has_more: false } };
+  });
+
+  // Buyer requests a refund (B05). Amount must not exceed the not-yet-refunded remainder;
+  // staff approve/reject it (payment:refund) and the provider settles it (AT-56).
+  app.post<{ Params: { id: string }; Body: { amount_minor: string; reason?: string } }>(
+    '/orders/:id/refund-requests',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor'], properties: { amount_minor: { type: 'string', pattern: '^[0-9]+$' }, reason: { type: 'string', maxLength: 500 } } } } },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      assertId(request.params.id);
+      const result = await tx(db, async (client) => {
+        const order = await client.query<{ status: string; total_minor: string; currency: string }>(
+          'SELECT status, total_minor::text, currency FROM orders WHERE id = $1 AND buyer_id = $2 FOR UPDATE',
+          [request.params.id, auth.userId],
+        );
+        const o = order.rows[0];
+        if (!o) throw errors.notFound();
+        if (o.status !== 'paid' && o.status !== 'partially_refunded' && o.status !== 'refund_pending') throw errors.conflict('refund.order_not_refundable');
+        const sums = await client.query<{ used: string }>(
+          `SELECT COALESCE(SUM(amount_minor) FILTER (WHERE status IN ('requested', 'pending', 'confirmed')), 0)::text AS used FROM refunds WHERE order_id = $1`,
+          [request.params.id],
+        );
+        const remaining = BigInt(o.total_minor) - BigInt(sums.rows[0]!.used);
+        const amount = BigInt(request.body.amount_minor);
+        if (amount <= 0n || amount > remaining) throw errors.conflict('refund.amount_exceeds_remaining');
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO refunds (order_id, buyer_id, amount_minor, currency, reason, requested_by)
+           VALUES ($1, $2, $3, $4, $5, $2) RETURNING id`,
+          [request.params.id, auth.userId, amount.toString(), o.currency, request.body.reason ?? ''],
+        );
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'refund.requested', resourceType: 'refund', resourceId: rows[0]!.id, traceId: request.id });
+        return rows[0]!.id;
+      });
+      return reply.status(201).send({ data: { id: result, status: 'requested' } });
+    },
+  );
+
+  app.get<{ Params: { id: string } }>('/orders/:id/refund-requests', async (request) => {
+    const auth = requireUser(request);
+    assertId(request.params.id);
+    const order = await db.query('SELECT id FROM orders WHERE id = $1 AND buyer_id = $2', [request.params.id, auth.userId]);
+    if (!order.rows[0]) throw errors.notFound();
+    const { rows } = await db.query<{ id: string; amount_minor: string; currency: string; status: string; reason: string; created_at: Date }>(
+      'SELECT id, amount_minor::text, currency, status, reason, created_at FROM refunds WHERE order_id = $1 ORDER BY created_at DESC',
+      [request.params.id],
+    );
+    return { data: rows.map((r) => ({ id: r.id, amount_minor: r.amount_minor, currency: r.currency, status: r.status, reason: r.reason, created_at: r.created_at.toISOString() })), page: { next_cursor: null, has_more: false } };
+  });
+
   // Sandbox: simulate the provider settling the payment. Clearly a mock; never real money.
   app.post<{ Params: { ref: string } }>(
     '/payments/mock/:ref/confirm',
@@ -351,6 +500,61 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(202).send({ data: { status: 'processing', outcome, sandbox: true } });
     },
   );
+
+  // Sandbox: simulate the provider settling / failing an approved refund (AT-56).
+  // A failed refund can later be confirmed; the confirmed event applies exactly once.
+  app.post<{ Params: { ref: string } }>(
+    '/payments/mock/refunds/:ref/confirm',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      if (!payment.sandbox) throw errors.notFound();
+      const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
+        'SELECT amount_minor::text, currency, status FROM refunds WHERE provider = $1 AND provider_ref = $2',
+        [payment.name, request.params.ref],
+      );
+      const refund = rows[0];
+      if (!refund) throw errors.notFound();
+      if (refund.status !== 'pending') throw errors.conflict('refund.not_pending');
+      const signed = payment.signRefundEvent({ refundRef: request.params.ref, status: 'confirmed', amountMinor: refund.amount_minor, currency: refund.currency });
+      const event = payment.verifyRefundWebhook(signed.body, signed.headers);
+      const outcome = await processRefundEvent(db, payment.name, signed.body, event);
+      return reply.status(202).send({ data: { status: 'processing', outcome, sandbox: true } });
+    },
+  );
+
+  app.post<{ Params: { ref: string } }>(
+    '/payments/mock/refunds/:ref/fail',
+    { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      if (!payment.sandbox) throw errors.notFound();
+      const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
+        'SELECT amount_minor::text, currency, status FROM refunds WHERE provider = $1 AND provider_ref = $2',
+        [payment.name, request.params.ref],
+      );
+      const refund = rows[0];
+      if (!refund) throw errors.notFound();
+      if (refund.status !== 'pending') throw errors.conflict('refund.not_pending');
+      const signed = payment.signRefundEvent({ refundRef: request.params.ref, status: 'failed', amountMinor: refund.amount_minor, currency: refund.currency });
+      const event = payment.verifyRefundWebhook(signed.body, signed.headers);
+      const outcome = await processRefundEvent(db, payment.name, signed.body, event);
+      return reply.status(202).send({ data: { status: 'processing', outcome, sandbox: true } });
+    },
+  );
+
+  // Real provider refund webhook: verify, dedupe, process (server-to-server, signature-authenticated).
+  app.post('/payments/refund-webhooks/:provider', async (request, reply) => {
+    const providerName = (request.params as { provider: string }).provider;
+    if (providerName !== payment.name) throw errors.notFound();
+    const raw = typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
+    let event: ReturnType<typeof payment.verifyRefundWebhook>;
+    try {
+      event = payment.verifyRefundWebhook(raw, request.headers as Record<string, string | undefined>);
+    } catch {
+      throw errors.badRequest('payment.webhook_invalid');
+    }
+    const outcome = await processRefundEvent(db, providerName, raw, event);
+    return reply.status(200).send({ received: true, outcome });
+  });
 
   // Real webhook endpoint: verify, dedupe, process. Returns 2xx after a durable record.
   // Note: the mock re-serialises the parsed JSON deterministically; a real provider needs the
@@ -495,6 +699,30 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     reply.header('content-length', grant.size_bytes);
     reply.header('content-disposition', `attachment; filename="${grant.slug}-${grant.semver}.zip"`);
     return reply.send(store.read(grant.object_key));
+  });
+
+  // Buyer download history for one entitlement (C03): history only, never a live link.
+  app.get<{ Params: { id: string } }>('/entitlements/:id/downloads', async (request) => {
+    const auth = requireUser(request);
+    assertId(request.params.id);
+    const ent = await db.query<{ id: string; mode: string; status: string; updates_until: Date | null; slug: string; semver: string }>(
+      `SELECT e.id, e.mode, e.status, e.updates_until, t.slug, v.semver
+       FROM entitlements e JOIN templates t ON t.id = e.template_id JOIN template_versions v ON v.id = e.version_id
+       WHERE e.id = $1 AND e.user_id = $2`,
+      [request.params.id, auth.userId],
+    );
+    const e = ent.rows[0];
+    if (!e) throw errors.notFound();
+    const { rows } = await db.query<{ id: string; issued_at: Date; used_at: Date | null; expires_at: Date }>(
+      'SELECT id, issued_at, used_at, expires_at FROM download_events WHERE entitlement_id = $1 ORDER BY issued_at DESC LIMIT 100',
+      [request.params.id],
+    );
+    return {
+      data: {
+        entitlement: { id: e.id, mode: e.mode, status: e.status, updates_until: e.updates_until?.toISOString() ?? null, template_slug: e.slug, version: e.semver },
+        downloads: rows.map((r) => ({ id: r.id, issued_at: r.issued_at.toISOString(), used: r.used_at !== null, expired: r.expires_at <= new Date() })),
+      },
+    };
   });
 
   app.get('/me/downloads', async (request) => {
