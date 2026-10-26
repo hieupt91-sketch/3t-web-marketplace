@@ -22,7 +22,7 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 | M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ✅ Saga provisioning + domain + backup/restore + renewal/lifecycle + UI C05–C15/A15–A19 (26/10/2026) |
 | M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ✅ Partner API + ledger append-only + payout evidence + webhook ký HMAC + UI R01–R12/A20–A21 (26/10/2026) |
 | M7 LOCALIZE + CỨNG HÓA | VI/EN mọi UI/mail/nội dung/SEO; MFA, step-up, staff, rate limit chia sẻ | ✅ TOTP MFA + step-up 10 phút + staff A24 + rate limit Postgres + matrix A22/W15; mail locale + SEO + site locale đã có sẵn và đã kiểm chứng (26/10/2026) |
-| M8 RELEASE | E2E/security/load/a11y, runbook, drill, nghiệm thu | ⬜ Chưa |
+| M8 RELEASE | E2E/security/load/a11y, runbook, drill, nghiệm thu | ✅ Release candidate: E2E + load + security gate + RUNBOOK.md + ACCEPTANCE.md (REQ/AT map); chặn production: owner duyệt policy + CI chạy lần đầu + provider thật (27/10/2026) |
 
 ---
 
@@ -118,7 +118,7 @@ Các bước: monorepo pnpm/TS · migration nền tảng (identity, RBAC, catalo
 
 **Cần đạt:** AT-44 (journey mua VI/EN), AT-45 (catalog thiếu EN → fallback có nhãn, không false hreflang), AT-46 (đổi locale ở checkout giữ order/partner/tiền), AT-50 (bàn phím/mobile/chuỗi dài). CI chặn thiếu key required VI/EN.
 
-## M8 — RELEASE ⬜
+## M8 — RELEASE ✅ RC (27/10/2026, chưa production)
 
 **Mục tiêu:** release candidate + báo cáo nghiệm thu.
 
