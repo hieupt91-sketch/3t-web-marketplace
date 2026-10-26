@@ -19,7 +19,7 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 | M2 IMPORT | Nhập ZIP an toàn, nhận diện, build/demo, job | ✅ Executor cách ly + 4 adapter + GitHub + demo isolated + retry checkpoint (26/10/2026) |
 | M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Đóng đủ: A07 versions, A26 support tickets, filter category/price (26/10/2026) |
 | M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | 🟡 Backend + UI checkout (B01–B04) + C02 xong; còn refund, reconciliation admin, B05 |
-| M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ⬜ Chưa |
+| M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ✅ Saga provisioning + domain + backup/restore + renewal/lifecycle + UI C05–C15/A15–A19 (26/10/2026) |
 | M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ⬜ Chưa |
 | M7 LOCALIZE | Hoàn chỉnh VI/EN mọi UI/mail/nội dung/SEO | 🟡 Theo từng mốc |
 | M8 RELEASE | E2E/security/load/a11y, runbook, drill, nghiệm thu | ⬜ Chưa |

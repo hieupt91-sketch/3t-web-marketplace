@@ -32,6 +32,9 @@ export interface PlatformConfig {
   githubWebhookSecret: string;
   /** Cap on concurrently active demo sessions (D02 capacity). */
   demoMaxActiveSessions: number;
+  /** Dev/test only: domain verification may accept the presented TXT value as
+   * control proof. Production must use real DNS reads (default false). */
+  dnsVerifyBodyProof: boolean;
   /** Platform selling currency (VND). */
   currency: string;
   /** Sandbox payment secret; a real provider replaces the mock at the integration milestone. */
@@ -73,6 +76,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     githubApiBaseUrl: env('GITHUB_API_BASE_URL', 'https://api.github.com'),
     githubWebhookSecret: env('GITHUB_WEBHOOK_SECRET', ''),
     demoMaxActiveSessions: Number(env('DEMO_MAX_ACTIVE_SESSIONS', '20')),
+    dnsVerifyBodyProof: env('DNS_VERIFY_BODY_PROOF', 'false') === 'true' && mode !== 'production',
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');

@@ -20,6 +20,8 @@ import { adminCommerceRoutes } from './routes/admin-commerce.ts';
 import { adminGithubRoutes } from './routes/admin-github.ts';
 import { adminDemoRoutes, demoSessionRoutes } from './routes/demo-sessions.ts';
 import { adminSupportRoutes, supportRoutes } from './routes/support.ts';
+import { adminHostingRoutes } from './routes/admin-hosting.ts';
+import { siteRoutes } from './routes/sites.ts';
 
 export const SESSION_COOKIE = 'mp_session';
 
@@ -269,6 +271,8 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(adminDemoRoutes, { prefix: '/admin' });
       await api.register(supportRoutes);
       await api.register(adminSupportRoutes, { prefix: '/admin' });
+      await api.register(siteRoutes);
+      await api.register(adminHostingRoutes, { prefix: '/admin' });
     },
     { prefix: '/api/v1' },
   );
