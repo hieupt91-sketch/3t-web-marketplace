@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool, loadConfig } from '@3t/core';
 import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
+import { SITE_JOB_TYPES, runSiteJob } from './site-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
 
 const config = loadConfig();
@@ -27,7 +28,7 @@ function logLine(event: string, fields: Record<string, unknown> = {}) {
 
 logLine('started', { screenshots: screenshotter !== null });
 while (!stopping) {
-  const job = await claimJob(db, workerId, [IMPORT_JOB_TYPE], LEASE_SECONDS).catch((error: Error) => {
+  const job = await claimJob(db, workerId, [IMPORT_JOB_TYPE, ...SITE_JOB_TYPES], LEASE_SECONDS).catch((error: Error) => {
     logLine('claim_failed', { error: error.message });
     return null;
   });
@@ -37,7 +38,8 @@ while (!stopping) {
   }
   logLine('job_claimed', { job_id: job.id, type: job.type, attempt: job.attempts });
   try {
-    await runImportJob({ config, db, store, screenshotter }, job);
+    if (job.type === IMPORT_JOB_TYPE) await runImportJob({ config, db, store, screenshotter }, job);
+    else await runSiteJob({ config, db, store }, job);
     logLine('job_finished', { job_id: job.id });
   } catch (error) {
     // LeaseLostError: another worker owns the job now (fencing); anything else is logged without payload.
