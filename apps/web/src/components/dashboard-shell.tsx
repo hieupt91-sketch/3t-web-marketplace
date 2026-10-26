@@ -27,6 +27,7 @@ const NAV: Record<'account' | 'admin', NavItem[]> = {
     { href: '/account', labelKey: 'ui.account.nav.overview' },
     { href: '/account/purchases', labelKey: 'ui.account.nav.purchases' },
     { href: '/account/orders', labelKey: 'ui.account.nav.orders' },
+    { href: '/account/support', labelKey: 'ui.account.nav.support' },
     { href: '/account/security', labelKey: 'ui.account.nav.security' },
   ],
   admin: [
@@ -37,6 +38,7 @@ const NAV: Record<'account' | 'admin', NavItem[]> = {
     { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
     { href: '/admin/payments/reconciliation', labelKey: 'ui.admin.nav.reconciliation', permission: 'payment:read' },
     { href: '/admin/payments/refunds', labelKey: 'ui.admin.nav.refunds', permission: 'payment:read' },
+    { href: '/admin/support', labelKey: 'ui.admin.nav.support', permission: 'support:read' },
   ],
 };
 

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { emitEvent, isUniqueViolation, publishReadiness, tx, writeAudit, type Queryable } from '@3t/core';
+import { emitEvent, isUniqueViolation, previewOrigin, publishReadiness, tx, writeAudit, type Queryable } from '@3t/core';
 import { DEFAULT_LOCALE } from '@3t/i18n';
 import { requirePermission } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
@@ -36,7 +36,7 @@ function parseAmountMinor(value: unknown): string {
 }
 
 export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
-  const { db } = app.deps;
+  const { db, config } = app.deps;
 
   app.get<{ Params: { id: string } }>('/templates/:id/detail', async (request, reply) => {
     requirePermission(request, 'template:read');
@@ -83,6 +83,29 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
         publish: readiness,
       },
       meta: { request_id: request.id, revision: template.row_version },
+    };
+  });
+
+  // A07 — full versions screen: SHA, manifest, artifact, import, demo, published flag.
+  // Same-semver-different-hash rejection is enforced at record time (AT-30); this
+  // screen makes the SHA visible so the rejection is auditable.
+  app.get<{ Params: { id: string } }>('/templates/:id/versions', async (request) => {
+    requirePermission(request, 'template:read');
+    const template = await loadTemplate(db, request.params.id);
+    const { rows } = await db.query(
+      `SELECT v.id, v.semver, v.adapter, v.status, v.source_sha, v.manifest_json, v.import_id, v.created_at,
+              a.kind AS artifact_kind, a.size_bytes AS artifact_size, a.object_key AS artifact_key,
+              (SELECT p.host_label FROM previews p WHERE p.version_id = v.id AND p.status = 'active' LIMIT 1) AS preview_label,
+              (v.id = $2) AS is_published
+       FROM template_versions v JOIN artifacts a ON a.id = v.artifact_id
+       WHERE v.template_id = $1 ORDER BY v.created_at DESC`,
+      [template.id, template.published_version_id ?? ''],
+    );
+    return {
+      data: rows.map((row) => ({
+        ...row,
+        demo_url: row.preview_label ? `${previewOrigin(config, row.preview_label)}/` : null,
+      })),
     };
   });
 
