@@ -4,6 +4,7 @@ import { getSetting, hashToken, tx, writeAudit } from '@3t/core';
 import { requirePermission, requireUser } from '../app.ts';
 import { errors } from '../errors.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
+import { requireStepUp } from '../lib/step-up.ts';
 import { assertPublicWebhookUrl, decryptWebhookSecret, encryptWebhookSecret, sendWebhookDelivery } from '../lib/partner-webhooks.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -190,6 +191,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor', 'profile_id'], properties: { amount_minor: { type: 'string', pattern: '^[0-9]+$' }, profile_id: { type: 'string', pattern: UUID.source } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
+      await requireStepUp(db, auth);
       const partner = await ownPartner(db, auth.userId);
       if (!partner || partner.status !== 'active') throw errors.forbidden('partner.not_active');
       const amount = BigInt(request.body.amount_minor);
@@ -261,6 +263,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['scopes'], properties: { scopes: { type: 'array', items: { type: 'string', enum: ALL_SCOPES }, minItems: 1 }, expires_at: { type: 'string' } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
+      await requireStepUp(db, auth);
       const partner = await ownPartner(db, auth.userId);
       if (!partner || partner.status !== 'active') throw errors.forbidden('partner.not_active');
       const secret = `3tp_${randomBytes(20).toString('hex')}`;
@@ -286,6 +289,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string } }>('/partner/api-keys/:id/revoke', async (request, reply) => {
     const auth = requireUser(request);
+    await requireStepUp(db, auth);
     const partner = await ownPartner(db, auth.userId);
     if (!partner || !UUID.test(request.params.id)) throw errors.notFound();
     const { rowCount } = await db.query(
@@ -302,6 +306,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['url', 'events'], properties: { url: { type: 'string', minLength: 1, maxLength: 1000 }, events: { type: 'array', items: { type: 'string', enum: WEBHOOK_EVENTS }, minItems: 1 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
+      await requireStepUp(db, auth);
       const partner = await ownPartner(db, auth.userId);
       if (!partner || partner.status !== 'active') throw errors.forbidden('partner.not_active');
       try {
@@ -382,6 +387,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: true, properties: { locale: { type: 'string', enum: ['vi', 'en'] }, timezone: { type: 'string', maxLength: 100 }, return_domains: { type: 'array', items: { type: 'string', maxLength: 253 } } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
+      await requireStepUp(db, auth);
       const partner = await ownPartner(db, auth.userId);
       if (!partner) throw errors.notFound();
       const domains = (request.body.return_domains ?? []).map((d) => d.toLowerCase());
@@ -401,6 +407,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['account_label'], properties: { account_label: { type: 'string', minLength: 1, maxLength: 120 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
+      await requireStepUp(db, auth);
       const partner = await ownPartner(db, auth.userId);
       if (!partner) throw errors.notFound();
       // v1 stores only a masked label (e.g. "VCB ••1234"); full bank details

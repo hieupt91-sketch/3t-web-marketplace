@@ -47,6 +47,8 @@ export interface PlatformConfig {
   partnerWebhookAllowLoopback: boolean;
   /** Server-side key encrypting stored partner webhook secrets at rest. */
   partnerWebhookKey: string;
+  /** Server-side key encrypting stored MFA TOTP secrets at rest. */
+  mfaKey: string;
 }
 
 function env(name: string, fallback?: string): string {
@@ -86,6 +88,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     partnerLinkSecret: env('PARTNER_LINK_SECRET', mode === 'production' ? undefined : 'dev-partner-link-secret'),
     partnerWebhookAllowLoopback: env('PARTNER_WEBHOOK_ALLOW_LOOPBACK', 'false') === 'true' && mode !== 'production',
     partnerWebhookKey: env('PARTNER_WEBHOOK_KEY', mode === 'production' ? undefined : 'dev-partner-webhook-key'),
+    mfaKey: env('MFA_KEY', mode === 'production' ? undefined : 'dev-mfa-key'),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');

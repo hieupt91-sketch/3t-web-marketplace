@@ -1,7 +1,9 @@
 import type { FastifyInstance } from 'fastify';
-import { writeAudit } from '@3t/core';
+import { hashPassword, verifyPassword, writeAudit } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
+import { passwordIssues } from '../lib/identity.ts';
+import { requireStepUp } from '../lib/step-up.ts';
 
 function etagFor(rowVersion: number): string {
   return `"${rowVersion}"`;
@@ -13,7 +15,34 @@ function parseIfMatch(header: string | undefined): number | null {
 }
 
 export async function meRoutes(app: FastifyInstance): Promise<void> {
-  const { db } = app.deps;
+  const { db, config, mailer } = app.deps;
+
+  // Authenticated password change (docs/04 §5): current password + step-up,
+  // then every other session is revoked; the current session survives.
+  app.post<{ Body: { current_password: string; new_password: string } }>(
+    '/me/password-change',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['current_password', 'new_password'], properties: { current_password: { type: 'string', maxLength: 512 }, new_password: { type: 'string', maxLength: 512 } } } } },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      await requireStepUp(db, auth);
+      const issues = passwordIssues(request.body.new_password, auth.email);
+      if (issues.length) throw errors.validation(issues.map((code) => ({ field: 'new_password', code })));
+      const { rows } = await db.query<{ password_hash: string | null; email_normalized: string; preferred_locale: string }>(
+        'SELECT password_hash, email_normalized, preferred_locale FROM users WHERE id = $1',
+        [auth.userId],
+      );
+      const user = rows[0];
+      if (!user || !(await verifyPassword(request.body.current_password, user.password_hash))) {
+        throw errors.unauthenticated('auth.invalid_credentials');
+      }
+      const passwordHash = await hashPassword(request.body.new_password, config.passwordHashCost);
+      await db.query('UPDATE users SET password_hash = $2, row_version = row_version + 1 WHERE id = $1', [auth.userId, passwordHash]);
+      await db.query('UPDATE sessions SET revoked_at = now() WHERE user_id = $1 AND id <> $2 AND revoked_at IS NULL', [auth.userId, auth.sessionId]);
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'user.password_changed', resourceType: 'user', resourceId: auth.userId, traceId: request.id });
+      await mailer.send({ to: user.email_normalized, locale: user.preferred_locale as 'vi' | 'en', template: 'password_changed', params: { link: `${config.portalOrigin}/auth/forgot-password` } });
+      return reply.status(200).send({ data: { status: 'password_changed' } });
+    },
+  );
 
   app.get('/me', async (request, reply) => {
     const auth = requireUser(request);

@@ -34,6 +34,9 @@ beforeAll(async () => {
   owner = await createUser(ctx, 'owner@example.com', 'platform_owner');
   buyer = await createUser(ctx, 'buyer@example.com');
   other = await createUser(ctx, 'other@example.com');
+  // M7 step-up: site restore and delete-request require a fresh elevation.
+  const stepUp = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/step-up', headers: as(buyer), payload: { password: 'correct horse battery staple' } });
+  if (stepUp.statusCode !== 200) throw new Error(`step-up failed ${stepUp.statusCode} ${stepUp.body}`);
   await publishHostedTemplate();
 });
 

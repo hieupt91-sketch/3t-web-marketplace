@@ -20,10 +20,14 @@ import { adminCommerceRoutes } from './routes/admin-commerce.ts';
 import { adminGithubRoutes } from './routes/admin-github.ts';
 import { adminDemoRoutes, demoSessionRoutes } from './routes/demo-sessions.ts';
 import { adminSupportRoutes, supportRoutes } from './routes/support.ts';
+import { PgRateLimitStore } from './lib/rate-limit-store.ts';
 import { adminHostingRoutes } from './routes/admin-hosting.ts';
 import { siteRoutes } from './routes/sites.ts';
 import { adminPartnerRoutes } from './routes/admin-partner.ts';
 import { partnerPortalRoutes } from './routes/partner-portal.ts';
+import { mfaRoutes } from './routes/mfa.ts';
+import { adminStaffRoutes } from './routes/admin-staff.ts';
+import { adminTranslationRoutes } from './routes/admin-translations.ts';
 import { partnerV1Routes } from './routes/partner-v1.ts';
 
 export const SESSION_COOKIE = 'mp_session';
@@ -189,6 +193,9 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
   await app.register(cookie);
   await app.register(rateLimit, {
     global: false,
+    // Shared Postgres store (M1 debt): every instance counts against the same
+    // buckets, unlike the plugin's default in-memory store.
+    store: PgRateLimitStore.create(deps.db),
     errorResponseBuilder: (_req, context) => {
       const err = errors.tooMany(Math.ceil(context.ttl / 1000));
       return Object.assign(new Error(err.code), { statusCode: 429, appError: err });
@@ -277,6 +284,9 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(siteRoutes);
       await api.register(adminHostingRoutes, { prefix: '/admin' });
       await api.register(partnerPortalRoutes);
+      await api.register(mfaRoutes);
+      await api.register(adminStaffRoutes, { prefix: '/admin' });
+      await api.register(adminTranslationRoutes, { prefix: '/admin' });
       await api.register(partnerV1Routes, { prefix: '/partner/v1' });
       await api.register(adminPartnerRoutes, { prefix: '/admin' });
     },

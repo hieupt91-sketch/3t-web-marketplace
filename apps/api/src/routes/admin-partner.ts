@@ -3,6 +3,7 @@ import { writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
+import { requireStepUp } from '../lib/step-up.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -100,6 +101,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['evidence_ref'], properties: { evidence_ref: { type: 'string', minLength: 3, maxLength: 500 } } } } },
     async (request, reply) => {
       const auth = requirePermission(request, 'payout:settle');
+      await requireStepUp(db, auth);
       if (!UUID.test(request.params.id)) throw errors.notFound();
       const row = await db.query<{ status: string; approved_by: string | null; partner_id: string; amount_minor: string }>(
         'SELECT status, approved_by, partner_id, amount_minor::text FROM payout_requests WHERE id = $1 FOR UPDATE',

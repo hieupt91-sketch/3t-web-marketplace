@@ -4,23 +4,17 @@ import { hashToken, loadActivePlans, tx, type PublicPlan } from '@3t/core';
 import { errors } from '../errors.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
+import { checkDbRateLimit } from '../lib/rate-limit-store.ts';
 import { computeCharge } from './commerce.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const SCOPES = ['catalog:read', 'demo:link', 'checkout:create', 'orders:read', 'commissions:read', 'events:read'] as const;
 
-/** In-memory per-key rate limits (single-process, like the global limiter; M7 hardens this). */
-const rateBuckets = new Map<string, { count: number; resetAt: number }>();
-function checkRate(keyId: string, kind: 'catalog' | 'mutation'): void {
+/** Per-key rate limits in the shared Postgres buckets (M7: multi-instance safe). */
+async function checkRate(db: { query: <T>(sql: string, params: unknown[]) => Promise<{ rows: T[] }> }, keyId: string, kind: 'catalog' | 'mutation'): Promise<void> {
   const limit = kind === 'catalog' ? 120 : 30;
-  const now = Date.now();
-  const bucket = rateBuckets.get(`${keyId}:${kind}`);
-  if (!bucket || bucket.resetAt <= now) {
-    rateBuckets.set(`${keyId}:${kind}`, { count: 1, resetAt: now + 60000 });
-    return;
-  }
-  bucket.count += 1;
-  if (bucket.count > limit) throw errors.tooMany(Math.ceil((bucket.resetAt - now) / 1000));
+  const result = await checkDbRateLimit(db, `partner:${keyId}:${kind}`, limit, 60000);
+  if (!result.allowed) throw errors.tooMany(result.retryAfterSeconds);
 }
 
 function maskEmail(email: string): string {
@@ -64,10 +58,10 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
   function partnerOf(request: FastifyRequest): { id: string; partnerId: string; scopes: string[] } {
     return (request as unknown as { partner: { id: string; partnerId: string; scopes: string[] } }).partner;
   }
-  function requireScope(request: FastifyRequest, scope: string, kind: 'catalog' | 'mutation'): void {
+  async function requireScope(request: FastifyRequest, scope: string, kind: 'catalog' | 'mutation'): Promise<void> {
     const partner = partnerOf(request);
     if (!partner.scopes.includes(scope)) throw errors.forbidden('partner.scope_denied');
-    checkRate(partner.id, kind);
+    await checkRate(db, partner.id, kind);
   }
   function assertId(id: string): void {
     if (!UUID.test(id)) throw errors.notFound();
@@ -75,7 +69,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
 
   // GET /catalog — published templates with starting prices + commission basis (R03).
   app.get<{ Querystring: { locale?: string; category?: string } }>('/catalog', async (request) => {
-    requireScope(request, 'catalog:read', 'catalog');
+    await requireScope(request, 'catalog:read', 'catalog');
     const locale = request.query.locale === 'en' ? 'en' : 'vi';
     const { rows } = await db.query<{ id: string; slug: string; title: string | null; category_id: string | null; starting_price: string | null }>(
       `SELECT t.id, t.slug, t.category_id, COALESCE(rt.title, ft.title) AS title,
@@ -101,7 +95,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
     '/demo-links',
     { schema: { body: { type: 'object', additionalProperties: false, required: ['template_slug'], properties: { template_slug: { type: 'string', minLength: 1 }, locale: { type: 'string', enum: ['vi', 'en'] }, campaign: { type: 'string', maxLength: 100 } } } } },
     async (request, reply) => {
-      requireScope(request, 'demo:link', 'mutation');
+      await requireScope(request, 'demo:link', 'mutation');
       const partner = await db.query<{ code: string }>('SELECT code FROM partner_accounts WHERE id = $1', [partnerOf(request).partnerId]);
       const template = await db.query<{ slug: string }>("SELECT slug FROM templates WHERE slug = $1 AND status = 'published'", [request.body.template_slug]);
       if (!template.rows[0]) throw errors.notFound();
@@ -120,7 +114,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
     '/quotes',
     { schema: { body: { type: 'object', additionalProperties: false, required: ['template_id', 'plan_id'], properties: { template_id: { type: 'string', pattern: UUID.source }, plan_id: { type: 'string', pattern: UUID.source } } } } },
     async (request, reply) => {
-      requireScope(request, 'checkout:create', 'mutation');
+      await requireScope(request, 'checkout:create', 'mutation');
       const { rows: t } = await db.query<{ published_version_id: string | null }>(
         "SELECT published_version_id FROM templates WHERE id = $1 AND status = 'published'",
         [request.body.template_id],
@@ -145,7 +139,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
     '/checkout-sessions',
     { schema: { body: { type: 'object', additionalProperties: false, required: ['quote_id', 'external_reference'], properties: { quote_id: { type: 'string', pattern: UUID.source }, external_reference: { type: 'string', minLength: 1, maxLength: 200 }, return_url: { type: 'string', maxLength: 1000 }, locale: { type: 'string', enum: ['vi', 'en'] }, campaign: { type: 'string', maxLength: 100 } } } } },
     async (request, reply) => {
-      requireScope(request, 'checkout:create', 'mutation');
+      await requireScope(request, 'checkout:create', 'mutation');
       const partnerId = partnerOf(request).partnerId;
       const result = await idempotent(
         db,
@@ -209,7 +203,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
   );
 
   app.get<{ Params: { id: string } }>('/checkout-sessions/:id', async (request) => {
-    requireScope(request, 'checkout:create', 'catalog');
+    await requireScope(request, 'checkout:create', 'catalog');
     assertId(request.params.id);
     const { rows } = await db.query<{ id: string; status: string; order_id: string | null; expires_at: Date }>(
       'SELECT id, status, order_id, expires_at FROM checkout_sessions WHERE id = $1 AND partner_id = $2',
@@ -221,7 +215,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
 
   // Partner orders: own only, buyer masked, no downloads/source/admin access (AT-33, R05).
   app.get('/orders', async (request) => {
-    requireScope(request, 'orders:read', 'catalog');
+    await requireScope(request, 'orders:read', 'catalog');
     const { rows } = await db.query<{ id: string; status: string; total_minor: string; currency: string; buyer_email: string; created_at: Date }>(
       `SELECT o.id, o.status, o.total_minor::text, o.currency, u.email_normalized AS buyer_email, o.created_at
        FROM orders o JOIN users u ON u.id = o.buyer_id
@@ -232,7 +226,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
   });
 
   app.get<{ Params: { id: string } }>('/orders/:id', async (request) => {
-    requireScope(request, 'orders:read', 'catalog');
+    await requireScope(request, 'orders:read', 'catalog');
     assertId(request.params.id);
     const { rows } = await db.query<{ id: string; status: string; total_minor: string; currency: string; buyer_email: string }>(
       `SELECT o.id, o.status, o.total_minor::text, o.currency, u.email_normalized AS buyer_email
@@ -249,12 +243,12 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
   });
 
   app.get('/balance', async (request) => {
-    requireScope(request, 'commissions:read', 'catalog');
+    await requireScope(request, 'commissions:read', 'catalog');
     return { data: await partnerBalance(db, partnerOf(request).partnerId) };
   });
 
   app.get('/commissions', async (request) => {
-    requireScope(request, 'commissions:read', 'catalog');
+    await requireScope(request, 'commissions:read', 'catalog');
     const { rows } = await db.query(
       `SELECT id, order_id, kind, status, amount_minor::text, base_minor::text, rate_bps, eligible_at, reason, created_at
        FROM commission_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 200`,
@@ -265,7 +259,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
 
   // Events the partner was actually sent (no internal events, R10 shape).
   app.get('/events', async (request) => {
-    requireScope(request, 'events:read', 'catalog');
+    await requireScope(request, 'events:read', 'catalog');
     const { rows } = await db.query(
       `SELECT d.event_id, d.event_type, d.status, d.attempts, d.created_at
        FROM webhook_deliveries d JOIN webhook_endpoints e ON e.id = d.endpoint_id

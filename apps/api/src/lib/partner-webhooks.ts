@@ -1,23 +1,9 @@
-import { createCipheriv, createDecipheriv, createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
+import { createHmac, timingSafeEqual } from 'node:crypto';
+import { decryptSecret, encryptSecret } from './secret-store.ts';
 
-/** AES-256-GCM envelope for stored webhook secrets (key = sha256 of the server key). */
-export function encryptWebhookSecret(serverKey: string, secret: string): string {
-  const key = createHash('sha256').update(serverKey).digest();
-  const iv = randomBytes(12);
-  const cipher = createCipheriv('aes-256-gcm', key, iv);
-  const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
-  return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64');
-}
-
-export function decryptWebhookSecret(serverKey: string, encoded: string): string {
-  const key = createHash('sha256').update(serverKey).digest();
-  const buf = Buffer.from(encoded, 'base64');
-  const iv = buf.subarray(0, 12);
-  const tag = buf.subarray(12, 28);
-  const decipher = createDecipheriv('aes-256-gcm', key, iv);
-  decipher.setAuthTag(tag);
-  return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString('utf8');
-}
+/** Webhook secrets use the shared encrypted-secret envelope (see secret-store). */
+export const encryptWebhookSecret = encryptSecret;
+export const decryptWebhookSecret = decryptSecret;
 import { lookup } from 'node:dns/promises';
 import { isIP } from 'node:net';
 
