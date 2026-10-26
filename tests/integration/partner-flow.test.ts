@@ -44,6 +44,11 @@ beforeAll(async () => {
   buyer = await createUser(ctx, 'buyer@example.com');
   partnerUser = await createUser(ctx, 'partner@example.com');
   partner2User = await createUser(ctx, 'partner2@example.com');
+  // M7 step-up: sensitive partner/admin actions require a fresh elevation.
+  for (const u of [owner, owner2, partnerUser, partner2User]) {
+    const stepUp = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/step-up', headers: as(u), payload: { password: 'correct horse battery staple' } });
+    if (stepUp.statusCode !== 200) throw new Error(`step-up failed ${stepUp.statusCode} ${stepUp.body}`);
+  }
   webhookServer = createServer((req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c) => chunks.push(c as Buffer));

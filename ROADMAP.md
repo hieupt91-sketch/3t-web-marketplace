@@ -21,7 +21,7 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 | M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | 🟡 Backend + UI checkout (B01–B04) + C02 xong; còn refund, reconciliation admin, B05 |
 | M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ✅ Saga provisioning + domain + backup/restore + renewal/lifecycle + UI C05–C15/A15–A19 (26/10/2026) |
 | M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ✅ Partner API + ledger append-only + payout evidence + webhook ký HMAC + UI R01–R12/A20–A21 (26/10/2026) |
-| M7 LOCALIZE | Hoàn chỉnh VI/EN mọi UI/mail/nội dung/SEO | 🟡 Theo từng mốc |
+| M7 LOCALIZE + CỨNG HÓA | VI/EN mọi UI/mail/nội dung/SEO; MFA, step-up, staff, rate limit chia sẻ | ✅ TOTP MFA + step-up 10 phút + staff A24 + rate limit Postgres + matrix A22/W15; mail locale + SEO + site locale đã có sẵn và đã kiểm chứng (26/10/2026) |
 | M8 RELEASE | E2E/security/load/a11y, runbook, drill, nghiệm thu | ⬜ Chưa |
 
 ---
@@ -110,7 +110,7 @@ Các bước: monorepo pnpm/TS · migration nền tảng (identity, RBAC, catalo
 
 **Cần đạt:** AT-33 (A đổi ID sang B bị chặn), AT-34 (CTV gửi is_paid/total thấp vô hiệu), AT-35 (buyer claim hợp lệ, CTV không claim thay), AT-36 (retry external_reference không nhân đôi đơn), AT-37 (đổi rate sau paid: đơn cũ giữ snapshot), AT-38 (partial refund nhiều lần + full → net 0), AT-39/40 (refund sau payout; hai payout đồng thời), AT-41 (revoke key: site vẫn chạy), AT-42/43 (webhook signature/replay/SSRF).
 
-## M7 — LOCALIZE ⬜ (xuyên suốt, gate cuối)
+## M7 — LOCALIZE + CỨNG HÓA ✅ (26/10/2026)
 
 **Mục tiêu:** toàn bộ hành trình VI/EN, không rò key.
 

@@ -15,7 +15,7 @@ interface SessionItem {
   current: boolean;
 }
 
-/** U06 — devices and session revocation. Password change with step-up is not built yet; reset by email works. */
+/** U06 — devices and session revocation, MFA (TOTP), step-up, password change. */
 export default function SecurityPage() {
   const { t, dt } = useT();
   const router = useRouter();
@@ -50,6 +50,8 @@ export default function SecurityPage() {
     router.replace('/auth/login');
     router.refresh();
   }
+
+
 
   return (
     <div className="stack">
@@ -92,10 +94,62 @@ export default function SecurityPage() {
         <h2>{t('ui.account.security.password')}</h2>
         <p className="muted">{t('ui.account.security.password_body')}</p>
         <p><Link href="/auth/forgot-password">{t('ui.auth.forgot.title')}</Link></p>
+        <MfaSection />
       </section>
       <div>
         <button type="button" className="button button--secondary" onClick={() => void logout()}>{t('ui.nav.logout')}</button>
       </div>
     </div>
   );
+}
+
+function MfaSection() {
+    const { t: tt } = useT();
+    const [enabled, setEnabled] = useState<boolean | null>(null);
+    const [secret, setSecret] = useState<string | null>(null);
+    const [uri, setUri] = useState<string | null>(null);
+    const [code, setCode] = useState('');
+    const [backupCodes, setBackupCodes] = useState<string[] | null>(null);
+    const [password, setPassword] = useState('');
+    const [mfaError, setMfaError] = useState<ApiError | null>(null);
+    const refresh = useCallback(async () => {
+      const res = await api<{ enabled: boolean }>('/me/mfa');
+      if (res.ok) setEnabled(res.data.enabled);
+    }, []);
+    useEffect(() => { void refresh(); }, [refresh]);
+    async function stepUp() {
+      const res = await api('/auth/step-up', { method: 'POST', body: { password } });
+      if (!res.ok) return setMfaError(res.error);
+      setMfaError(null);
+    }
+    async function setup() {
+      const res = await api<{ secret: string; otpauth_uri: string }>('/me/mfa/setup', { method: 'POST', body: {} });
+      if (!res.ok) return setMfaError(res.error);
+      setSecret(res.data.secret); setUri(res.data.otpauth_uri);
+    }
+    async function verify() {
+      const res = await api<{ backup_codes: string[] }>('/me/mfa/verify', { method: 'POST', body: { code } });
+      if (!res.ok) return setMfaError(res.error);
+      setBackupCodes(res.data.backup_codes); void refresh();
+    }
+    async function disable() {
+      const res = await api('/me/mfa/disable', { method: 'POST', body: {} });
+      if (!res.ok) return setMfaError(res.error);
+      void refresh();
+    }
+    return (
+      <div className="stack">
+        <h3>{tt('ui.mfa.title')}</h3>
+        {mfaError ? <ErrorState error={mfaError} /> : null}
+        <p>{enabled === null ? '' : enabled ? tt('ui.mfa.enabled') : tt('ui.mfa.disabled')}</p>
+        <label>{tt('ui.mfa.step_up_password')}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
+        <button className="button button--secondary" onClick={() => void stepUp()}>{tt('ui.mfa.step_up')}</button>
+        {!enabled ? <button className="button" onClick={() => void setup()}>{tt('ui.mfa.setup')}</button> : null}
+        {secret ? <p className="mono">{secret}<br /><span>{uri}</span></p> : null}
+        {secret ? (<><label>{tt('ui.mfa.code')}<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" /></label><button className="button" onClick={() => void verify()}>{tt('ui.mfa.verify')}</button></>) : null}
+        {backupCodes ? <p role="status">{tt('ui.mfa.backup_codes')}: {backupCodes.join(', ')}</p> : null}
+        {enabled ? <button className="button button--danger" onClick={() => void disable()}>{tt('ui.mfa.disable')}</button> : null}
+      </div>
+    );
+
 }

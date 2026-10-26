@@ -1,9 +1,11 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { dummyPasswordCheck, hashPassword, hashToken, tx, verifyPassword, writeAudit, isUniqueViolation } from '@3t/core';
+import { dummyPasswordCheck, hashPassword, hashToken, randomToken, tx, verifyPassword, writeAudit, isUniqueViolation } from '@3t/core';
 import { isLocale, type Locale } from '@3t/i18n';
-import { clearSessionCookie, setSessionCookie } from '../app.ts';
+import { clearSessionCookie, requireUser, setSessionCookie } from '../app.ts';
 import { errors } from '../errors.ts';
 import { consumeAuthToken, createSession, issueAuthToken, normalizeEmail, passwordIssues } from '../lib/identity.ts';
+import { decryptSecret } from '../lib/secret-store.ts';
+import { verifyTotp } from '../lib/totp.ts';
 
 const authLimit = (max: number, perEmail = false) => ({
   rateLimit: {
@@ -148,10 +150,50 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       }
       const ok = await verifyPassword(request.body.password, user.password_hash);
       if (!ok || user.status !== 'active') throw errors.unauthenticated('auth.invalid_credentials');
+      // Verified MFA: password alone never yields a session (M7). The caller
+      // completes POST /auth/mfa-challenge with a TOTP or backup code.
+      const mfa = await db.query('SELECT user_id FROM user_mfa WHERE user_id = $1 AND verified_at IS NOT NULL', [user.id]);
+      if (mfa.rows[0]) {
+        const challengeToken = randomToken();
+        await db.query(
+          `INSERT INTO mfa_challenges (token_hash, user_id, expires_at) VALUES ($1, $2, now() + interval '5 minutes')`,
+          [hashToken(challengeToken).toString('hex'), user.id],
+        );
+        return { data: { status: 'mfa_required', challenge_token: challengeToken } };
+      }
       const session = await createSession(db, user.id, config.sessionTtlHours, request.headers['user-agent']);
       await writeAudit(db, { actorType: 'user', actorId: user.id, action: 'session.created', resourceType: 'session', resourceId: session.id, traceId: request.id });
       setSessionCookie(reply, config, session.token, session.expiresAt);
       return { data: { status: 'signed_in', expires_at: session.expiresAt.toISOString() } };
+    },
+  );
+
+  // Step-up: re-authenticate the current session (password, plus TOTP when
+  // MFA is verified). Sets sessions.step_up_at for 10 minutes of elevated
+  // actions; requireStepUp enforces it server-side.
+  app.post<{ Body: { password: string; totp_code?: string } }>(
+    '/auth/step-up',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['password'], properties: { password: { type: 'string', maxLength: 512 }, totp_code: { type: 'string', minLength: 6, maxLength: 10 } } } } },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      const { rows } = await db.query<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [auth.userId]);
+      const ok = await verifyPassword(request.body.password, rows[0]?.password_hash ?? null);
+      if (!ok) throw errors.unauthenticated('auth.invalid_credentials');
+      const mfa = await db.query<{ secret_enc: string; backup_codes_hash: string[] }>(
+        'SELECT secret_enc, backup_codes_hash FROM user_mfa WHERE user_id = $1 AND verified_at IS NOT NULL',
+        [auth.userId],
+      );
+      if (mfa.rows[0]) {
+        const secret = decryptSecret(config.mfaKey, mfa.rows[0].secret_enc);
+        const code = request.body.totp_code ?? '';
+        const backupIndex = mfa.rows[0].backup_codes_hash.indexOf(hashToken(code).toString('hex'));
+        if (!verifyTotp(secret, code) && backupIndex === -1) throw errors.unauthenticated('mfa.code_invalid');
+        if (backupIndex !== -1) {
+          await db.query('UPDATE user_mfa SET backup_codes_hash = $2 WHERE user_id = $1', [auth.userId, mfa.rows[0].backup_codes_hash.filter((_, i) => i !== backupIndex)]);
+        }
+      }
+      await db.query('UPDATE sessions SET step_up_at = now() WHERE id = $1', [auth.sessionId]);
+      return reply.status(200).send({ data: { step_up: true } });
     },
   );
 

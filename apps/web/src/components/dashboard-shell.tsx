@@ -47,6 +47,8 @@ const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
     { href: '/admin/backups', labelKey: 'ui.admin.nav.backups', permission: 'site:operate' },
     { href: '/admin/jobs', labelKey: 'ui.admin.nav.jobs', permission: 'ops:read' },
     { href: '/admin/partners', labelKey: 'ui.admin.partners', permission: 'partner:read' },
+    { href: '/admin/staff', labelKey: 'ui.admin.staff', permission: 'staff:manage' },
+    { href: '/admin/translations', labelKey: 'ui.admin.translations', permission: 'template:read' },
     { href: '/admin/payouts', labelKey: 'ui.admin.payouts', permission: 'payout:read' },
   ],
   partner: [

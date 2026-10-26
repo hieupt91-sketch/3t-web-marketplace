@@ -6,6 +6,7 @@ import { isIP } from 'node:net';
 import type { FastifyInstance } from 'fastify';
 import { enqueueJob, isUniqueViolation, tx, writeAudit } from '@3t/core';
 import { requireUser } from '../app.ts';
+import { requireStepUp } from '../lib/step-up.ts';
 import { errors } from '../errors.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -313,6 +314,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['confirm_name'], properties: { confirm_name: { type: 'string' } } } } },
     async (request) => {
       const auth = requireUser(request);
+      await requireStepUp(db, auth);
       const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
       if (request.body.confirm_name !== site.display_name) throw errors.validation([{ field: 'confirm_name', code: 'mismatch' }]);
       assertId(request.params.backupId);
@@ -404,6 +406,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string } }>('/sites/:id/delete-request', async (request) => {
     const auth = requireUser(request);
+    await requireStepUp(db, auth);
     const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
     if (site.status === 'purged' || site.status === 'delete_scheduled') throw errors.conflict('site.not_deletable');
     await db.query("UPDATE sites SET previous_status = $2, status = 'delete_scheduled', purge_at = now() + interval '30 days' WHERE id = $1", [site.id, site.status]);

@@ -84,7 +84,8 @@ Một lượt kiểm tra trình duyệt thủ công bằng script (đăng nhập
 - **Catalog M3 còn lại:** không còn — A07, A26, filter mở rộng đã xong trong M3 close (xem dưới).
 - **M4 còn lại:** chỉ provisioning hosted (thuộc M5); còn lại đã xong (refund/chargeback, A12, B05, C03/C04).
 - **M6 (xong 26/10/2026):** Partner API /partner/v1 (catalog, demo-links, quotes, checkout-sessions, orders, commissions, balance, events), portal R01–R12, admin A20–A21; ledger append-only, reversal kế thừa eligible_at của accrual gốc; payout tách approver/settler, paid chỉ khi có evidence; webhook HMAC + SSRF guard + retry schedule; AT-33..AT-43 (trừ AT-35 claim flow đã có qua claim/order endpoints — kiểm chứng trong partner-flow).
-- **M7–M8:** email provider thật, MFA/step-up, staff management, observability/alert, staging/production, báo cáo nghiệm thu AT-01..AT-60.
+- **M7 (xong 26/10/2026):** TOTP MFA (setup/verify/disable, login challenge 5 phút, backup code dùng một lần, secret mã hóa AES-256-GCM), step-up 10 phút cho tác vụ nhạy cảm (partner keys/webhooks/payouts/settings, payout settle, staff, site restore/delete, đổi mật khẩu), staff A24 (không cấp quyền vượt actor, không xóa owner cuối), rate limit Postgres dùng chung cho mọi instance (kể cả Partner API keys), matrix dịch A22/W15 (missing/draft/reviewed/published/stale theo updated_at), endpoint đổi mật khẩu đã xác thực. Đã kiểm chứng sẵn có: mail theo locale lưu trữ, SEO (sitemap hreflang + robots + canonical), site.json mang locale, CI chạy lint (khóa key VI/EN thiếu).
+- **M8:** email provider thật, observability/alert, staging/production, báo cáo nghiệm thu AT-01..AT-60.
 - Rate limit hiện ở bộ nhớ một process; production nhiều instance cần store chung.
 - Object store là driver filesystem cục bộ; production cần storage private (S3-compatible) cùng interface.
 - CI workflow `.github/workflows/ci.yml` đã viết nhưng chưa chạy trên GitHub; action đang pin theo tag, cần pin SHA trước release.
