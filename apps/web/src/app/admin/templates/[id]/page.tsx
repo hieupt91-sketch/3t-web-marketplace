@@ -391,9 +391,10 @@ function TemplateDetailInner() {
         {canPrice ? <AddPlan templateId={id} onAdded={() => void load()} /> : null}
       </section>
 
-      {/* Versions (read-only) */}
+      {/* Versions (read-only summary; full SHA/artifact/import view on the versions page) */}
       <section className="card stack">
         <h2 style={{ marginTop: 0 }}>{t('ui.template_edit.versions')}</h2>
+        <p style={{ margin: 0 }}><Link href={`/admin/templates/${id}/versions`}>{t('ui.admin.versions_open')}</Link></p>
         <div className="table-wrap">
           <table className="table">
             <thead>

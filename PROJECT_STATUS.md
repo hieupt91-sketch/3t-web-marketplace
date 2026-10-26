@@ -31,6 +31,14 @@ Ngày cập nhật: 23/10/2026 (Asia/Ho_Chi_Minh). Đặc tả 1.0. Nhánh: `fea
 - Fixture mới: `examples/vite-landing`, `examples/node-service`, `examples/next-standalone` (server.js mô phỏng standalone + build stamp). i18n: 673 khóa mỗi locale (thêm demo/github + 3 khóa lỗi import còn thiếu).
 - Test M2: `tests/integration/adapter-flow.test.ts` (4: vite, node, next, checkpoint resume) + `tests/integration/github-demo.test.ts` (4: GitHub pin + webhook dedupe + repo sai, static session, runtime session admin-launch/reset). Full `pnpm run check` xanh: 123 test (i18n 4, core 10, template-sdk 30, preview 12, api 14, integration 53).
 
+**M3 close — A07, A26, filter mở rộng (26/10/2026, commit M3)**
+
+- `migrations/0008_support_categories.sql`: `support_tickets` (status open/assigned/waiting/resolved/closed, assigned_to, order_id FK, site_label text, sla_due_at = tạo + 24h) + `support_ticket_messages` (sender customer/staff, locale); seed category tree `website` → `landing`/`store`/`blog`/`portfolio`.
+- A07: `GET /admin/templates/:id/versions` (SHA, manifest, artifact kind/size/key, import_id, demo_url, is_published; same-semver-different-hash vẫn bị từ chối ở bước record — AT-30) + UI `/admin/templates/[id]/versions` (link từ trang chi tiết mẫu).
+- A26: ticket khách hàng (`POST /support/tickets` — order_id phải thuộc về người tạo, 422 nếu không; site chỉ là label text vì bảng sites thuộc M5), `GET /support/tickets[/:id]`, reply khách (waiting → open), close; admin `GET /admin/support[/:id]` (lọc status), assign (người nhận phải có `support:reply`, 422 nếu không), reply nhân viên (lưu đúng locale của ticket, open/assigned → waiting), status resolved/closed/open; reply trên ticket closed → 409. Tin nhắn chỉ là text lưu trữ — không trigger email/webhook/hoàn tiền/site change. UI: `/admin/support[/:id]` + `/account/support[/:id]` + nav entries.
+- Filter: `GET /templates` thêm `category` (bao cả cây con qua recursive CTE) và `min_price`/`max_price` (so với giá khởi điểm thấp nhất hiện hành, VND minor units); `GET /categories` công khai đã có sẵn (id/code/parent_id) được dùng cho select lọc; UI trang templates thêm select category + 2 input giá. i18n: 735 khóa mỗi locale.
+- Test M3: `tests/integration/m3-close.test.ts` (2: publish template có category + giá rồi kiểm tra versions + category cha/con + 3 khoảng giá; vòng ticket assign/reply/resolve/close + SLA + phân quyền). Full `pnpm run check` xanh: 125 test (integration 55).
+
 **M3 — Catalog (lát cắt công bố, 23/10/2026)**
 
 - `migrations/0002_catalog_pricing.sql`: `plans` (deployment_mode selfhost/hosted, status draft/active/archived, limits_json, row_version) và `plan_prices` (giá hiệu lực theo khoảng, exclusion constraint chống chồng lấn cùng plan/currency/interval bằng btree_gist); seed `terms.version`.
@@ -61,7 +69,7 @@ Một lượt kiểm tra trình duyệt thủ công bằng script (đăng nhập
 ## Chưa triển khai (không tự bỏ khỏi phạm vi)
 
 - **Nhập/Build (nợ production):** executor mới cách ly mức process — còn nợ uid không đặc quyền, VM/sandbox thật, proxy dependency allowlist; webhook GitHub/payment verify bằng JSON re-serialize (cần raw bytes ở tầng HTTP).
-- **Catalog M3 còn lại:** versions (A07), support tickets đầy đủ (A26), filter mở rộng (category tree, price) ngoài search/mode/capability.
+- **Catalog M3 còn lại:** không còn — A07, A26, filter mở rộng đã xong trong M3 close (xem dưới).
 - **M4 còn lại:** chỉ provisioning hosted (thuộc M5); còn lại đã xong (refund/chargeback, A12, B05, C03/C04).
 - **M5–M8:** hosting/domain/TLS/backup/gia hạn (runtime agent mTLS, saga provisioning), CTV API/hoa hồng/payout/webhook, email provider thật, MFA/step-up, staff management, observability/alert, staging/production, báo cáo nghiệm thu AT-01..AT-60.
 - Rate limit hiện ở bộ nhớ một process; production nhiều instance cần store chung.

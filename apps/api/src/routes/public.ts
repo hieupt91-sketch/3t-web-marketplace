@@ -116,12 +116,16 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     return { data: rows, page: { next_cursor: null, has_more: false } };
   });
 
-  app.get<{ Querystring: { q?: string; limit?: string; cursor?: string; locale?: string; mode?: string; capability?: string } }>('/templates', async (request) => {
+
+
+  app.get<{ Querystring: { q?: string; limit?: string; cursor?: string; locale?: string; mode?: string; capability?: string; category?: string; min_price?: string; max_price?: string } }>('/templates', async (request) => {
     const limit = parseLimit(request.query.limit);
     const cursor = decodeCursor(request.query.cursor);
     const q = typeof request.query.q === 'string' ? request.query.q.trim().slice(0, 100) : '';
     const mode = DEPLOYMENT_MODES.includes(request.query.mode as (typeof DEPLOYMENT_MODES)[number]) ? request.query.mode : null;
     const capability = CAPABILITIES.includes(request.query.capability ?? '') ? request.query.capability : null;
+    const minPrice = /^\d{1,18}$/.test(request.query.min_price ?? '') ? request.query.min_price! : null;
+    const maxPrice = /^\d{1,18}$/.test(request.query.max_price ?? '') ? request.query.max_price! : null;
     const params: unknown[] = [request.locale];
     let sql = TEMPLATE_SELECT;
     if (q) {
@@ -138,6 +142,28 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     if (capability) {
       params.push(JSON.stringify([capability]));
       sql += ` AND v.manifest_json -> 'capabilities' @> $${params.length}::jsonb`;
+    }
+    if (request.query.category) {
+      // Category filter includes the whole subtree (children inherit the parent filter).
+      params.push(request.query.category);
+      sql += ` AND t.category_id IN (WITH RECURSIVE cats AS (
+                  SELECT id FROM template_categories WHERE code = $${params.length}
+                  UNION ALL SELECT c.id FROM template_categories c JOIN cats ON c.parent_id = cats.id)
+                SELECT id FROM cats)`;
+    }
+    if (minPrice || maxPrice) {
+      // Price filter compares the template's lowest current price (the "starting from" price shown on cards).
+      const lowest = `(SELECT MIN(pp.amount_minor) FROM plans p JOIN plan_prices pp ON pp.plan_id = p.id
+                       WHERE p.template_id = t.id AND p.status = 'active' AND pp.currency = '${PLATFORM_CURRENCY}'
+                         AND pp.effective_from <= now() AND (pp.effective_to IS NULL OR pp.effective_to > now()))`;
+      if (minPrice) {
+        params.push(minPrice);
+        sql += ` AND ${lowest} >= $${params.length}`;
+      }
+      if (maxPrice) {
+        params.push(maxPrice);
+        sql += ` AND ${lowest} <= $${params.length}`;
+      }
     }
     if (cursor) {
       params.push(cursor.t, cursor.id);
