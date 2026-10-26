@@ -41,6 +41,12 @@ export interface PlatformConfig {
   mockPaymentSecret: string;
   /** Minutes a payment window stays open for an order. */
   paymentWindowMinutes: number;
+  /** HMAC secret for signed partner referral links. */
+  partnerLinkSecret: string;
+  /** Dev/test only: partner webhook endpoints may point at loopback. */
+  partnerWebhookAllowLoopback: boolean;
+  /** Server-side key encrypting stored partner webhook secrets at rest. */
+  partnerWebhookKey: string;
 }
 
 function env(name: string, fallback?: string): string {
@@ -77,6 +83,9 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     githubWebhookSecret: env('GITHUB_WEBHOOK_SECRET', ''),
     demoMaxActiveSessions: Number(env('DEMO_MAX_ACTIVE_SESSIONS', '20')),
     dnsVerifyBodyProof: env('DNS_VERIFY_BODY_PROOF', 'false') === 'true' && mode !== 'production',
+    partnerLinkSecret: env('PARTNER_LINK_SECRET', mode === 'production' ? undefined : 'dev-partner-link-secret'),
+    partnerWebhookAllowLoopback: env('PARTNER_WEBHOOK_ALLOW_LOOPBACK', 'false') === 'true' && mode !== 'production',
+    partnerWebhookKey: env('PARTNER_WEBHOOK_KEY', mode === 'production' ? undefined : 'dev-partner-webhook-key'),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');
