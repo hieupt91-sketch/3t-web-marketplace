@@ -18,6 +18,8 @@ import {
 } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
+import { accrueOrderCommission, reverseOrderCommission } from '../lib/partner-ledger.ts';
+import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
 
@@ -38,7 +40,7 @@ interface QuoteLine {
  * Compute what a buyer first pays for a plan from its current prices (never from the client):
  * self-host is a single one-time fee; hosting is an optional setup fee plus the first period.
  */
-function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: QuoteLine[] } {
+export function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: QuoteLine[] } {
   const oneTime = plan.prices.find((p) => p.interval === 'one_time');
   const recurring = plan.prices.find((p) => p.interval === 'monthly' || p.interval === 'yearly');
   const lines: QuoteLine[] = [];
@@ -83,6 +85,19 @@ export async function fulfillOrder(client: PoolClient, orderId: string, buyerId:
   }
   await client.query("UPDATE orders SET status = 'paid', paid_at = now(), row_version = row_version + 1 WHERE id = $1", [orderId]);
   await emitEvent(client, 'order.paid', 'order', orderId, { order_id: orderId, buyer_id: buyerId });
+  // Partner commission accrues at settlement from the attribution snapshot (M6, docs/06 §7).
+  await accrueOrderCommission(client, orderId);
+  const attribution = await client.query<{ partner_id: string }>('SELECT partner_id FROM attributions WHERE order_id = $1', [orderId]);
+  if (attribution.rows[0]) {
+    const session = await client.query<{ external_reference: string }>(
+      'SELECT external_reference FROM checkout_sessions WHERE order_id = $1 ORDER BY created_at DESC LIMIT 1',
+      [orderId],
+    );
+    await emitPartnerEvent(client, attribution.rows[0]!.partner_id, {
+      type: 'order.paid',
+      data: { order_id: orderId, external_reference: session.rows[0]?.external_reference ?? null, payment_status: 'paid' },
+    });
+  }
   await writeAudit(client, { actorType: 'system', actorId: null, action: 'order.paid', resourceType: 'order', resourceId: orderId, traceId });
 }
 
@@ -162,6 +177,15 @@ export async function processRefundEvent(db: Db, provider: string, rawBody: stri
     const orderStatus = await recomputeOrderRefundStatus(client, refund.order_id);
     await emitEvent(client, orderStatus === 'refunded' ? 'order.refunded' : 'order.partially_refunded', 'order', refund.order_id, { order_id: refund.order_id, refund_id: refund.id });
     await writeAudit(client, { actorType: 'system', actorId: null, action: 'refund.confirmed', resourceType: 'refund', resourceId: refund.id, traceId: event.providerEventId });
+    // Partner reversal keeps net commission at zero on full refund (AT-38/AT-39).
+    await reverseOrderCommission(client, refund.order_id);
+    const refundAttribution = await client.query<{ partner_id: string }>('SELECT partner_id FROM attributions WHERE order_id = $1', [refund.order_id]);
+    if (refundAttribution.rows[0]) {
+      await emitPartnerEvent(client, refundAttribution.rows[0]!.partner_id, {
+        type: 'refund.settled',
+        data: { order_id: refund.order_id, refund_id: refund.id, amount_minor: refund.amount_minor, currency: refund.currency },
+      });
+    }
     return 'processed';
   });
 }

@@ -22,6 +22,9 @@ import { adminDemoRoutes, demoSessionRoutes } from './routes/demo-sessions.ts';
 import { adminSupportRoutes, supportRoutes } from './routes/support.ts';
 import { adminHostingRoutes } from './routes/admin-hosting.ts';
 import { siteRoutes } from './routes/sites.ts';
+import { adminPartnerRoutes } from './routes/admin-partner.ts';
+import { partnerPortalRoutes } from './routes/partner-portal.ts';
+import { partnerV1Routes } from './routes/partner-v1.ts';
 
 export const SESSION_COOKIE = 'mp_session';
 
@@ -123,9 +126,9 @@ async function loadSession(request: FastifyRequest, db: Db): Promise<void> {
  */
 function checkOrigin(request: FastifyRequest, portalOrigin: string): void {
   if (!MUTATING.has(request.method)) return;
-  // Provider webhooks are server-to-server (no Origin) and are authenticated by signature, not by
-  // a session cookie, so the CSRF origin check does not apply to them.
-  if (request.url.startsWith('/api/v1/payments/webhooks/') || request.url.startsWith('/api/v1/payments/refund-webhooks/') || request.url.startsWith('/api/v1/admin/imports/github-webhook')) return;
+  // Provider webhooks and the Partner API are server-to-server (no Origin) and are authenticated
+  // by signature / Bearer key, not by a session cookie, so the CSRF origin check does not apply.
+  if (request.url.startsWith('/api/v1/payments/webhooks/') || request.url.startsWith('/api/v1/payments/refund-webhooks/') || request.url.startsWith('/api/v1/admin/imports/github-webhook') || request.url.startsWith('/api/v1/partner/v1/')) return;
   const origin = request.headers.origin;
   if (origin !== undefined) {
     if (origin !== portalOrigin) throw errors.forbidden('security.origin_mismatch');
@@ -273,6 +276,9 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(adminSupportRoutes, { prefix: '/admin' });
       await api.register(siteRoutes);
       await api.register(adminHostingRoutes, { prefix: '/admin' });
+      await api.register(partnerPortalRoutes);
+      await api.register(partnerV1Routes, { prefix: '/partner/v1' });
+      await api.register(adminPartnerRoutes, { prefix: '/admin' });
     },
     { prefix: '/api/v1' },
   );

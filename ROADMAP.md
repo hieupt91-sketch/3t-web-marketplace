@@ -20,7 +20,7 @@ Tài liệu theo dõi **các bước cần làm** và **tiêu chí cần đạt*
 | M3 CATALOG | Biên tập mẫu, bản dịch, giá, cổng công bố, cửa hàng | ✅ Đóng đủ: A07 versions, A26 support tickets, filter category/price (26/10/2026) |
 | M4 COMMERCE | Báo giá, đơn, thanh toán sandbox, quyền, bộ cài | 🟡 Backend + UI checkout (B01–B04) + C02 xong; còn refund, reconciliation admin, B05 |
 | M5 HOSTING | Runtime agent, site, domain/TLS, backup, gia hạn | ✅ Saga provisioning + domain + backup/restore + renewal/lifecycle + UI C05–C15/A15–A19 (26/10/2026) |
-| M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ⬜ Chưa |
+| M6 PARTNER | CTV: key, catalog API, attribution, hoa hồng, payout | ✅ Partner API + ledger append-only + payout evidence + webhook ký HMAC + UI R01–R12/A20–A21 (26/10/2026) |
 | M7 LOCALIZE | Hoàn chỉnh VI/EN mọi UI/mail/nội dung/SEO | 🟡 Theo từng mốc |
 | M8 RELEASE | E2E/security/load/a11y, runbook, drill, nghiệm thu | ⬜ Chưa |
 
@@ -95,7 +95,7 @@ Các bước: monorepo pnpm/TS · migration nền tảng (identity, RBAC, catalo
 
 **Cần đạt:** AT-22 (race quota), AT-23 (paid nhưng provision lỗi → giữ quyền, không thu lại), AT-24 (đổi site_id/Host sang tenant khác bị chặn), AT-25/26/27 (domain TXT/IPv6/CAA/gỡ-gắn lại), AT-28/29 (renewal lặp, grace/suspend/purge), AT-47 (restore sang node khác), AT-48 (upgrade không backward-compatible).
 
-## M6 — PARTNER ⬜
+## M6 — PARTNER ✅ (26/10/2026)
 
 **Mục tiêu:** CTV tích hợp bán hàng end-to-end. Phụ thuộc M4.
 

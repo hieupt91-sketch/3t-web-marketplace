@@ -22,7 +22,7 @@ interface NavItem {
   permission?: string;
 }
 
-const NAV: Record<'account' | 'admin', NavItem[]> = {
+const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
   account: [
     { href: '/account', labelKey: 'ui.account.nav.overview' },
     { href: '/account/purchases', labelKey: 'ui.account.nav.purchases' },
@@ -46,6 +46,21 @@ const NAV: Record<'account' | 'admin', NavItem[]> = {
     { href: '/admin/demos', labelKey: 'ui.admin.nav.demos', permission: 'ops:read' },
     { href: '/admin/backups', labelKey: 'ui.admin.nav.backups', permission: 'site:operate' },
     { href: '/admin/jobs', labelKey: 'ui.admin.nav.jobs', permission: 'ops:read' },
+    { href: '/admin/partners', labelKey: 'ui.admin.partners', permission: 'partner:read' },
+    { href: '/admin/payouts', labelKey: 'ui.admin.payouts', permission: 'payout:read' },
+  ],
+  partner: [
+    { href: '/partner', labelKey: 'ui.partner.title' },
+    { href: '/partner/apply', labelKey: 'ui.partner.apply' },
+    { href: '/partner/catalog', labelKey: 'ui.partner.catalog' },
+    { href: '/partner/links', labelKey: 'ui.partner.links' },
+    { href: '/partner/orders', labelKey: 'ui.partner.orders' },
+    { href: '/partner/commissions', labelKey: 'ui.partner.commissions' },
+    { href: '/partner/payouts', labelKey: 'ui.partner.payouts' },
+    { href: '/partner/api-keys', labelKey: 'ui.partner.api_keys' },
+    { href: '/partner/webhooks', labelKey: 'ui.partner.webhooks' },
+    { href: '/partner/developers', labelKey: 'ui.partner.developers' },
+    { href: '/partner/settings', labelKey: 'ui.partner.settings' },
   ],
 };
 
@@ -53,7 +68,7 @@ const NAV: Record<'account' | 'admin', NavItem[]> = {
  * Authenticated area shell. Hiding nav items is a convenience only — every API call is
  * authorised server-side (docs/11 §4).
  */
-export function DashboardShell({ area, children }: { area: 'account' | 'admin'; children: ReactNode }) {
+export function DashboardShell({ area, children }: { area: 'account' | 'admin' | 'partner'; children: ReactNode }) {
   const { t } = useT();
   const state = useMe();
   const router = useRouter();
