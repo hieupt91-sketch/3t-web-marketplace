@@ -27,11 +27,15 @@ async function sha256Hex(file: File): Promise<string> {
   return [...new Uint8Array(digest)].map((b) => b.toString(16).padStart(2, '0')).join('');
 }
 
-/** A03 — upload a ZIP through a constrained upload session, then start the import job. */
+/** A03 — upload a ZIP through a constrained upload session, or import a public GitHub repo at a pinned commit. */
 function NewImportInner() {
   const { t, locale } = useT();
   const router = useRouter();
   const [tab, setTab] = useState<'zip' | 'github'>('zip');
+  const [repo, setRepo] = useState('');
+  const [ref, setRef] = useState('');
+  const [subdir, setSubdir] = useState('');
+  const [githubRights, setGithubRights] = useState(false);
   const [file, setFile] = useState<File | null>(null);
   const [fileError, setFileError] = useState<string | null>(null);
   const [rights, setRights] = useState(false);
@@ -120,9 +124,43 @@ function NewImportInner() {
         </button>
       </div>
       {tab === 'github' ? (
-        <Alert tone="info" title={t('ui.import.new.github_unavailable_title')}>
-          <p>{t('ui.import.new.github_unavailable_body')}</p>
-        </Alert>
+        <form className="stack" onSubmit={async (event) => {
+          event.preventDefault();
+          if (!repo || !githubRights || busy) return;
+          setPhase({ kind: 'creating' });
+          const created = await api<{ resource_id: string }>('/admin/imports/github', {
+            method: 'POST',
+            body: { repo, ref: ref || undefined, subdir: subdir || undefined, rights_confirmed: true },
+            idempotencyKey: crypto.randomUUID(),
+          });
+          if (!created.ok) return setPhase({ kind: 'failed', error: created.error });
+          router.push(`/admin/imports/${created.data.resource_id}`);
+        }}>
+          <Alert tone="info" title={t('ui.import.new.github_available_title')}>
+            <p>{t('ui.import.new.github_available_body')}</p>
+          </Alert>
+          <label className="field">
+            <span>{t('ui.import.new.github_repo')}</span>
+            <input className="input" value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="owner/name" disabled={busy} required />
+          </label>
+          <label className="field">
+            <span>{t('ui.import.new.github_ref')}</span>
+            <input className="input" value={ref} onChange={(e) => setRef(e.target.value)} placeholder={t('ui.import.new.github_ref_hint')} disabled={busy} />
+          </label>
+          <label className="field">
+            <span>{t('ui.import.new.github_subdir')}</span>
+            <input className="input" value={subdir} onChange={(e) => setSubdir(e.target.value)} placeholder={t('ui.import.new.github_subdir_hint')} disabled={busy} />
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={githubRights} onChange={(e) => setGithubRights(e.target.checked)} disabled={busy} />
+            <span>{t('ui.import.new.rights')}</span>
+          </label>
+          {phase.kind === 'creating' ? <p role="status">{t('ui.import.new.creating')}</p> : null}
+          {phase.kind === 'failed' ? <ErrorState error={phase.error} /> : null}
+          <div className="row">
+            <button type="submit" className="button" disabled={!repo || !githubRights || busy}>{t('ui.import.new.github_submit')}</button>
+          </div>
+        </form>
       ) : (
         <form className="stack" onSubmit={submit}>
           <div

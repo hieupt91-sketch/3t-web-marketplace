@@ -12,7 +12,7 @@ const CAPABILITIES = ['landing', 'catalog', 'cms.pages', 'cms.products', 'cms.ar
 /** Public demo info for a published template (docs/03 §7). Static templates expose a public readonly URL. */
 function demoInfo(config: PlatformConfig, row: PublicTemplateRow) {
   const mode = row.manifest_json.demo?.mode ?? 'publicReadonly';
-  // Only publicReadonly demos are exposed directly; isolatedAdmin demos need a session (runtime adapters, not in v1).
+  // Only publicReadonly demos are exposed directly; isolatedAdmin demos need a session (POST /demo-sessions, D02).
   const available = row.demo_label !== null && mode === 'publicReadonly';
   return { available, mode, url: available ? `${previewOrigin(config, row.demo_label!)}/` : null };
 }

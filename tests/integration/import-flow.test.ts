@@ -202,7 +202,7 @@ describe('hostile and unsupported packages', () => {
     const { body } = await getImport(started.resource_id);
     expect(body).toMatchObject({ status: 'needs_configuration', error_code: 'needs_configuration', detected_adapter: 'vite-static' });
     expect(body.missing_fields).toContain('/build/lockfile');
-    expect(body.detection.adapter_implemented).toBe(false);
+    expect(body.detection.adapter_implemented).toBe(true);
   });
 
   it('rejects a static site that ships executables', async () => {

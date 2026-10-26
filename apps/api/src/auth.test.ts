@@ -174,9 +174,9 @@ describe('public catalog', () => {
     const config = await ctx.app.inject({ method: 'GET', url: '/api/v1/config/public' });
     expect(config.json().data.adapters).toEqual([
       { code: 'static-html', status: 'supported' },
-      { code: 'vite-static', status: 'not_implemented' },
-      { code: 'next-standalone', status: 'not_implemented' },
-      { code: 'node-http', status: 'not_implemented' },
+      { code: 'vite-static', status: 'supported' },
+      { code: 'next-standalone', status: 'supported' },
+      { code: 'node-http', status: 'supported' },
     ]);
     const bad = await ctx.app.inject({ method: 'GET', url: '/api/v1/templates?limit=500' });
     expect(bad.statusCode).toBe(422);
