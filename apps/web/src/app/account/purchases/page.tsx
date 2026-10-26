@@ -64,6 +64,7 @@ function PurchasesInner() {
                 <dt>{t('ui.plan.instances')}</dt><dd>{e.instance_limit}</dd>
                 {e.updates_until ? <><dt>{t('ui.plan.updates')}</dt><dd className="tabular">{dt(e.updates_until)}</dd></> : null}
               </dl>
+              <Link className="button button--secondary" href={`/account/purchases/${e.id}/downloads`}>{t('ui.account.downloads_title')}</Link>
               {e.mode === 'selfhost' ? (
                 <button type="button" className="button" disabled={busy === e.id || e.status !== 'active'} onClick={() => void download(e)}>
                   {busy === e.id ? t('ui.state.saving') : t('ui.purchases.download')}
