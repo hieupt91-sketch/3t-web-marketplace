@@ -471,6 +471,17 @@ export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<voi
         `UPDATE import_steps SET status = 'failed', finished_at = now(), error_code = $3, detail_json = $4 WHERE import_id = $1 AND step = $2`,
         [importId, name, code, { details: error instanceof StepError ? error.details.slice(0, 50) : [] }],
       );
+      if (!(error instanceof StepError) && !(error instanceof CancelledError)) {
+        // Previously the real exception was discarded here (details: []), so a
+        // failing step only ever surfaced as a generic internal_error with no
+        // way to tell what actually broke. Keep the message, the errno and the
+        // first stack frames in the import log (admin-only) and on the worker
+        // log line, so the next failure is diagnosable without guessing.
+        const err = error as NodeJS.ErrnoException;
+        const detail = `${err.code ? `[${err.code}] ` : ''}${err.message ?? String(error)}${err.stack ? `\n${err.stack.split('\n').slice(1, 4).join('\n')}` : ''}`;
+        await log(db, importId, name, 'error', 'internal_error', detail).catch(() => undefined);
+        console.log(JSON.stringify({ time: new Date().toISOString(), service: 'worker', event: 'step_error', import_id: importId, step: name, code: err.code ?? null, message: err.message ?? String(error), stack: err.stack ?? null }));
+      }
       throw error;
     }
   }
