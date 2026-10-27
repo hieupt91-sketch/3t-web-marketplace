@@ -47,6 +47,7 @@ interface PublicTemplateRow {
   created_at: Date;
   slug: string;
   manifest_json: { adapter?: string; export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
+  size_bytes: string | null;
   demo_label: string | null;
   requested_title: string | null;
   requested_summary: string | null;
@@ -73,6 +74,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
     summary: translated ? row.requested_summary : row.fallback_summary,
     preview_image: null,
     adapter: row.manifest_json.adapter ?? null,
+    size_bytes: row.size_bytes ?? null,
     modes: row.manifest_json.export?.modes ?? [],
     content_locales: row.manifest_json.locales?.supported ?? [],
     capabilities: row.manifest_json.capabilities ?? [],
@@ -82,13 +84,14 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
 }
 
 const TEMPLATE_SELECT = `
-  SELECT t.id, t.created_at, t.slug, v.manifest_json,
+  SELECT t.id, t.created_at, t.slug, v.manifest_json, a.size_bytes::text AS size_bytes,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          rt.title AS requested_title, rt.summary AS requested_summary, rt.slug AS requested_slug,
          ft.title AS fallback_title, ft.summary AS fallback_summary, ft.slug AS fallback_slug
   FROM templates t
   JOIN template_versions v ON v.id = t.published_version_id
+  LEFT JOIN artifacts a ON a.id = v.artifact_id
   JOIN template_translations ft ON ft.template_id = t.id AND ft.locale = '${DEFAULT_LOCALE}' AND ft.status = 'published'
   LEFT JOIN template_translations rt ON rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published'
   WHERE t.status = 'published'`;

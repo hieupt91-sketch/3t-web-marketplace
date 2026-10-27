@@ -8,6 +8,14 @@ import { coverGradient } from '@/components/template-card';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
 
+function formatSize(sizeBytes: string): string {
+  const n = Number(sizeBytes);
+  if (!Number.isFinite(n) || n < 0) return sizeBytes;
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+}
+
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale, slug } = await params;
   const result = await fetchPublic<TemplateSummary>(`/templates/${encodeURIComponent(slug)}`, locale);
@@ -50,6 +58,7 @@ export default async function TemplateDetail({ params }: Props) {
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.features')}</h2>
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>
         <p className="muted">{t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}</p>
+        {template.size_bytes ? <p className="muted">{t('ui.detail.package_size', { size: formatSize(template.size_bytes) })}</p> : null}
       </section>
       <section className="card stack">
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.hosting_title')}</h2>
