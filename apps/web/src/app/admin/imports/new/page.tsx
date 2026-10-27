@@ -115,6 +115,14 @@ function NewImportInner() {
     <div className="stack">
       <h1>{t('ui.import.new.title')}</h1>
       <ImportStepper current={0} />
+      <section className="card stack" aria-label={t('ui.import.new.how_title')}>
+        <h2 style={{ margin: 0 }}>{t('ui.import.new.how_title')}</h2>
+        <ol style={{ margin: 0, paddingInlineStart: 'var(--space-5)', display: 'grid', gap: 'var(--space-1)' }}>
+          <li>{t('ui.import.new.how_1')}</li>
+          <li>{t('ui.import.new.how_2')}</li>
+          <li>{t('ui.import.new.how_3')}</li>
+        </ol>
+      </section>
       <div role="tablist" aria-label={t('ui.import.new.source')} className="row">
         <button type="button" role="tab" aria-selected={tab === 'zip'} className={`button ${tab === 'zip' ? '' : 'button--secondary'}`} onClick={() => setTab('zip')}>
           {t('ui.import.new.tab_zip')}
