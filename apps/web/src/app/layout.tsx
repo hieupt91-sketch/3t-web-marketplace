@@ -8,7 +8,7 @@ import '@/styles/globals.css';
 export async function generateMetadata(): Promise<Metadata> {
   const locale = await requestLocale();
   return {
-    title: { default: '3T Web Marketplace', template: '%s — 3T Web Marketplace' },
+    title: { default: 'Web Marketplace', template: '%s — Web Marketplace' },
     description: translate(locale, 'ui.meta.description'),
   };
 }
