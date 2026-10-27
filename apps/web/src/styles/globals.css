@@ -619,6 +619,11 @@ table.table {
 .hero .container {
   padding-block: var(--space-7);
 }
+/* Auth pages (Canva v5): white card on a soft gradient backdrop. */
+.auth-main {
+  background: linear-gradient(180deg, var(--color-bg-accent) 0%, var(--color-bg) 55%);
+  border-radius: var(--radius-card);
+}
 /* Catalog: filter sidebar (Canva v3) + results, collapsing on tablet and below. */
 .catalog-layout {
   display: grid;

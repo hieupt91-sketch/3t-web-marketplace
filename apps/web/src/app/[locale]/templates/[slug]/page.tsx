@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
+import { coverGradient } from '@/components/template-card';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
 
@@ -36,6 +37,7 @@ export default async function TemplateDetail({ params }: Props) {
   const template = result.data;
   return (
     <div className="container stack">
+      <div aria-hidden="true" style={{ height: 200, borderRadius: 'var(--radius-card)', background: coverGradient(template.slug), boxShadow: 'var(--shadow-card)' }} />
       <h1 lang={template.resolved_locale}>{template.title}</h1>
       {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
       {template.summary ? <p lang={template.resolved_locale}>{template.summary}</p> : null}

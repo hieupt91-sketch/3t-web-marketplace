@@ -13,7 +13,7 @@ const COVER_GRADIENTS = [
   'linear-gradient(135deg, #6d28d9, #0891b2)',
 ];
 
-function coverGradient(slug: string): string {
+export function coverGradient(slug: string): string {
   let hash = 0;
   for (let i = 0; i < slug.length; i++) hash = (hash * 31 + slug.charCodeAt(i)) >>> 0;
   return COVER_GRADIENTS[hash % COVER_GRADIENTS.length]!;
