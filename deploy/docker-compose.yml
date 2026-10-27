@@ -1,0 +1,99 @@
+# Staging stack for a LAN VPS behind a Cloudflare Tunnel.
+# Run every command from this directory (deploy/):
+#   docker compose --env-file .env up -d --build
+# Only web (3000) and preview (4100) are published, and only on 127.0.0.1,
+# because the tunnel on the same host reaches them there. Nothing else is
+# exposed to the LAN or the internet: api, worker and postgres stay inside
+# the compose network. The tunnel (see cloudflared.example.yml) is run by
+# the owner on the VPS host, not by this file.
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=marketplace
+      - POSTGRES_USER=marketplace
+      - POSTGRES_PASSWORD=${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketplace -d marketplace"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.node
+      args:
+        APP: api
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
+      - API_HOST=0.0.0.0
+      - API_PORT=4000
+      - PREVIEW_INTERNAL_URL=http://preview:4100
+    volumes:
+      - appdata:/app/runtime-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.node
+      args:
+        APP: worker
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
+    volumes:
+      - appdata:/app/runtime-data
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  preview:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.node
+      args:
+        APP: preview
+    env_file: .env
+    environment:
+      - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
+      - PREVIEW_HOST=0.0.0.0
+      - PREVIEW_PORT=4100
+    volumes:
+      - appdata:/app/runtime-data
+    ports:
+      - "127.0.0.1:4100:4100"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+
+  web:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.web
+      args:
+        API_INTERNAL_URL: http://api:4000
+    env_file: .env
+    environment:
+      - API_INTERNAL_URL=http://api:4000
+    ports:
+      - "127.0.0.1:3000:3000"
+    depends_on:
+      - api
+    restart: unless-stopped
+
+volumes:
+  pgdata:
+  # Shared object store + work dir for api, worker and preview. Without this
+  # shared volume, uploads recorded by api would be invisible to worker.
+  appdata:
