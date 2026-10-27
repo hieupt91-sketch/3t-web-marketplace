@@ -619,6 +619,69 @@ table.table {
 .hero .container {
   padding-block: var(--space-7);
 }
+/* Home redesign: badge, CTAs, trust points, category links, steps, CTA band. */
+.hero-badge {
+  justify-self: start;
+  margin: 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.16);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.hero-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.hero-actions .button--secondary {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #1d4ed8;
+}
+.trust-row {
+  display: flex;
+  gap: var(--space-4);
+  flex-wrap: wrap;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: rgb(255 255 255 / 0.9);
+}
+.category-card {
+  text-decoration: none;
+  color: inherit;
+}
+.category-card:hover {
+  text-decoration: none;
+}
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-bg-accent);
+  color: #1d4ed8;
+  font-size: 18px;
+  font-weight: 700;
+}
+.cta-band {
+  padding: var(--space-6);
+  border-radius: var(--radius-card);
+  background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 45%, #7c3aed 100%);
+  color: #ffffff;
+}
+.cta-band h2 {
+  color: #ffffff;
+}
+.cta-band .button {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #1d4ed8;
+}
 /* Auth pages (Canva v5): white card on a soft gradient backdrop. */
 .auth-main {
   background: linear-gradient(180deg, var(--color-bg-accent) 0%, var(--color-bg) 55%);
