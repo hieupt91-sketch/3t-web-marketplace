@@ -3,6 +3,7 @@ import type { ReactNode } from 'react';
 import { translate } from '@3t/i18n';
 import { LocaleProvider } from '@/lib/i18n';
 import { requestLocale } from '@/lib/locale-server';
+import { ContactWidget } from '@/components/contact-widget';
 import '@/styles/globals.css';
 
 export async function generateMetadata(): Promise<Metadata> {
@@ -22,6 +23,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           {translate(locale, 'ui.skip_to_content')}
         </a>
         <LocaleProvider locale={locale}>{children}</LocaleProvider>
+        <ContactWidget locale={locale} />
       </body>
     </html>
   );

@@ -36,7 +36,7 @@ function readme(meta: BundleMeta): string {
     `Slug: ${meta.slug}`,
     `Version: ${meta.version}`,
     '',
-    'Static website bundle from 3T Web Marketplace.',
+    'Static website bundle from Web Marketplace.',
     '',
     '## Contents',
     '- `site/` — the website files to serve with any static web server.',

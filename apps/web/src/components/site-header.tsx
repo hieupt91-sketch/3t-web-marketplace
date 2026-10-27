@@ -43,6 +43,7 @@ export function SiteFooter() {
     [`/${locale}/help`, 'ui.footer.help'],
     [`/${locale}/partners`, 'ui.footer.partners'],
     [`/${locale}/policies/terms`, 'ui.footer.terms'],
+    [`/${locale}/policies/privacy`, 'ui.footer.privacy'],
     [`/${locale}/contact`, 'ui.footer.contact'],
   ];
   return (

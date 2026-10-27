@@ -97,13 +97,22 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/config/public', async () => {
     const terms = await db.query<{ value_json: { current: string } }>("SELECT value_json FROM settings WHERE key = 'terms.version'");
+    const contactRow = await db.query<{ value_json: { phone?: string; zalo?: string; messenger?: string; email?: string } }>("SELECT value_json FROM settings WHERE key = 'contact.channels'");
+    const contactRaw = contactRow.rows[0]?.value_json ?? {};
+    const contact = {
+      phone: contactRaw.phone?.trim() || null,
+      zalo: contactRaw.zalo?.trim() || null,
+      messenger: contactRaw.messenger?.trim() || null,
+      email: contactRaw.email?.trim() || null,
+    };
     return {
       data: {
-        brand: { name: '3T Web Marketplace' },
+        brand: { name: 'Web Marketplace' },
         default_locale: DEFAULT_LOCALE,
         locales: LOCALES.filter((l) => l.enabled).map((l) => ({ code: l.code, display_name: l.displayNameNative, direction: l.direction })),
         currency: config.currency,
         terms_version: terms.rows[0]?.value_json.current ?? null,
+        contact,
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
       },
     };
