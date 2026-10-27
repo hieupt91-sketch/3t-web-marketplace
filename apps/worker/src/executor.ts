@@ -14,8 +14,13 @@ export interface ExecutorOptions {
    * When false, the command runs in a fresh network namespace (via `unshare -n`)
    * when that tool is available, so a build cannot reach the network. Install phases
    * run with allowNetwork=true because they must fetch dependencies; build phases
-   * run with allowNetwork=false. When `unshare` is unavailable the run proceeds
-   * with network access and `networkIsolated` reports false — callers log this.
+   * run with allowNetwork=false. When `unshare` is unavailable — or when it exists
+   * but cannot create a namespace in this environment (for example a non-root
+   * CI runner, where `unshare -n` fails with "Operation not permitted") — the
+   * run proceeds with network access and `networkIsolated` reports false —
+   * callers log this. A real build failure is never masked by this fallback:
+   * it only triggers on `unshare`'s own permission error, before the command
+   * itself runs.
    */
   allowNetwork?: boolean;
   /** Resource limits via prlimit when available (CPU seconds, address-space MB, processes). */
@@ -75,12 +80,8 @@ export async function runIsolated(argv: string[], opts: ExecutorOptions): Promis
   const maxOutputBytes = opts.maxOutputBytes ?? 1024 * 1024;
   const allowNetwork = opts.allowNetwork ?? false;
 
-  let command = argv;
-  let networkIsolated = false;
-  if (!allowNetwork && (await exists(UN_SHARE))) {
-    command = [UN_SHARE, '-n', ...argv];
-    networkIsolated = true;
-  }
+  // Base command without the network-namespace wrapper.
+  let baseCommand = argv;
   let limitsApplied = false;
   if (opts.limits && (await exists(PRLIMIT))) {
     const args: string[] = [];
@@ -88,7 +89,7 @@ export async function runIsolated(argv: string[], opts: ExecutorOptions): Promis
     if (opts.limits.addressSpaceMb !== undefined) args.push(`--as=${opts.limits.addressSpaceMb * 1024 * 1024}`);
     if (opts.limits.maxProcesses !== undefined) args.push(`--nproc=${opts.limits.maxProcesses}`);
     if (args.length) {
-      command = [PRLIMIT, ...args, '--', ...command];
+      baseCommand = [PRLIMIT, ...args, '--', ...baseCommand];
       limitsApplied = true;
     }
   }
@@ -104,6 +105,40 @@ export async function runIsolated(argv: string[], opts: ExecutorOptions): Promis
     ...(opts.env ?? {}),
   };
 
+  const runOnce = (command: string[], networkIsolated: boolean): Promise<ExecutorResult> =>
+    runCommand(command, { cwd: opts.cwd, env, timeoutMs, maxOutputBytes, networkIsolated, limitsApplied });
+
+  if (!allowNetwork && (await exists(UN_SHARE))) {
+    const wrapped = await runOnce([UN_SHARE, '-n', ...baseCommand], true);
+    // `unshare -n` needs CAP_SYS_ADMIN, so on a non-root host (for example a
+    // GitHub-hosted runner) it fails before the command runs, with its own
+    // "unshare: ... Operation not permitted" error on stderr. That is not a
+    // build failure: fall back to running without the namespace, exactly as
+    // when the tool is absent, and report networkIsolated=false. Any other
+    // failure (including a real build error) is returned as-is, unretried.
+    if (
+      wrapped.code !== 0 &&
+      /unshare:/.test(wrapped.stderr) &&
+      /Operation not permitted|Permission denied/.test(wrapped.stderr)
+    ) {
+      return runOnce(baseCommand, false);
+    }
+    return wrapped;
+  }
+  return runOnce(baseCommand, false);
+}
+
+interface RunCommandOptions {
+  cwd: string;
+  env: Record<string, string>;
+  timeoutMs: number;
+  maxOutputBytes: number;
+  networkIsolated: boolean;
+  limitsApplied: boolean;
+}
+
+function runCommand(command: string[], opts: RunCommandOptions): Promise<ExecutorResult> {
+  const { cwd, env, timeoutMs, maxOutputBytes, networkIsolated, limitsApplied } = opts;
   return new Promise<ExecutorResult>((resolve, reject) => {
     let proc: ChildProcess;
     try {
