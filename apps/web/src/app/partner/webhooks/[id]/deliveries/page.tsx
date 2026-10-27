@@ -1,21 +1,22 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useState } from 'react';
 import { EmptyState, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 interface Delivery { id: string; event_id: string; event_type: string; status: string; attempts: number; response_status: number | null; created_at: string }
 
-export default function PartnerDeliveries({ params }: { params: { id: string } }) {
+export default function PartnerDeliveries({ params }: { params: Promise<{ id: string }> }) {
   const { t } = useT();
+  const { id } = use(params);
   const [rows, setRows] = useState<Delivery[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const load = useCallback(async () => {
-    const res = await api<Delivery[]>(`/partner/webhooks/${params.id}/deliveries`);
+    const res = await api<Delivery[]>(`/partner/webhooks/${id}/deliveries`);
     if (!res.ok) return setError(res.error);
     setRows(res.data); setLoaded(true);
-  }, [params.id]);
+  }, [id]);
   useEffect(() => { void load(); }, [load]);
   if (error && !loaded) return <ErrorState error={error} onRetry={() => void load()} />;
   if (!loaded) return <Loading />;

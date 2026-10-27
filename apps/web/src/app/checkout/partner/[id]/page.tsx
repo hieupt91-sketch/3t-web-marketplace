@@ -1,6 +1,6 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { use, useCallback, useEffect, useState } from 'react';
 import { EmptyState, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
@@ -8,7 +8,7 @@ import Link from 'next/link';
 import { useSearchParams } from 'next/navigation';
 import { Suspense } from 'react';
 
-function PartnerCheckoutInner({ params }: { params: { id: string } }) {
+function PartnerCheckoutInner({ id }: { id: string }) {
   const { t } = useT();
   const search = useSearchParams();
   const token = search.get('token') ?? '';
@@ -16,12 +16,12 @@ function PartnerCheckoutInner({ params }: { params: { id: string } }) {
   const [orderId, setOrderId] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   async function claim() {
-    const res = await api(`/partner/checkout-sessions/${params.id}/claim`, { method: 'POST', body: { claim_token: token } });
+    const res = await api(`/partner/checkout-sessions/${id}/claim`, { method: 'POST', body: { claim_token: token } });
     if (!res.ok) return setError(res.error);
     setStatus('claimed');
   }
   async function order() {
-    const res = await api<{ order_id: string }>(`/partner/checkout-sessions/${params.id}/order`, { method: 'POST', body: {} });
+    const res = await api<{ order_id: string }>(`/partner/checkout-sessions/${id}/order`, { method: 'POST', body: {} });
     if (!res.ok) return setError(res.error);
     setOrderId(res.data.order_id);
   }
@@ -36,6 +36,7 @@ function PartnerCheckoutInner({ params }: { params: { id: string } }) {
   );
 }
 
-export default function PartnerCheckout({ params }: { params: { id: string } }) {
-  return <Suspense fallback={<Loading />}><PartnerCheckoutInner params={params} /></Suspense>;
+export default function PartnerCheckout({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = use(params);
+  return <Suspense fallback={<Loading />}><PartnerCheckoutInner id={id} /></Suspense>;
 }
