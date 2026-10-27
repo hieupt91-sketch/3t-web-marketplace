@@ -42,6 +42,7 @@ function NewImportInner() {
   const [dragging, setDragging] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const controller = useRef<AbortController | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   // One idempotency key per chosen upload so a retried "create import" cannot start two jobs.
   const attempt = useRef<{ sessionId: string; key: string } | null>(null);
   const busy = phase.kind === 'hashing' || phase.kind === 'uploading' || phase.kind === 'creating';
@@ -174,6 +175,8 @@ function NewImportInner() {
           <div
             className="dropzone"
             data-dragging={dragging}
+            style={{ cursor: 'pointer' }}
+            onClick={() => fileInput.current?.click()}
             onDragOver={(e) => {
               e.preventDefault();
               setDragging(true);
@@ -183,8 +186,9 @@ function NewImportInner() {
           >
             <div className="stack">
               <p style={{ margin: 0 }}><strong>{t('ui.import.new.drop')}</strong></p>
-              <label className="button button--secondary" htmlFor="zip-file">{t('ui.import.new.choose')}</label>
+              <span className="button button--secondary">{t('ui.import.new.choose')}</span>
               <input
+                ref={fileInput}
                 id="zip-file"
                 className="visually-hidden"
                 type="file"
