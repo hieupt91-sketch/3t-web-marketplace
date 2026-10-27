@@ -604,13 +604,39 @@ table.table {
 }
 .hero {
   background:
-    radial-gradient(600px 240px at 85% 0%, rgb(124 58 237 / 0.16), transparent 70%),
-    radial-gradient(480px 200px at 10% 100%, rgb(29 78 216 / 0.12), transparent 70%),
-    linear-gradient(135deg, var(--color-bg-accent) 0%, var(--color-surface) 60%, #ede9fe 100%);
+    radial-gradient(600px 240px at 85% 0%, rgb(124 58 237 / 0.45), transparent 70%),
+    radial-gradient(480px 200px at 10% 100%, rgb(34 211 238 / 0.25), transparent 70%),
+    linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 45%, #7c3aed 100%);
   border-bottom: 1px solid var(--color-border);
+  color: #ffffff;
+}
+.hero h1 {
+  color: #ffffff;
+}
+.hero .muted {
+  color: rgb(255 255 255 / 0.85);
 }
 .hero .container {
   padding-block: var(--space-7);
+}
+/* Catalog: filter sidebar (Canva v3) + results, collapsing on tablet and below. */
+.catalog-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.catalog-layout__filters {
+  position: sticky;
+  top: calc(var(--header-height) + var(--space-4));
+}
+@media (max-width: 1023px) {
+  .catalog-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .catalog-layout__filters {
+    position: static;
+  }
 }
 .search {
   display: flex;
