@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
+import { DemoCatalog } from '@/components/demo-catalog';
 
 type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string; mode?: string; capability?: string; category?: string; min_price?: string; max_price?: string }> };
 
@@ -94,7 +95,10 @@ export default async function Templates({ params, searchParams }: Props) {
           {result.requestId ? <p><small>{t('ui.error.request_id')}: <span className="mono">{result.requestId}</span></small></p> : null}
         </div>
       ) : result.data.length === 0 ? (
-        <div className="card"><p style={{ margin: 0 }}>{hasFilter ? t('ui.catalog.empty_search', { q: q || t('ui.catalog.these_filters') }) : t('ui.catalog.empty_catalog')}</p></div>
+        <>
+          <div className="card"><p style={{ margin: 0 }}>{hasFilter ? t('ui.catalog.empty_search', { q: q || t('ui.catalog.these_filters') }) : t('ui.catalog.empty_catalog')}</p></div>
+          {hasFilter ? null : <DemoCatalog locale={locale} />}
+        </>
       ) : (
         <>
           <p className="muted" role="status">{t('ui.catalog.result_count', { count: String(result.data.length) })}</p>
