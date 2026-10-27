@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
+import { DemoCatalog } from '@/components/demo-catalog';
 
 type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string; mode?: string; capability?: string; category?: string; min_price?: string; max_price?: string }> };
 
@@ -38,13 +39,20 @@ export default async function Templates({ params, searchParams }: Props) {
   return (
     <div className="container stack">
       <h1>{t('ui.catalog.title')}</h1>
-      <form className="stack" method="get" role="search">
-        <div className="search">
-          <label htmlFor="catalog-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
-          <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
-          <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
-        </div>
-        <div className="row">
+      <form className="search" method="get" role="search">
+        {mode ? <input type="hidden" name="mode" value={mode} /> : null}
+        {capability ? <input type="hidden" name="capability" value={capability} /> : null}
+        {category ? <input type="hidden" name="category" value={category} /> : null}
+        {min_price ? <input type="hidden" name="min_price" value={min_price} /> : null}
+        {max_price ? <input type="hidden" name="max_price" value={max_price} /> : null}
+        <label htmlFor="catalog-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
+        <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
+        <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
+      </form>
+      <div className="catalog-layout">
+        <aside className="catalog-layout__filters card stack">
+          <form className="stack" method="get">
+            <input type="hidden" name="q" value={q} />
           <label className="field" style={{ minWidth: 200 }}>
             <span>{t('ui.catalog.filter_mode')}</span>
             <select className="select" name="mode" defaultValue={mode}>
@@ -78,15 +86,19 @@ export default async function Templates({ params, searchParams }: Props) {
             <button className="button button--secondary" type="submit">{t('ui.catalog.apply_filter')}</button>
             {hasFilter ? <Link className="button button--secondary" href={`/${locale}/templates`}>{t('ui.catalog.reset')}</Link> : null}
           </div>
-        </div>
-      </form>
+          </form>
+        </aside>
+        <div className="stack">
       {!result.ok ? (
         <div className="alert alert--error" role="alert">
           <p>{t('ui.catalog.unavailable')}</p>
           {result.requestId ? <p><small>{t('ui.error.request_id')}: <span className="mono">{result.requestId}</span></small></p> : null}
         </div>
       ) : result.data.length === 0 ? (
-        <div className="card"><p style={{ margin: 0 }}>{hasFilter ? t('ui.catalog.empty_search', { q: q || t('ui.catalog.these_filters') }) : t('ui.catalog.empty_catalog')}</p></div>
+        <>
+          <div className="card"><p style={{ margin: 0 }}>{hasFilter ? t('ui.catalog.empty_search', { q: q || t('ui.catalog.these_filters') }) : t('ui.catalog.empty_catalog')}</p></div>
+          {hasFilter ? null : <DemoCatalog locale={locale} />}
+        </>
       ) : (
         <>
           <p className="muted" role="status">{t('ui.catalog.result_count', { count: String(result.data.length) })}</p>
@@ -96,6 +108,8 @@ export default async function Templates({ params, searchParams }: Props) {
           {next ? <p><Link className="button button--secondary" href={next}>{t('ui.catalog.more')}</Link></p> : null}
         </>
       )}
+        </div>
+      </div>
     </div>
   );
 }

@@ -4,8 +4,17 @@ import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
+import { coverGradient } from '@/components/template-card';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
+
+function formatSize(sizeBytes: string): string {
+  const n = Number(sizeBytes);
+  if (!Number.isFinite(n) || n < 0) return sizeBytes;
+  if (n >= 1048576) return `${(n / 1048576).toFixed(1)} MB`;
+  if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
+  return `${n} B`;
+}
 
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale, slug } = await params;
@@ -36,6 +45,7 @@ export default async function TemplateDetail({ params }: Props) {
   const template = result.data;
   return (
     <div className="container stack">
+      <div aria-hidden="true" style={{ height: 200, borderRadius: 'var(--radius-card)', background: coverGradient(template.slug), boxShadow: 'var(--shadow-card)' }} />
       <h1 lang={template.resolved_locale}>{template.title}</h1>
       {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
       {template.summary ? <p lang={template.resolved_locale}>{template.summary}</p> : null}
@@ -48,6 +58,12 @@ export default async function TemplateDetail({ params }: Props) {
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.features')}</h2>
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>
         <p className="muted">{t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}</p>
+        {template.size_bytes ? <p className="muted">{t('ui.detail.package_size', { size: formatSize(template.size_bytes) })}</p> : null}
+      </section>
+      <section className="card stack">
+        <h2 style={{ marginTop: 0 }}>{t('ui.detail.hosting_title')}</h2>
+        <p style={{ margin: 0 }}>{template.adapter === 'node-http' || template.adapter === 'next-standalone' ? t('ui.detail.hosting_runtime') : t('ui.detail.hosting_static')}</p>
+        <p style={{ margin: 0 }}><Link href={`/${locale}/help/help-hosting-choice`}>{t('ui.detail.hosting_guide')}</Link></p>
       </section>
       <section className="stack">
         <h2 style={{ marginBottom: 0 }}>{t('ui.detail.plans')}</h2>

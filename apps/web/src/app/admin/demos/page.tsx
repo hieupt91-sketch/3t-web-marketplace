@@ -33,7 +33,7 @@ function AdminDemosInner() {
               <td><StatusBadge tone={d.status === 'active' ? 'success' : 'neutral'}>{t(`ui.demo.status.${d.status}`)}</StatusBadge></td>
               <td className="tabular">{d.runtime_port ? `127.0.0.1:${d.runtime_port}` : '—'}</td>
               <td className="tabular">{dt(d.expires_at)}</td>
-              <td>{d.status === 'active' ? <button className="button button--danger" onClick={() => void api(`/admin/demos/${d.id}/expire`, { method: 'POST' }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.admin.demos_expire')}</button> : '—'}</td>
+              <td>{d.status === 'active' ? <button type="button" className="button button--danger" onClick={() => void api(`/admin/demos/${d.id}/expire`, { method: 'POST' }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.admin.demos_expire')}</button> : '—'}</td>
             </tr>
           ))}</tbody>
         </table></div>

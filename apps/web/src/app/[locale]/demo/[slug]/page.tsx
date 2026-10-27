@@ -28,7 +28,7 @@ export default async function DemoPage({ params }: Props) {
       <p><Link href={`/${locale}/templates/${template.slug}`}>← {template.title}</Link></p>
       <h1>{t('ui.demo.heading', { title: template.title })}</h1>
       {template.demo.available && template.demo.url ? (
-        <DemoViewer url={template.demo.url} title={template.title} />
+        <DemoViewer url={template.demo.url} title={template.title} slug={template.slug} />
       ) : (
         <div className="alert alert--info"><p>{t('ui.demo.unavailable')}</p></div>
       )}

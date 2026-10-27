@@ -80,8 +80,8 @@ function TicketInner() {
             <div className="row"><button className="button button--secondary" type="submit" disabled={!assignee}>{t('ui.support.assign_action')}</button></div>
           </form>
           <div className="row">
-            <button className="button button--secondary" onClick={() => void act('status', { status: 'resolved' })}>{t('ui.support.resolve_action')}</button>
-            <button className="button button--danger" onClick={() => void act('status', { status: 'closed' })}>{t('ui.support.close_action')}</button>
+            <button type="button" className="button button--secondary" onClick={() => void act('status', { status: 'resolved' })}>{t('ui.support.resolve_action')}</button>
+            <button type="button" className="button button--danger" onClick={() => void act('status', { status: 'closed' })}>{t('ui.support.close_action')}</button>
           </div>
         </>
       ) : null}

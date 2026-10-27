@@ -51,7 +51,7 @@ export default function SiteCreatingPage() {
         <>
           <p className="muted">{t('ui.sites.failed_note')}</p>
           <div className="row">
-            <button className="button" onClick={() => void api(`/sites/${site.id}/retry`, { method: 'POST' }).then(() => void load())}>{t('ui.sites.retry')}</button>
+            <button type="button" className="button" onClick={() => void api(`/sites/${site.id}/retry`, { method: 'POST' }).then(() => void load())}>{t('ui.sites.retry')}</button>
             <Link className="button button--secondary" href="/account/support">{t('ui.sites.contact_support')}</Link>
           </div>
         </>

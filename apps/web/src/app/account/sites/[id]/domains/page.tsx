@@ -62,9 +62,9 @@ export default function SiteDomainsPage() {
               <td className="tabular">{d.cert_expires_at ? dt(d.cert_expires_at) : '—'}</td>
               <td>
                 <div className="row">
-                  {d.status === 'pending' ? <button className="button button--secondary" onClick={() => act(d.id, 'verify', { txt_value: txtValue || undefined })}>{t('ui.sites.domain_verify')}</button> : null}
-                  {d.status === 'verified' && !d.is_primary ? <button className="button button--secondary" onClick={() => act(d.id, 'make-primary')}>{t('ui.sites.domain_make_primary')}</button> : null}
-                  {d.status !== 'released' ? <button className="button button--danger" onClick={() => act(d.id, 'release')}>{t('ui.sites.domain_release')}</button> : null}
+                  {d.status === 'pending' ? <button type="button" className="button button--secondary" onClick={() => act(d.id, 'verify', { txt_value: txtValue || undefined })}>{t('ui.sites.domain_verify')}</button> : null}
+                  {d.status === 'verified' && !d.is_primary ? <button type="button" className="button button--secondary" onClick={() => act(d.id, 'make-primary')}>{t('ui.sites.domain_make_primary')}</button> : null}
+                  {d.status !== 'released' ? <button type="button" className="button button--danger" onClick={() => act(d.id, 'release')}>{t('ui.sites.domain_release')}</button> : null}
                 </div>
               </td>
             </tr>

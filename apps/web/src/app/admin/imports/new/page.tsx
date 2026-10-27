@@ -42,6 +42,7 @@ function NewImportInner() {
   const [dragging, setDragging] = useState(false);
   const [phase, setPhase] = useState<Phase>({ kind: 'idle' });
   const controller = useRef<AbortController | null>(null);
+  const fileInput = useRef<HTMLInputElement | null>(null);
   // One idempotency key per chosen upload so a retried "create import" cannot start two jobs.
   const attempt = useRef<{ sessionId: string; key: string } | null>(null);
   const busy = phase.kind === 'hashing' || phase.kind === 'uploading' || phase.kind === 'creating';
@@ -115,6 +116,14 @@ function NewImportInner() {
     <div className="stack">
       <h1>{t('ui.import.new.title')}</h1>
       <ImportStepper current={0} />
+      <section className="card stack" aria-label={t('ui.import.new.how_title')}>
+        <h2 style={{ margin: 0 }}>{t('ui.import.new.how_title')}</h2>
+        <ol style={{ margin: 0, paddingInlineStart: 'var(--space-5)', display: 'grid', gap: 'var(--space-1)' }}>
+          <li>{t('ui.import.new.how_1')}</li>
+          <li>{t('ui.import.new.how_2')}</li>
+          <li>{t('ui.import.new.how_3')}</li>
+        </ol>
+      </section>
       <div role="tablist" aria-label={t('ui.import.new.source')} className="row">
         <button type="button" role="tab" aria-selected={tab === 'zip'} className={`button ${tab === 'zip' ? '' : 'button--secondary'}`} onClick={() => setTab('zip')}>
           {t('ui.import.new.tab_zip')}
@@ -166,6 +175,8 @@ function NewImportInner() {
           <div
             className="dropzone"
             data-dragging={dragging}
+            style={{ cursor: 'pointer' }}
+            onClick={() => fileInput.current?.click()}
             onDragOver={(e) => {
               e.preventDefault();
               setDragging(true);
@@ -175,8 +186,9 @@ function NewImportInner() {
           >
             <div className="stack">
               <p style={{ margin: 0 }}><strong>{t('ui.import.new.drop')}</strong></p>
-              <label className="button button--secondary" htmlFor="zip-file">{t('ui.import.new.choose')}</label>
+              <span className="button button--secondary">{t('ui.import.new.choose')}</span>
               <input
+                ref={fileInput}
                 id="zip-file"
                 className="visually-hidden"
                 type="file"

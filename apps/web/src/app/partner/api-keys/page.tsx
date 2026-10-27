@@ -44,7 +44,7 @@ export default function PartnerKeys() {
       </form>
       {rows.length === 0 ? <EmptyState title={t('ui.partner.api_keys')}><p>—</p></EmptyState> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.partner.api_keys')}</th><th>{t('ui.partner.status')}</th><th>{t('ui.table.actions')}</th></tr></thead>
-        <tbody>{rows.map((r) => (<tr key={r.id}><td className="mono">{r.prefix}…</td><td>{r.revoked_at ? 'revoked' : 'active'}</td><td>{r.revoked_at ? null : <button className="button button--danger" onClick={() => void revoke(r.id)}>revoke</button>}</td></tr>))}</tbody></table></div>
+        <tbody>{rows.map((r) => (<tr key={r.id}><td className="mono">{r.prefix}…</td><td>{r.revoked_at ? 'revoked' : 'active'}</td><td>{r.revoked_at ? null : <button type="button" className="button button--danger" onClick={() => void revoke(r.id)}>revoke</button>}</td></tr>))}</tbody></table></div>
       )}
     </div>
   );

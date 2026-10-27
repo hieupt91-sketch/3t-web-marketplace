@@ -230,10 +230,20 @@ function ImportDetailInner() {
       </div>
       <ImportStepper current={stepperIndex(detail.status)} failed={['failed', 'rejected'].includes(detail.status)} />
 
+      {running ? (
+        <Alert tone="info" title={t('ui.import.detail.auto_title')}>
+          <p>{t('ui.import.detail.auto_body')}</p>
+        </Alert>
+      ) : null}
+      {detail.preview ? <PreviewPanel url={detail.preview.url} /> : null}
+
       {detail.status === 'ready' ? (
         <Alert tone="success" title={t('import.ready')}>
           <p>{t('ui.import.detail.ready_body')}</p>
-          <p><Link href="/admin/templates">{t('ui.admin.nav.templates')}</Link></p>
+          <div className="row">
+            {detail.preview ? <a className="button" href={detail.preview.url} target="_blank" rel="noopener noreferrer">{t('ui.import.detail.view_demo')}</a> : null}
+            <Link className="button button--secondary" href="/admin/templates">{t('ui.import.detail.goto_templates')}</Link>
+          </div>
         </Alert>
       ) : null}
       {detail.error_code ? (
@@ -281,6 +291,21 @@ function ImportDetailInner() {
           </div>
         ) : null}
         {detail.inferred_fields.length ? <p className="muted">{t('ui.import.detail.inferred', { fields: detail.inferred_fields.join(', ') })}</p> : null}
+        {detail.detection && detail.detection.candidates.length > 1 ? (
+          <div>
+            <h3>{t('ui.import.detail.candidates')}</h3>
+            <ul>
+              {detail.detection.candidates.map((c) => (
+                <li key={`${c.adapter}:${c.projectRoot}`}>
+                  <span className="mono">{c.adapter}</span> · <span className="mono">{c.projectRoot || '/'}</span> · {t(`ui.import.confidence.${c.confidence}`)}
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+        {detail.detection && detail.detection.signals.length ? (
+          <p className="muted">{t('ui.import.detail.signals')}: {detail.detection.signals.join(', ')}</p>
+        ) : null}
       </section>
 
       <section className="card stack">
@@ -302,8 +327,6 @@ function ImportDetailInner() {
         </ol>
         {detail.job ? <p className="muted" style={{ margin: 0 }}>{t('ui.import.detail.attempts', { attempts: detail.job.attempts, max: detail.job.max_attempts })}</p> : null}
       </section>
-
-      {detail.preview ? <PreviewPanel url={detail.preview.url} /> : null}
 
       {detail.screenshots.length ? (
         <section className="card stack">

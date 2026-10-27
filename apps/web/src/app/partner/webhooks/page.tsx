@@ -51,7 +51,7 @@ export default function PartnerWebhooks() {
       </form>
       {rows.length === 0 ? <EmptyState title={t('ui.partner.webhooks')}><p>—</p></EmptyState> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.partner.webhooks')}</th><th>{t('ui.partner.status')}</th><th>{t('ui.table.actions')}</th></tr></thead>
-        <tbody>{rows.map((r) => (<tr key={r.id}><td className="mono">{r.url}</td><td>{r.status}</td><td><button className="button button--secondary" disabled={busy === r.id} onClick={() => void test(r.id)}>test</button> <Link className="button button--secondary" href={`/partner/webhooks/${r.id}/deliveries`}>deliveries</Link></td></tr>))}</tbody></table></div>
+        <tbody>{rows.map((r) => (<tr key={r.id}><td className="mono">{r.url}</td><td>{r.status}</td><td><button type="button" className="button button--secondary" disabled={busy === r.id} onClick={() => void test(r.id)}>test</button> <Link className="button button--secondary" href={`/partner/webhooks/${r.id}/deliveries`}>deliveries</Link></td></tr>))}</tbody></table></div>
       )}
     </div>
   );

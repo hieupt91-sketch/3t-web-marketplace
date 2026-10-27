@@ -11,6 +11,8 @@ export interface TemplateSummary {
   title: string;
   summary: string | null;
   preview_image: string | null;
+  adapter: string | null;
+  size_bytes: string | null;
   modes: string[];
   content_locales: string[];
   capabilities: string[];

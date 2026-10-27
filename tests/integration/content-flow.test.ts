@@ -31,10 +31,10 @@ async function pageEtag(id: string) {
 
 describe('platform pages (P05/P06/P07)', () => {
   it('publishes a page and serves it localised with fallback', async () => {
-    const id = await createPage('how-it-works');
+    const id = await createPage('how-to-buy');
 
     // Not published yet → public 404.
-    expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/pages/public/how-it-works' })).statusCode).toBe(404);
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/pages/public/how-to-buy' })).statusCode).toBe(404);
 
     // Publishing needs a published default (vi) translation.
     const noTr = await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/content/pages/${id}/publish`, headers: { ...admin(), 'if-match': await pageEtag(id) } });
@@ -45,10 +45,10 @@ describe('platform pages (P05/P06/P07)', () => {
     const published = await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/content/pages/${id}/publish`, headers: { ...admin(), 'if-match': await pageEtag(id) } });
     expect(published.statusCode, published.body).toBe(200);
 
-    const vi = await ctx.app.inject({ method: 'GET', url: '/api/v1/pages/public/how-it-works?locale=vi' });
-    expect(vi.json().data).toMatchObject({ slug: 'how-it-works', title: 'Cách mua', translation_status: 'published', resolved_locale: 'vi' });
+    const vi = await ctx.app.inject({ method: 'GET', url: '/api/v1/pages/public/how-to-buy?locale=vi' });
+    expect(vi.json().data).toMatchObject({ slug: 'how-to-buy', title: 'Cách mua', translation_status: 'published', resolved_locale: 'vi' });
     // English requested, only vi published → fallback.
-    const en = await ctx.app.inject({ method: 'GET', url: '/api/v1/pages/public/how-it-works?locale=en' });
+    const en = await ctx.app.inject({ method: 'GET', url: '/api/v1/pages/public/how-to-buy?locale=en' });
     expect(en.json().data).toMatchObject({ translation_status: 'fallback', resolved_locale: 'vi', title: 'Cách mua' });
   });
 
@@ -74,17 +74,17 @@ describe('platform pages (P05/P06/P07)', () => {
 
 describe('policies (P08)', () => {
   it('publishes an immutable policy version and serves the current one', async () => {
-    const created = await ctx.app.inject({ method: 'POST', url: '/api/v1/admin/content/policies', headers: admin(), payload: { code: 'terms', version: '2026-10' } });
+    const created = await ctx.app.inject({ method: 'POST', url: '/api/v1/admin/content/policies', headers: admin(), payload: { code: 'terms', version: '2026-11' } });
     expect(created.statusCode, created.body).toBe(201);
     const id = created.json().data.id;
     await ctx.app.inject({ method: 'PUT', url: `/api/v1/admin/content/policies/${id}/translations/vi`, headers: admin(), payload: { title: 'Điều khoản', body: 'Nội dung điều khoản.', status: 'published' } });
-    const published = await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/content/policies/${id}/publish`, headers: admin(), payload: { effective_at: '2026-10-01T00:00:00Z' } });
+    const published = await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/content/policies/${id}/publish`, headers: admin(), payload: { effective_at: '2026-10-15T00:00:00Z' } });
     expect(published.statusCode, published.body).toBe(200);
 
     const current = await ctx.app.inject({ method: 'GET', url: '/api/v1/policies/terms?locale=vi' });
-    expect(current.json().data).toMatchObject({ code: 'terms', version: '2026-10', title: 'Điều khoản', effective_at: '2026-10-01T00:00:00.000Z' });
-    const byVersion = await ctx.app.inject({ method: 'GET', url: '/api/v1/policies/terms/versions/2026-10?locale=vi' });
-    expect(byVersion.json().data.version).toBe('2026-10');
+    expect(current.json().data).toMatchObject({ code: 'terms', version: '2026-11', title: 'Điều khoản', effective_at: '2026-10-15T00:00:00.000Z' });
+    const byVersion = await ctx.app.inject({ method: 'GET', url: '/api/v1/policies/terms/versions/2026-11?locale=vi' });
+    expect(byVersion.json().data.version).toBe('2026-11');
 
     // A published policy body is immutable at the DB level.
     await expect(ctx.db.query("UPDATE policy_versions SET body_hash = 'x' WHERE id = $1", [id])).rejects.toThrow(/immutable/);
@@ -93,7 +93,7 @@ describe('policies (P08)', () => {
     const fid = future.json().data.id;
     await ctx.app.inject({ method: 'PUT', url: `/api/v1/admin/content/policies/${fid}/translations/vi`, headers: admin(), payload: { title: 'Điều khoản mới', body: 'Sau này.', status: 'published' } });
     await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/content/policies/${fid}/publish`, headers: admin(), payload: { effective_at: '2099-01-01T00:00:00Z' } });
-    expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/policies/terms?locale=vi' })).json().data.version).toBe('2026-10');
+    expect((await ctx.app.inject({ method: 'GET', url: '/api/v1/policies/terms?locale=vi' })).json().data.version).toBe('2026-11');
   });
 });
 

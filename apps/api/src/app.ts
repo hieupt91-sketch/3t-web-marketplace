@@ -13,6 +13,7 @@ import { meRoutes } from './routes/me.ts';
 import { adminImportRoutes } from './routes/admin-imports.ts';
 import { adminCatalogRoutes } from './routes/admin-catalog.ts';
 import { adminContentRoutes } from './routes/admin-content.ts';
+import { adminSettingsRoutes } from './routes/admin-settings.ts';
 import { adminTemplateRoutes } from './routes/admin-templates.ts';
 import { jobRoutes } from './routes/jobs.ts';
 import { commerceRoutes } from './routes/commerce.ts';
@@ -273,6 +274,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(adminCatalogRoutes, { prefix: '/admin' });
       await api.register(adminTemplateRoutes, { prefix: '/admin' });
       await api.register(adminContentRoutes, { prefix: '/admin' });
+      await api.register(adminSettingsRoutes, { prefix: '/admin' });
       await api.register(jobRoutes);
       await api.register(commerceRoutes);
       await api.register(adminCommerceRoutes, { prefix: '/admin' });

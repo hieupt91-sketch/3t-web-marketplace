@@ -53,7 +53,7 @@ export default function CustomerTicketPage() {
             <div className="row"><button className="button" type="submit" disabled={!reply.trim()}>{t('ui.support.reply_action')}</button></div>
           </form>
           <div className="row">
-            <button className="button button--secondary" onClick={() => void api(`/support/tickets/${params.id}/close`, { method: 'POST' }).then((res) => { if (res.ok) void load(); else setError(res.error); })}>{t('ui.support.close_action')}</button>
+            <button type="button" className="button button--secondary" onClick={() => void api(`/support/tickets/${params.id}/close`, { method: 'POST' }).then((res) => { if (res.ok) void load(); else setError(res.error); })}>{t('ui.support.close_action')}</button>
           </div>
         </>
       ) : null}

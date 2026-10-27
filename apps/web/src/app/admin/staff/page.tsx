@@ -44,7 +44,7 @@ function StaffInner() {
       </form>
       {rows.length === 0 ? <EmptyState title={t('ui.admin.staff')}><p>—</p></EmptyState> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.admin.staff_user')}</th><th>{t('ui.admin.staff_role')}</th><th>{t('ui.mfa.title')}</th><th>{t('ui.table.actions')}</th></tr></thead>
-        <tbody>{rows.map((r) => (<tr key={r.id}><td>{r.email}</td><td>{r.roles.join(', ')}</td><td>{r.mfa_enabled ? 'on' : 'off'}</td><td>{r.roles.map((role) => (<button key={role} className="button button--danger" onClick={() => void revoke(r.id, role)}>{role} ×</button>))}</td></tr>))}</tbody></table></div>
+        <tbody>{rows.map((r) => (<tr key={r.id}><td>{r.email}</td><td>{r.roles.join(', ')}</td><td>{r.mfa_enabled ? 'on' : 'off'}</td><td>{r.roles.map((role) => (<button type="button" key={role} className="button button--danger" onClick={() => void revoke(r.id, role)}>{role} ×</button>))}</td></tr>))}</tbody></table></div>
       )}
     </div>
   );

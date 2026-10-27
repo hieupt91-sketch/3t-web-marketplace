@@ -1,0 +1,20 @@
+# Staging image for the Next.js storefront.
+# Build with: docker build -f deploy/Dockerfile.web --build-arg API_INTERNAL_URL=http://api:4000 -t mp-web .
+FROM node:22-bookworm-slim
+WORKDIR /app
+RUN corepack enable
+COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
+COPY apps/api/package.json apps/api/
+COPY apps/worker/package.json apps/worker/
+COPY apps/preview/package.json apps/preview/
+COPY apps/web/package.json apps/web/
+COPY packages/core/package.json packages/core/
+COPY packages/i18n/package.json packages/i18n/
+COPY packages/template-sdk/package.json packages/template-sdk/
+RUN corepack prepare pnpm@10.28.0 --activate && pnpm install --frozen-lockfile
+COPY . .
+ARG API_INTERNAL_URL=http://api:4000
+ENV API_INTERNAL_URL=$API_INTERNAL_URL
+RUN pnpm --filter @3t/web build
+ENV NODE_ENV=production
+CMD ["pnpm", "--filter", "@3t/web", "exec", "next", "start", "--port", "3000", "-H", "0.0.0.0"]

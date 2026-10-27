@@ -1,10 +1,16 @@
-/* Design tokens (docs/05 §2). Dark mode is not part of v1; tokens are separated so it can be added. */
+/* Design tokens (docs/05 §2). Dark mode is not part of v1; tokens are separated so it can be added.
+   Visual standard: Web Marketplace (Canva v3/v4/v5) — gradient primary, 20px cards,
+   layered shadows, 200ms motion. See workspace design-standard.md. */
 :root {
   --color-primary: #1d4ed8;
   --color-primary-hover: #1e40af;
+  --color-primary-violet: #7c3aed;
+  --color-gradient: linear-gradient(135deg, #1d4ed8 0%, #6d28d9 55%, #7c3aed 100%);
+  --color-gradient-hover: linear-gradient(135deg, #1e40af 0%, #5b21b6 55%, #6d28d9 100%);
   --color-on-primary: #ffffff;
   --color-surface: #ffffff;
   --color-bg: #f8fafc;
+  --color-bg-accent: #eef2ff;
   --color-border: #cbd5e1;
   --color-text: #0f172a;
   --color-text-muted: #475569;
@@ -31,14 +37,17 @@
   --space-7: 48px;
   --space-8: 64px;
 
-  --radius-input: 8px;
-  --radius-card: 12px;
-  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06);
+  --radius-input: 12px;
+  --radius-card: 20px;
+  --radius-pill: 999px;
+  --shadow-card: 0 1px 2px rgb(15 23 42 / 0.06), 0 8px 24px rgb(15 23 42 / 0.06);
+  --shadow-card-hover: 0 2px 4px rgb(15 23 42 / 0.08), 0 16px 32px rgb(15 23 42 / 0.12);
+  --shadow-button: 0 8px 20px rgb(29 78 216 / 0.35);
   --header-height: 64px;
   --sidebar-width: 240px;
   --container-store: 1280px;
   --container-form: 760px;
-  --motion: 160ms;
+  --motion: 200ms;
 }
 
 *,
@@ -78,7 +87,7 @@ a:hover {
 }
 
 :focus-visible {
-  outline: 3px solid var(--color-text);
+  outline: 3px solid var(--color-primary);
   outline-offset: 2px;
 }
 
@@ -121,8 +130,11 @@ h3 {
 /* Layout */
 .site-header {
   min-height: var(--header-height);
-  background: var(--color-surface);
+  background: rgb(255 255 255 / 0.85);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
   border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 1px 2px rgb(15 23 42 / 0.05);
   position: sticky;
   top: 0;
   z-index: 20;
@@ -155,6 +167,14 @@ h3 {
   min-height: 44px;
   display: inline-flex;
   align-items: center;
+  color: var(--color-text);
+}
+.site-nav a:not(.button):hover {
+  color: var(--color-primary);
+  text-decoration: underline;
+  text-decoration-color: var(--color-primary-violet);
+  text-underline-offset: 4px;
+  text-decoration-thickness: 2px;
 }
 .container {
   max-width: var(--container-store);
@@ -199,9 +219,10 @@ h3 {
   color: var(--color-text);
 }
 .dashboard__nav a[aria-current='page'] {
-  background: var(--color-info-bg);
+  background: var(--color-bg-accent);
   color: var(--color-primary-hover);
   font-weight: 600;
+  box-shadow: inset 3px 0 0 var(--color-primary-violet);
 }
 .dashboard__main {
   padding: var(--space-5);
@@ -235,6 +256,11 @@ h3 {
   border-radius: var(--radius-card);
   padding: var(--space-5);
   box-shadow: var(--shadow-card);
+  transition: box-shadow var(--motion), transform var(--motion);
+}
+.template-card:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
 }
 .stack {
   display: grid;
@@ -267,34 +293,44 @@ h3 {
   align-items: center;
   justify-content: center;
   gap: var(--space-2);
-  min-height: 44px;
+  min-height: 48px;
   padding: 0 var(--space-4);
   border-radius: var(--radius-input);
-  border: 1px solid var(--color-primary);
-  background: var(--color-primary);
+  border: 1px solid transparent;
+  background: var(--color-gradient);
   color: var(--color-on-primary);
   font: inherit;
   font-weight: 600;
   text-decoration: none;
   cursor: pointer;
-  transition: background var(--motion);
+  box-shadow: var(--shadow-button);
+  transition: filter var(--motion), transform var(--motion), box-shadow var(--motion);
 }
 .button:hover {
-  background: var(--color-primary-hover);
+  background: var(--color-gradient-hover);
   color: var(--color-on-primary);
+  filter: brightness(1.05);
+  transform: translateY(-1px);
+}
+.button:active {
+  transform: translateY(0);
 }
 .button--secondary {
   background: var(--color-surface);
   color: var(--color-primary);
+  border-color: var(--color-primary);
+  box-shadow: none;
 }
 .button--secondary:hover {
-  background: var(--color-info-bg);
+  background: var(--color-bg-accent);
   color: var(--color-primary-hover);
+  transform: translateY(-1px);
 }
 .button--danger {
   background: var(--color-surface);
   color: var(--color-danger);
   border-color: var(--color-danger);
+  box-shadow: none;
 }
 .button--danger:hover {
   background: var(--color-danger-bg);
@@ -327,17 +363,43 @@ h3 {
 .select,
 .textarea {
   width: 100%;
-  min-height: 44px;
+  min-height: 48px;
   padding: var(--space-2) var(--space-3);
   border: 1px solid var(--color-border);
   border-radius: var(--radius-input);
   background: var(--color-surface);
   font: inherit;
   color: var(--color-text);
+  transition: border-color var(--motion), box-shadow var(--motion);
+}
+.input:focus-visible,
+.select:focus-visible,
+.textarea:focus-visible {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgb(29 78 216 / 0.18);
+  outline: none;
 }
 .input[aria-invalid='true'],
 .select[aria-invalid='true'] {
   border-color: var(--color-danger);
+  box-shadow: 0 0 0 3px rgb(185 28 28 / 0.15);
+}
+.field__error {
+  font-weight: 600;
+}
+/* Password field: input stretches, toggle never shrinks away. */
+.password-field {
+  display: flex;
+  flex-wrap: nowrap;
+  gap: var(--space-2);
+  align-items: stretch;
+}
+.password-field .input {
+  flex: 1;
+  min-width: 0;
+}
+.password-field .button {
+  flex-shrink: 0;
 }
 .checkbox {
   display: flex;
@@ -481,6 +543,7 @@ table.table {
 .progress {
   width: 100%;
   height: 12px;
+  accent-color: var(--color-primary);
 }
 
 .code,
@@ -520,11 +583,12 @@ table.table {
 .preview-frame {
   width: 100%;
   border: 1px solid var(--color-border);
-  border-radius: var(--radius-input);
+  border-radius: var(--radius-card);
   background: white;
   height: 520px;
   display: block;
   margin-inline: auto;
+  box-shadow: var(--shadow-card);
 }
 
 .muted {
@@ -539,16 +603,298 @@ table.table {
   word-break: break-all;
 }
 .hero {
-  background: var(--color-surface);
+  background:
+    radial-gradient(600px 240px at 85% 0%, rgb(124 58 237 / 0.45), transparent 70%),
+    radial-gradient(480px 200px at 10% 100%, rgb(34 211 238 / 0.25), transparent 70%),
+    linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 45%, #7c3aed 100%);
   border-bottom: 1px solid var(--color-border);
+  color: #ffffff;
+}
+.hero h1 {
+  color: #ffffff;
+}
+.hero .muted {
+  color: rgb(255 255 255 / 0.85);
 }
 .hero .container {
   padding-block: var(--space-7);
+}
+/* Home redesign: badge, CTAs, trust points, category links, steps, CTA band. */
+.hero-badge {
+  justify-self: start;
+  margin: 0;
+  padding: 6px 14px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.16);
+  color: #ffffff;
+  font-size: 14px;
+  font-weight: 600;
+}
+.hero-actions {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.hero-actions .button--secondary {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #1d4ed8;
+}
+.trust-row {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-3);
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  color: rgb(255 255 255 / 0.9);
+}
+.trust-row li {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+}
+.trust-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: rgb(255 255 255 / 0.16);
+  color: #ffffff;
+}
+.trust-icon svg {
+  width: 20px;
+  height: 20px;
+  fill: currentColor;
+}
+.trust-icon svg[fill="none"] {
+  fill: none;
+}
+.category-card {
+  text-decoration: none;
+  color: inherit;
+}
+/* Canva v6 category illustration: a small browser mockup in the card's colours. */
+.cat-art {
+  display: grid;
+  gap: 8px;
+  padding: 12px;
+  border-radius: 12px;
+  background: linear-gradient(180deg, #eef2ff, #f8fafc);
+}
+.cat-art__dots {
+  display: flex;
+  gap: 5px;
+}
+.cat-art__dots i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #cbd5e1;
+}
+.cat-art__hero {
+  height: 56px;
+  border-radius: 8px;
+  background: linear-gradient(135deg, var(--cat-a), var(--cat-b));
+}
+.cat-art__row {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 8px;
+}
+.cat-art__row i {
+  height: 22px;
+  border-radius: 6px;
+  background: #dbeafe;
+}
+.category-card:hover {
+  text-decoration: none;
+}
+.step-number {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  background: var(--color-bg-accent);
+  color: #1d4ed8;
+  font-size: 18px;
+  font-weight: 700;
+}
+.cta-band {
+  padding: var(--space-6);
+  border-radius: var(--radius-card);
+  background: linear-gradient(135deg, #1e3a8a 0%, #1d4ed8 45%, #7c3aed 100%);
+  color: #ffffff;
+}
+.cta-band h2 {
+  color: #ffffff;
+}
+.cta-band .button {
+  background: #ffffff;
+  border-color: #ffffff;
+  color: #1d4ed8;
+}
+/* Animated hero: two-column layout, drifting blobs, floating preview cards. */
+.hero {
+  overflow: hidden;
+}
+.hero-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: var(--space-6);
+  align-items: center;
+}
+@media (max-width: 1023px) {
+  .hero-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.hero-visual {
+  position: relative;
+  padding: var(--space-4);
+}
+.hero-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(48px);
+  opacity: 0.55;
+  animation: hero-drift 12s ease-in-out infinite;
+}
+.hero-blob--a {
+  width: 220px;
+  height: 220px;
+  left: 0;
+  top: 0;
+  background: #22d3ee;
+}
+.hero-blob--b {
+  width: 260px;
+  height: 260px;
+  right: 0;
+  bottom: 0;
+  background: #c084fc;
+  animation-delay: 6s;
+}
+.hero-frame {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  border: 1px solid rgb(255 255 255 / 0.5);
+  box-shadow: 0 24px 48px rgb(15 23 42 / 0.35);
+}
+.hero-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.float-card {
+  position: absolute;
+  z-index: 2;
+  width: 150px;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 3px solid #ffffff;
+  box-shadow: var(--shadow-card-hover);
+  animation: hero-float 6s ease-in-out infinite;
+}
+.float-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.float-card--a {
+  left: 0;
+  bottom: 16px;
+}
+.float-card--b {
+  right: 0;
+  top: 20px;
+  width: 130px;
+  animation-delay: 3s;
+}
+@keyframes hero-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+@keyframes hero-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(20px, -16px) scale(1.08); }
+}
+@media (max-width: 639px) {
+  .float-card {
+    width: 110px;
+  }
+  .float-card--b {
+    width: 96px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-blob,
+  .float-card {
+    animation: none;
+  }
+}
+/* Auth pages (Canva v5): white card on a soft gradient backdrop. */
+.auth-main {
+  background: linear-gradient(180deg, var(--color-bg-accent) 0%, var(--color-bg) 55%);
+  border-radius: var(--radius-card);
+}
+/* Always-visible contact widget (bottom-right on every page). */
+.contact-widget {
+  position: fixed;
+  right: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 50;
+  display: grid;
+  gap: var(--space-2);
+  justify-items: end;
+}
+.contact-widget .button {
+  box-shadow: var(--shadow-card);
+}
+@media (max-width: 639px) {
+  .contact-widget {
+    right: var(--space-3);
+    bottom: var(--space-3);
+  }
+}
+/* Catalog: filter sidebar (Canva v3) + results, collapsing on tablet and below. */
+.catalog-layout {
+  display: grid;
+  grid-template-columns: 260px minmax(0, 1fr);
+  gap: var(--space-5);
+  align-items: start;
+}
+.catalog-layout__filters {
+  position: sticky;
+  top: calc(var(--header-height) + var(--space-4));
+}
+@media (max-width: 1023px) {
+  .catalog-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .catalog-layout__filters {
+    position: static;
+  }
 }
 .search {
   display: flex;
   gap: var(--space-2);
   max-width: 640px;
+}
+@media (max-width: 639px) {
+  .search {
+    flex-direction: column;
+  }
+  .search .button {
+    width: 100%;
+  }
 }
 .search .input {
   flex: 1;

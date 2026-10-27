@@ -14,7 +14,7 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
     <header className="site-header">
       <div className="site-header__inner">
         <Link href={base} className="brand">
-          3T Web Marketplace
+          Web Marketplace
         </Link>
         <nav className="site-nav" aria-label={t('ui.nav.main')}>
           <Link href={`${base}/templates`}>{t('ui.nav.templates')}</Link>
@@ -25,7 +25,7 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
             </>
           ) : me.status === 'anonymous' ? (
             <>
-              <Link href="/auth/login">{t('ui.nav.login')}</Link>
+              <Link href="/auth/login" className="button">{t('ui.nav.login')}</Link>
               <Link href="/auth/register">{t('ui.nav.register')}</Link>
             </>
           ) : null}
@@ -43,6 +43,7 @@ export function SiteFooter() {
     [`/${locale}/help`, 'ui.footer.help'],
     [`/${locale}/partners`, 'ui.footer.partners'],
     [`/${locale}/policies/terms`, 'ui.footer.terms'],
+    [`/${locale}/policies/privacy`, 'ui.footer.privacy'],
     [`/${locale}/contact`, 'ui.footer.contact'],
   ];
   return (

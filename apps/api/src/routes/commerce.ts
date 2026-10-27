@@ -646,7 +646,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const v = version.rows[0];
     if (!v) throw errors.notFound();
 
-    const bundleKey = `bundles/selfhost/${e.version_id}.zip`;
+    // v2 bundles carry the runtime layout (app/ + compose) for runtime adapters;
+    // v1 bundles were static-only and are never served again.
+    const bundleKey = `bundles/selfhost/v2/${e.version_id}.zip`;
     let bundle: { size: number; sha256: string };
     if (await store.exists(bundleKey)) {
       const info = await db.query<{ size_bytes: string; sha256: string }>("SELECT size_bytes::text, sha256 FROM artifacts WHERE object_key = $1", [bundleKey]);

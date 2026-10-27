@@ -9,12 +9,24 @@ const WIDTHS = [
   ['390px', 'ui.import.detail.width_mobile'],
 ] as const;
 
-/** D01 — public demo viewer. Static demos run on the separate preview origin, sandboxed. */
-export function DemoViewer({ url, title }: { url: string; title: string }) {
-  const { t } = useT();
+/** D01 — public demo viewer. Static demos run on the separate preview origin, sandboxed.
+ *  With a template slug it also shows the marketplace bar other demo sites have:
+ *  template title, back to detail, and choose-plan — so a visitor can go from
+ *  watching the demo straight to buying without hunting for the link. */
+export function DemoViewer({ url, title, slug }: { url: string; title: string; slug?: string }) {
+  const { t, locale } = useT();
   const [width, setWidth] = useState<(typeof WIDTHS)[number][0]>('100%');
   return (
     <div className="stack">
+      {slug ? (
+        <div className="row" style={{ justifyContent: 'space-between' }}>
+          <strong>{title}</strong>
+          <div className="row">
+            <a className="button button--secondary" href={`/${locale}/templates/${slug}`}>{t('ui.catalog.view_detail')}</a>
+            <a className="button" href={`/checkout/configure?template=${slug}`}>{t('ui.detail.choose_plan')}</a>
+          </div>
+        </div>
+      ) : null}
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <div role="group" aria-label={t('ui.import.detail.preview_width')} className="row">
           {WIDTHS.map(([value, key]) => (

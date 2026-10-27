@@ -34,7 +34,7 @@ function PayoutsInner() {
       <label>{t('ui.admin.payout_evidence')}<input value={evidence} onChange={(e) => setEvidence(e.target.value)} placeholder="TRF-…" /></label>
       {rows.length === 0 ? <EmptyState title={t('ui.admin.payouts')}><p>—</p></EmptyState> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.partner.display_name')}</th><th>{t('ui.partner.balance')}</th><th>{t('ui.partner.status')}</th><th>{t('ui.table.actions')}</th></tr></thead>
-        <tbody>{rows.map((r) => (<tr key={r.id}><td>{r.partner_name}</td><td>{r.amount_minor}</td><td>{r.status}</td><td><button className="button button--secondary" onClick={() => void act(r.id, 'approve')}>approve</button> <button className="button" onClick={() => void act(r.id, 'settle')}>settle</button> <button className="button button--danger" onClick={() => void act(r.id, 'fail')}>fail</button></td></tr>))}</tbody></table></div>
+        <tbody>{rows.map((r) => (<tr key={r.id}><td>{r.partner_name}</td><td>{r.amount_minor}</td><td>{r.status}</td><td><button type="button" className="button button--secondary" onClick={() => void act(r.id, 'approve')}>approve</button> <button type="button" className="button" onClick={() => void act(r.id, 'settle')}>settle</button> <button type="button" className="button button--danger" onClick={() => void act(r.id, 'fail')}>fail</button></td></tr>))}</tbody></table></div>
       )}
     </div>
   );

@@ -34,7 +34,7 @@ function AdminJobsInner() {
               <td className="tabular">{j.attempts}/{j.max_attempts}</td>
               <td>{j.last_error_code ?? '—'}</td>
               <td className="tabular">{dt(j.created_at)}</td>
-              <td>{(j.status === 'failed' || j.status === 'dead') ? <button className="button button--secondary" onClick={() => void api(`/admin/jobs/${j.id}/retry`, { method: 'POST' }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.action.retry')}</button> : '—'}</td>
+              <td>{(j.status === 'failed' || j.status === 'dead') ? <button type="button" className="button button--secondary" onClick={() => void api(`/admin/jobs/${j.id}/retry`, { method: 'POST' }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.action.retry')}</button> : '—'}</td>
             </tr>
           ))}</tbody>
         </table></div>

@@ -35,7 +35,7 @@ function PartnersInner() {
       <label>{t('ui.partner.description')}<input value={reason} onChange={(e) => setReason(e.target.value)} /></label>
       {rows.length === 0 ? <EmptyState title={t('ui.admin.partners')}><p>—</p></EmptyState> : (
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.partner.display_name')}</th><th>{t('ui.partner.status')}</th><th>{t('ui.table.actions')}</th></tr></thead>
-        <tbody>{rows.map((r) => (<tr key={r.id}><td>{r.display_name} · {r.domain}</td><td>{r.status}</td><td><button className="button" onClick={() => void review(r.id)}>{t('ui.admin.partners_review')}</button></td></tr>))}</tbody></table></div>
+        <tbody>{rows.map((r) => (<tr key={r.id}><td>{r.display_name} · {r.domain}</td><td>{r.status}</td><td><button type="button" className="button" onClick={() => void review(r.id)}>{t('ui.admin.partners_review')}</button></td></tr>))}</tbody></table></div>
       )}
     </div>
   );

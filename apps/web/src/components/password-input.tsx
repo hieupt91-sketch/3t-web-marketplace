@@ -8,7 +8,7 @@ export function PasswordInput(props: InputHTMLAttributes<HTMLInputElement>) {
   const { t } = useT();
   const [visible, setVisible] = useState(false);
   return (
-    <div className="row" style={{ flexWrap: 'nowrap' }}>
+    <div className="password-field">
       <input {...props} type={visible ? 'text' : 'password'} className="input" />
       <button type="button" className="button button--secondary" onClick={() => setVisible((v) => !v)} aria-pressed={visible} aria-controls={props.id}>
         {visible ? t('ui.auth.hide_password') : t('ui.auth.show_password')}

@@ -8,7 +8,7 @@ export default function AuthLayout({ children }: { children: ReactNode }) {
   return (
     <>
       <SiteHeader />
-      <main id="main" className="container container--form" tabIndex={-1}>
+      <main id="main" className="container container--form auth-main" tabIndex={-1}>
         {children}
       </main>
       <SiteFooter />
