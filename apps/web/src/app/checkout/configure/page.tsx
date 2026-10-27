@@ -10,7 +10,7 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
 interface Plan { id: string; code: string; deployment_mode: string; name: Record<string, string>; prices: { interval: string; amount_minor: string; currency: string }[] }
-interface Template { id: string; slug: string; title: string; plans: Plan[] }
+interface Template { id: string; slug: string; title: string; adapter: string | null; plans: Plan[] }
 
 function Configure() {
   const { t, locale } = useT();
@@ -64,6 +64,12 @@ function Configure() {
           );
         })}
       </fieldset>
+      {(() => {
+        const plan = tpl.plans.find((p) => p.id === selected);
+        if (!plan || plan.deployment_mode !== 'selfhost') return null;
+        const runtime = tpl.adapter === 'node-http' || tpl.adapter === 'next-standalone';
+        return <Alert tone="info"><p>{runtime ? t('ui.detail.hosting_runtime') : t('ui.detail.hosting_static')}</p></Alert>;
+      })()}
       <div className="row">
         <button type="button" className="button" disabled={busy || !selected} onClick={() => void continueToReview()}>{busy ? t('ui.state.saving') : t('ui.checkout.continue')}</button>
         <Link href={`/${locale}/templates/${tpl.slug}`}>{t('ui.action.cancel')}</Link>

@@ -46,7 +46,7 @@ interface PublicTemplateRow {
   id: string;
   created_at: Date;
   slug: string;
-  manifest_json: { export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
+  manifest_json: { adapter?: string; export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
   demo_label: string | null;
   requested_title: string | null;
   requested_summary: string | null;
@@ -72,6 +72,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
     title: translated ? row.requested_title : row.fallback_title,
     summary: translated ? row.requested_summary : row.fallback_summary,
     preview_image: null,
+    adapter: row.manifest_json.adapter ?? null,
     modes: row.manifest_json.export?.modes ?? [],
     content_locales: row.manifest_json.locales?.supported ?? [],
     capabilities: row.manifest_json.capabilities ?? [],

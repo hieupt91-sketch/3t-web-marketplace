@@ -51,6 +51,11 @@ export default async function TemplateDetail({ params }: Props) {
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>
         <p className="muted">{t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}</p>
       </section>
+      <section className="card stack">
+        <h2 style={{ marginTop: 0 }}>{t('ui.detail.hosting_title')}</h2>
+        <p style={{ margin: 0 }}>{template.adapter === 'node-http' || template.adapter === 'next-standalone' ? t('ui.detail.hosting_runtime') : t('ui.detail.hosting_static')}</p>
+        <p style={{ margin: 0 }}><Link href={`/${locale}/help/help-hosting-choice`}>{t('ui.detail.hosting_guide')}</Link></p>
+      </section>
       <section className="stack">
         <h2 style={{ marginBottom: 0 }}>{t('ui.detail.plans')}</h2>
         {template.plans.length === 0 ? (
