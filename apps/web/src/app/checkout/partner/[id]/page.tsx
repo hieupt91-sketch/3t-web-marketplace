@@ -29,8 +29,8 @@ function PartnerCheckoutInner({ id }: { id: string }) {
     <div className="stack">
       <h1>{t('ui.partner.title')}</h1>
       {error ? <ErrorState error={error} /> : null}
-      {status === null ? <button className="button" onClick={() => void claim()}>claim</button> : null}
-      {status === 'claimed' && !orderId ? <button className="button" onClick={() => void order()}>create order</button> : null}
+      {status === null ? <button type="button" className="button" onClick={() => void claim()}>claim</button> : null}
+      {status === 'claimed' && !orderId ? <button type="button" className="button" onClick={() => void order()}>create order</button> : null}
       {orderId ? <Link className="button" href={`/checkout/orders/${orderId}/pay`}>{t('ui.checkout.issue_pay_again')}</Link> : null}
     </div>
   );

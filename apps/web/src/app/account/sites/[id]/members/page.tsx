@@ -45,7 +45,7 @@ export default function SiteMembersPage() {
             <tr key={m.user_id}>
               <td>{m.email}</td>
               <td>{t(`ui.sites.member_${m.role}`)}</td>
-              <td>{m.role !== 'owner' ? <button className="button button--danger" onClick={() => void api(`/sites/${params.id}/members/${m.user_id}`, { method: 'DELETE' }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.sites.member_revoke')}</button> : '—'}</td>
+              <td>{m.role !== 'owner' ? <button type="button" className="button button--danger" onClick={() => void api(`/sites/${params.id}/members/${m.user_id}`, { method: 'DELETE' }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.sites.member_revoke')}</button> : '—'}</td>
             </tr>
           ))}</tbody>
         </table></div>

@@ -55,7 +55,7 @@ export default function SiteOverviewPage() {
       )}
       {site.status === 'active' ? (
         <div className="row">
-          <button className="button button--secondary" onClick={() => void api(`/sites/${site.id}/restart`, { method: 'POST' }).then(() => void load())}>{t('ui.sites.restart')}</button>
+          <button type="button" className="button button--secondary" onClick={() => void api(`/sites/${site.id}/restart`, { method: 'POST' }).then(() => void load())}>{t('ui.sites.restart')}</button>
         </div>
       ) : null}
     </div>

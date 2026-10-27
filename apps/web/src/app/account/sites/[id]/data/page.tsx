@@ -33,7 +33,7 @@ export default function SiteDataPage() {
       <div className="card stack">
         <p style={{ margin: 0 }}><strong>{t('ui.sites.data_export_title')}</strong></p>
         <p style={{ margin: 0 }} className="muted">{t('ui.sites.data_export_body')}</p>
-        <div className="row"><button className="button button--secondary" onClick={() => void api(`/sites/${params.id}/exports`, { method: 'POST' }).then((res) => { if (!res.ok) setError(res.error); })}>{t('ui.sites.export_create')}</button></div>
+        <div className="row"><button type="button" className="button button--secondary" onClick={() => void api(`/sites/${params.id}/exports`, { method: 'POST' }).then((res) => { if (!res.ok) setError(res.error); })}>{t('ui.sites.export_create')}</button></div>
         <p style={{ margin: 0 }}><Link href={`/account/sites/${params.id}/backups`}>{t('ui.sites.data_exports_link')}</Link></p>
       </div>
       <div className="card stack">
@@ -42,10 +42,10 @@ export default function SiteDataPage() {
         {site.status === 'delete_scheduled' ? (
           <>
             <p style={{ margin: 0 }}>{t('ui.sites.data_purge_at', { at: site.purge_at ?? '' })}</p>
-            <div className="row"><button className="button" onClick={() => act('cancel-delete')}>{t('ui.sites.data_cancel_delete')}</button></div>
+            <div className="row"><button type="button" className="button" onClick={() => act('cancel-delete')}>{t('ui.sites.data_cancel_delete')}</button></div>
           </>
         ) : (
-          <div className="row"><button className="button button--danger" onClick={() => act('delete-request')}>{t('ui.sites.data_request_delete')}</button></div>
+          <div className="row"><button type="button" className="button button--danger" onClick={() => act('delete-request')}>{t('ui.sites.data_request_delete')}</button></div>
         )}
       </div>
       {error ? <ErrorState error={error} onRetry={() => void load()} /> : null}

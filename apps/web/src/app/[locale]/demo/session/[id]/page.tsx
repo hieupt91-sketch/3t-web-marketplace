@@ -92,9 +92,9 @@ export default function DemoSessionPage({ params }: { params: Promise<{ id: stri
         <EmptyState title={t('ui.demo.unavailable')}><p>{t('ui.demo.unavailable_body')}</p></EmptyState>
       )}
       <div className="row">
-        <button className="button" disabled={busy !== null} onClick={() => void act('admin-launch')}>{t('ui.demo.admin_launch')}</button>
-        <button className="button button--secondary" disabled={busy !== null} onClick={() => void act('reset')}>{t('ui.demo.reset')}</button>
-        <button className="button button--danger" disabled={busy !== null} onClick={() => void act('cancel')}>{t('ui.demo.cancel')}</button>
+        <button type="button" className="button" disabled={busy !== null} onClick={() => void act('admin-launch')}>{t('ui.demo.admin_launch')}</button>
+        <button type="button" className="button button--secondary" disabled={busy !== null} onClick={() => void act('reset')}>{t('ui.demo.reset')}</button>
+        <button type="button" className="button button--danger" disabled={busy !== null} onClick={() => void act('cancel')}>{t('ui.demo.cancel')}</button>
         {session.template_slug ? <Link className="button button--secondary" href={`/${locale}/templates/${session.template_slug}`}>{t('ui.demo.buy_template')}</Link> : null}
       </div>
       {session.admin_launched && session.admin_url ? (

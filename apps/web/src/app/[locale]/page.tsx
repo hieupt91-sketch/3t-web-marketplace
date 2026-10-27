@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
+import { DemoCatalog } from '@/components/demo-catalog';
 
 type Params = { params: Promise<{ locale: Locale }> };
 
@@ -37,7 +38,10 @@ export default async function Home({ params }: Params) {
         {!featured.ok ? (
           <div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div>
         ) : featured.data.length === 0 ? (
-          <div className="card"><p style={{ margin: 0 }}>{t('ui.catalog.empty_catalog')}</p></div>
+          <>
+            <div className="card"><p style={{ margin: 0 }}>{t('ui.catalog.empty_catalog')}</p></div>
+            <DemoCatalog locale={locale} />
+          </>
         ) : (
           <div className="grid-cards">
             {featured.data.map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}

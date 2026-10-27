@@ -143,12 +143,12 @@ function MfaSection() {
         {mfaError ? <ErrorState error={mfaError} /> : null}
         <p>{enabled === null ? '' : enabled ? tt('ui.mfa.enabled') : tt('ui.mfa.disabled')}</p>
         <label>{tt('ui.mfa.step_up_password')}<input type="password" value={password} onChange={(e) => setPassword(e.target.value)} /></label>
-        <button className="button button--secondary" onClick={() => void stepUp()}>{tt('ui.mfa.step_up')}</button>
-        {!enabled ? <button className="button" onClick={() => void setup()}>{tt('ui.mfa.setup')}</button> : null}
+        <button type="button" className="button button--secondary" onClick={() => void stepUp()}>{tt('ui.mfa.step_up')}</button>
+        {!enabled ? <button type="button" className="button" onClick={() => void setup()}>{tt('ui.mfa.setup')}</button> : null}
         {secret ? <p className="mono">{secret}<br /><span>{uri}</span></p> : null}
-        {secret ? (<><label>{tt('ui.mfa.code')}<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" /></label><button className="button" onClick={() => void verify()}>{tt('ui.mfa.verify')}</button></>) : null}
+        {secret ? (<><label>{tt('ui.mfa.code')}<input value={code} onChange={(e) => setCode(e.target.value)} inputMode="numeric" /></label><button type="button" className="button" onClick={() => void verify()}>{tt('ui.mfa.verify')}</button></>) : null}
         {backupCodes ? <p role="status">{tt('ui.mfa.backup_codes')}: {backupCodes.join(', ')}</p> : null}
-        {enabled ? <button className="button button--danger" onClick={() => void disable()}>{tt('ui.mfa.disable')}</button> : null}
+        {enabled ? <button type="button" className="button button--danger" onClick={() => void disable()}>{tt('ui.mfa.disable')}</button> : null}
       </div>
     );
 

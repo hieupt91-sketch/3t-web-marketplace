@@ -43,7 +43,7 @@ export default function SiteUpdatesPage() {
           {others.map((v) => (
             <div key={v.id} className="row">
               <span className="mono">{v.semver}</span>
-              <button className="button button--secondary" onClick={() => void api(`/sites/${params.id}/update`, { method: 'POST', body: { version_id: v.id } }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.sites.update_action')}</button>
+              <button type="button" className="button button--secondary" onClick={() => void api(`/sites/${params.id}/update`, { method: 'POST', body: { version_id: v.id } }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.sites.update_action')}</button>
             </div>
           ))}
         </div>
