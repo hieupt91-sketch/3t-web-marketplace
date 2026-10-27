@@ -35,27 +35,54 @@ export default async function Home({ params }: Params) {
   return (
     <>
       <section className="hero">
-        <div className="container stack">
-          <p className="hero-badge">{t('ui.home.badge')}</p>
-          <h1>{t('ui.home.title')}</h1>
-          <p className="muted" style={{ maxWidth: 680 }}>{t('ui.home.lead')}</p>
-          <form className="search" action={`/${locale}/templates`} method="get" role="search">
-            <label htmlFor="home-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
-            <input id="home-search" className="input" type="search" name="q" placeholder={t('ui.catalog.search_placeholder')} />
-            <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
-          </form>
-          <div className="hero-actions">
-            <Link className="button" href={`/${locale}/templates`}>{t('ui.home.browse_all')}</Link>
-            <Link className="button button--secondary" href={`/${locale}/how-it-works`}>{t('ui.home.how_it_works')}</Link>
+        <div className="container hero-layout">
+          <div className="stack">
+            <p className="hero-badge">{t('ui.home.badge')}</p>
+            <h1>{t('ui.home.title')}</h1>
+            <p className="muted" style={{ maxWidth: 680 }}>{t('ui.home.lead')}</p>
+            <form className="search" action={`/${locale}/templates`} method="get" role="search">
+              <label htmlFor="home-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
+              <input id="home-search" className="input" type="search" name="q" placeholder={t('ui.catalog.search_placeholder')} />
+              <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
+            </form>
+            <div className="hero-actions">
+              <Link className="button" href={`/${locale}/templates`}>{t('ui.home.browse_all')}</Link>
+              <Link className="button button--secondary" href={`/${locale}/how-it-works`}>{t('ui.home.how_it_works')}</Link>
+            </div>
+            <ul className="trust-row">
+              <li>{t('ui.home.trust_demo')}</li>
+              <li>{t('ui.home.trust_instant')}</li>
+              <li>{t('ui.home.trust_support')}</li>
+            </ul>
           </div>
-          <ul className="trust-row">
-            <li>{t('ui.home.trust_demo')}</li>
-            <li>{t('ui.home.trust_instant')}</li>
-            <li>{t('ui.home.trust_support')}</li>
-          </ul>
+          <div className="hero-visual" aria-hidden="true">
+            <div className="hero-blob hero-blob--a" />
+            <div className="hero-blob hero-blob--b" />
+            <div className="hero-frame">
+              <img src="/hero/hero-showcase.jpg" alt="" width={960} height={640} />
+            </div>
+            <div className="float-card float-card--a">
+              <img src="/demo/demo-fashion.jpg" alt="" width={300} height={200} />
+            </div>
+            <div className="float-card float-card--b">
+              <img src="/demo/demo-restaurant.jpg" alt="" width={300} height={200} />
+            </div>
+          </div>
         </div>
       </section>
       <div className="container stack">
+        <section className="stack">
+          <h2 style={{ margin: 0 }}>{t('ui.home.intro_title')}</h2>
+          <p className="muted" style={{ margin: 0, maxWidth: 760 }}>{t('ui.home.intro_lead')}</p>
+          <div className="grid-cards">
+            {[1, 2, 3].map((pillar) => (
+              <section className="card stack" key={pillar}>
+                <h3 style={{ margin: 0 }}>{t(`ui.home.intro_p${pillar}_title`)}</h3>
+                <p className="muted" style={{ margin: 0 }}>{t(`ui.home.intro_p${pillar}_body`)}</p>
+              </section>
+            ))}
+          </div>
+        </section>
         <section className="stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.categories_title')}</h2>
           <p className="muted" style={{ margin: 0 }}>{t('ui.home.categories_lead')}</p>

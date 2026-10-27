@@ -682,6 +682,107 @@ table.table {
   border-color: #ffffff;
   color: #1d4ed8;
 }
+/* Animated hero: two-column layout, drifting blobs, floating preview cards. */
+.hero {
+  overflow: hidden;
+}
+.hero-layout {
+  display: grid;
+  grid-template-columns: 1.05fr 0.95fr;
+  gap: var(--space-6);
+  align-items: center;
+}
+@media (max-width: 1023px) {
+  .hero-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.hero-visual {
+  position: relative;
+  padding: var(--space-4);
+}
+.hero-blob {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(48px);
+  opacity: 0.55;
+  animation: hero-drift 12s ease-in-out infinite;
+}
+.hero-blob--a {
+  width: 220px;
+  height: 220px;
+  left: 0;
+  top: 0;
+  background: #22d3ee;
+}
+.hero-blob--b {
+  width: 260px;
+  height: 260px;
+  right: 0;
+  bottom: 0;
+  background: #c084fc;
+  animation-delay: 6s;
+}
+.hero-frame {
+  position: relative;
+  z-index: 1;
+  overflow: hidden;
+  border-radius: var(--radius-card);
+  border: 1px solid rgb(255 255 255 / 0.5);
+  box-shadow: 0 24px 48px rgb(15 23 42 / 0.35);
+}
+.hero-frame img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.float-card {
+  position: absolute;
+  z-index: 2;
+  width: 150px;
+  overflow: hidden;
+  border-radius: 14px;
+  border: 3px solid #ffffff;
+  box-shadow: var(--shadow-card-hover);
+  animation: hero-float 6s ease-in-out infinite;
+}
+.float-card img {
+  display: block;
+  width: 100%;
+  height: auto;
+}
+.float-card--a {
+  left: 0;
+  bottom: 16px;
+}
+.float-card--b {
+  right: 0;
+  top: 20px;
+  width: 130px;
+  animation-delay: 3s;
+}
+@keyframes hero-float {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(-12px); }
+}
+@keyframes hero-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(20px, -16px) scale(1.08); }
+}
+@media (max-width: 639px) {
+  .float-card {
+    width: 110px;
+  }
+  .float-card--b {
+    width: 96px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .hero-blob,
+  .float-card {
+    animation: none;
+  }
+}
 /* Auth pages (Canva v5): white card on a soft gradient backdrop. */
 .auth-main {
   background: linear-gradient(180deg, var(--color-bg-accent) 0%, var(--color-bg) 55%);
