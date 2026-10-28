@@ -2,7 +2,6 @@
 
 import { useState } from 'react';
 import Link from 'next/link';
-import type { CSSProperties } from 'react';
 import { useT } from '@/lib/i18n';
 import { api, type ApiError } from '@/lib/api';
 import type { TemplateSummary } from '@/lib/api-server';
@@ -10,16 +9,18 @@ import { TemplateCard } from '@/components/template-card';
 import { EmptyState, ErrorState, Loading } from '@/components/ui';
 import { classifyIntent, type FinderCategory } from '@/lib/finder-intent';
 
-/** Purpose picker cards: same gradients as the old category cards. */
-const PURPOSES: { code: FinderCategory; a: string; b: string }[] = [
-  { code: 'landing', a: '#1d4ed8', b: '#7c3aed' },
-  { code: 'business', a: '#0f766e', b: '#0ea5e9' },
-  { code: 'food', a: '#ea580c', b: '#f43f5e' },
-  { code: 'realestate', a: '#0284c7', b: '#6366f1' },
-  { code: 'store', a: '#db2777', b: '#8b5cf6' },
-  { code: 'beauty', a: '#06b6d4', b: '#3b82f6' },
-  { code: 'blog', a: '#d97706', b: '#ea580c' },
-  { code: 'portfolio', a: '#475569', b: '#8b5cf6' },
+/** Purpose picker cards: each shows a real photo from a representative
+ *  template of its industry (all 96 templates ship a hero photo); the
+ *  gradient behind it is only the fallback when that photo fails to load. */
+const PURPOSES: { code: FinderCategory; a: string; b: string; rep: string }[] = [
+  { code: 'landing', a: '#1d4ed8', b: '#7c3aed', rep: 'landing-saas' },
+  { code: 'business', a: '#0f766e', b: '#0ea5e9', rep: 'phong-kham' },
+  { code: 'food', a: '#ea580c', b: '#f43f5e', rep: 'nha-hang-quan-an' },
+  { code: 'realestate', a: '#0284c7', b: '#6366f1', rep: 'bat-dong-san' },
+  { code: 'store', a: '#db2777', b: '#8b5cf6', rep: 'thoi-trang' },
+  { code: 'beauty', a: '#06b6d4', b: '#3b82f6', rep: 'spa-lam-dep' },
+  { code: 'blog', a: '#d97706', b: '#ea580c', rep: 'blog-tin-tuc' },
+  { code: 'portfolio', a: '#475569', b: '#8b5cf6', rep: 'portfolio-nhiep-anh' },
 ];
 
 /**
@@ -94,10 +95,8 @@ export function TemplateFinder() {
             style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit', ...(selected === purpose.code ? { outline: '2px solid #1d4ed8' } : {}) }}
             onClick={() => pickPurpose(purpose.code)}
           >
-            <div className="cat-art" aria-hidden="true" style={{ '--cat-a': purpose.a, '--cat-b': purpose.b } as CSSProperties}>
-              <div className="cat-art__dots"><i /><i /><i /></div>
-              <div className="cat-art__hero" />
-              <div className="cat-art__row"><i /><i /><i /></div>
+            <div className="purpose-photo" aria-hidden="true" style={{ background: `linear-gradient(135deg, ${purpose.a}, ${purpose.b})` }}>
+              <img src={`/api/v1/templates/${purpose.rep}/preview-image`} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
             </div>
             <h3 style={{ margin: 0 }}>{t(`ui.category.${purpose.code}`)}</h3>
             <p className="muted" style={{ margin: 0 }}>{t(`ui.home.purpose_${purpose.code}`)}</p>

@@ -87,19 +87,6 @@ export default async function Home({ params }: Params) {
             </div>
           )}
         </section>
-        <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.help_row_title')}</h2>
-          <p className="muted" style={{ margin: 0 }}>
-            <Link href={`/${locale}/help/help-find-template`}>{t('ui.home.help_find')}</Link>{' · '}
-            <Link href={`/${locale}/help/help-buy`}>{t('ui.home.help_buy')}</Link>{' · '}
-            <Link href={`/${locale}/help/help-after-buy`}>{t('ui.home.help_after')}</Link>{' · '}
-            <Link href={`/${locale}/help/help-build-static`}>{t('ui.home.guide_static_title')}</Link>{' · '}
-            <Link href={`/${locale}/help/help-build-dynamic`}>{t('ui.home.guide_dynamic_title')}</Link>{' · '}
-            <Link href={`/${locale}/help/help-account`}>{t('ui.home.help_account')}</Link>{' · '}
-            <Link href={`/${locale}/help/help-partner`}>{t('ui.home.help_partner')}</Link>{' · '}
-            <Link href={`/${locale}/help`}>{t('ui.home.help_all')}</Link>
-          </p>
-        </section>
         <section className="cta-band stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.cta_title')}</h2>
           <p style={{ margin: 0 }}>{t('ui.home.cta_body')}</p>

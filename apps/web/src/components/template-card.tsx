@@ -1,3 +1,6 @@
+'use client';
+
+import { useState } from 'react';
 import Link from 'next/link';
 import { formatMoney, translate, type Locale } from '@3t/i18n';
 import type { TemplateSummary } from '@/lib/api-server';
@@ -21,6 +24,10 @@ export function coverGradient(slug: string): string {
 
 export function TemplateCard({ template, locale }: { template: TemplateSummary; locale: Locale }) {
   const t = (key: string, params?: Record<string, string>) => translate(locale, key, params);
+  // If the photo fails to load (republished without a hero photo), fall back
+  // to the gradient cover instead of showing a broken image.
+  const [imgFailed, setImgFailed] = useState(false);
+  const showImg = !!template.preview_image && !imgFailed;
   // Lowest current price across modes, shown as a "from" figure (docs/05 §13 P02).
   const cheapest = template.starting_prices.reduce<TemplateSummary['starting_prices'][number] | null>(
     (min, p) => (!min || BigInt(p.amount_minor) < BigInt(min.amount_minor) ? p : min),
@@ -28,9 +35,9 @@ export function TemplateCard({ template, locale }: { template: TemplateSummary; 
   );
   return (
     <article className="card template-card">
-      <div className="template-card__image" style={template.preview_image ? undefined : { background: coverGradient(template.slug), border: 'none' }}>
-        {template.preview_image ? (
-          <img src={template.preview_image} alt={t('ui.catalog.screenshot_alt', { title: template.title })} />
+      <div className="template-card__image" style={showImg ? undefined : { background: coverGradient(template.slug), border: 'none' }}>
+        {showImg ? (
+          <img src={template.preview_image!} alt={t('ui.catalog.screenshot_alt', { title: template.title })} onError={() => setImgFailed(true)} />
         ) : (
           <span style={{ color: '#ffffff', fontWeight: 700, fontSize: 18, textAlign: 'center', padding: 'var(--space-4)' }}>{template.title}</span>
         )}
