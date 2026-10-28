@@ -73,18 +73,6 @@ export default async function Home({ params }: Params) {
       <div className="container stack">
         <TemplateFinder />
         <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.intro_title')}</h2>
-          <p className="muted" style={{ margin: 0, maxWidth: 760 }}>{t('ui.home.intro_lead')}</p>
-          <div className="grid-cards">
-            {[1, 2, 3].map((pillar) => (
-              <section className="card stack" key={pillar}>
-                <h3 style={{ margin: 0 }}>{t(`ui.home.intro_p${pillar}_title`)}</h3>
-                <p className="muted" style={{ margin: 0 }}>{t(`ui.home.intro_p${pillar}_body`)}</p>
-              </section>
-            ))}
-          </div>
-        </section>
-        <section className="stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.featured')}</h2>
           {!featured.ok ? (
             <div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div>
@@ -100,68 +88,17 @@ export default async function Home({ params }: Params) {
           )}
         </section>
         <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.steps_title')}</h2>
-          <div className="grid-cards">
-            {[1, 2, 3].map((step) => (
-              <section className="card stack" key={step}>
-                <span className="step-number" aria-hidden="true">{step}</span>
-                <h3 style={{ margin: 0 }}>{t(`ui.home.step${step}_title`)}</h3>
-                <p className="muted" style={{ margin: 0 }}>{t(`ui.home.step${step}_body`)}</p>
-              </section>
-            ))}
-          </div>
-        </section>
-        <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.modes_title')}</h2>
-          <div className="grid-cards">
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.mode_selfhost_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.mode_selfhost_body')}</p>
-            </section>
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.mode_hosted_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.mode_hosted_body')}</p>
-            </section>
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.project_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.project_body')}</p>
-              <div><Link href={`/${locale}/contact`}>{t('ui.home.project_action')}</Link></div>
-            </section>
-          </div>
-        </section>
-        <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.after_title')}</h2>
-          <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_lead')}</p>
-          <div className="grid-cards">
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.after_domain_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_domain_body')}</p>
-            </section>
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.after_hosting_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_hosting_body')}</p>
-            </section>
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.after_package_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_package_body')}</p>
-            </section>
-          </div>
-        </section>
-        <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.guides_title')}</h2>
-          <p className="muted" style={{ margin: 0 }}>{t('ui.home.guides_lead')}</p>
-          <div className="grid-cards">
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.guide_static_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.guide_static_body')}</p>
-              <div><Link href={`/${locale}/help/help-build-static`}>{t('ui.home.guide_action')}</Link></div>
-            </section>
-            <section className="card stack">
-              <h3 style={{ margin: 0 }}>{t('ui.home.guide_dynamic_title')}</h3>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.guide_dynamic_body')}</p>
-              <div><Link href={`/${locale}/help/help-build-dynamic`}>{t('ui.home.guide_action')}</Link></div>
-            </section>
-          </div>
+          <h2 style={{ margin: 0 }}>{t('ui.home.help_row_title')}</h2>
+          <p className="muted" style={{ margin: 0 }}>
+            <Link href={`/${locale}/help/help-find-template`}>{t('ui.home.help_find')}</Link>{' · '}
+            <Link href={`/${locale}/help/help-buy`}>{t('ui.home.help_buy')}</Link>{' · '}
+            <Link href={`/${locale}/help/help-after-buy`}>{t('ui.home.help_after')}</Link>{' · '}
+            <Link href={`/${locale}/help/help-build-static`}>{t('ui.home.guide_static_title')}</Link>{' · '}
+            <Link href={`/${locale}/help/help-build-dynamic`}>{t('ui.home.guide_dynamic_title')}</Link>{' · '}
+            <Link href={`/${locale}/help/help-account`}>{t('ui.home.help_account')}</Link>{' · '}
+            <Link href={`/${locale}/help/help-partner`}>{t('ui.home.help_partner')}</Link>{' · '}
+            <Link href={`/${locale}/help`}>{t('ui.home.help_all')}</Link>
+          </p>
         </section>
         <section className="cta-band stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.cta_title')}</h2>
