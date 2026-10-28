@@ -75,7 +75,9 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
         actorId: auth.userId,
         action: 'settings.contact_updated',
         resourceType: 'settings',
-        resourceId: 'contact.channels',
+        // audit_logs.resource_id is uuid: a settings key is not a uuid, so
+        // the action name identifies the setting and resource stays null.
+        resourceId: null,
         traceId: request.id,
       });
       return reply.status(200).send({ data: next });
@@ -128,8 +130,13 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
         actorId: auth.userId,
         action: 'settings.subdomain_fee_updated',
         resourceType: 'settings',
-        resourceId: 'subdomain.fee',
+        // audit_logs.resource_id is uuid: a settings key is not a uuid, so
+        // the action name identifies the setting and resource stays null.
+        // (Passing the key here used to 500 with 22P02 AFTER the value was
+        // already saved, so the UI reported failure for a successful save.)
+        resourceId: null,
         traceId: request.id,
+        diff: { amount_minor: amount, period },
       });
       return reply.status(200).send({ data: next });
     },

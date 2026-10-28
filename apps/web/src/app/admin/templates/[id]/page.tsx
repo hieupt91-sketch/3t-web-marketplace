@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { formatMoney, type Locale } from '@3t/i18n';
 import { RequirePermission, useCurrentUser } from '@/components/dashboard-shell';
@@ -289,6 +289,7 @@ function TemplateDetailInner() {
   const { t, dt } = useT();
   const me = useCurrentUser();
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [detail, setDetail] = useState<Detail | null>(null);
   const [etag, setEtag] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -324,11 +325,22 @@ function TemplateDetailInner() {
     if (!res.ok) return setActionError(res.error);
     await load();
   }
+  async function remove() {
+    const name = detail?.translations.find((tr) => tr.locale === 'vi')?.title ?? detail?.slug ?? '';
+    if (!window.confirm(t('ui.template_edit.delete_confirm', { title: name }))) return;
+    setBusy(true);
+    setActionError(null);
+    const res = await api(`/admin/templates/${id}`, { method: 'DELETE' });
+    setBusy(false);
+    if (!res.ok) return setActionError(res.error);
+    router.push('/admin/templates');
+  }
 
   if (error && !detail) return <ErrorState error={error} onRetry={() => void load()} />;
   if (!detail) return <Loading />;
 
   const canPublish = me.permissions.includes('template:publish');
+  const canImport = me.permissions.includes('template:import');
   const canPrice = me.permissions.includes('pricing:write');
   const canTranslate = me.permissions.includes('translation:write');
   const title = detail.translations.find((tr) => tr.locale === 'vi')?.title ?? detail.slug;
@@ -366,6 +378,9 @@ function TemplateDetailInner() {
           ) : null}
           {canPublish && detail.status === 'published' ? (
             <button type="button" className="button button--danger" disabled={busy} onClick={() => void archive()}>{t('ui.template_edit.archive_action')}</button>
+          ) : null}
+          {canImport && detail.status === 'draft' && !detail.published_version_id ? (
+            <button type="button" className="button button--danger" disabled={busy} onClick={() => void remove()}>{t('ui.template_edit.delete_action')}</button>
           ) : null}
         </div>
         {!detail.publish.ready && detail.status !== 'published' ? <p id="publish-hint" className="field__hint">{t('ui.template_edit.publish_hint')}</p> : null}

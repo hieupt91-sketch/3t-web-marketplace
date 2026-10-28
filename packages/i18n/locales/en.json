@@ -835,6 +835,8 @@
   "ui.template.status.published": "Published",
   "ui.template_edit.archive_action": "Archive",
   "ui.template_edit.archive_confirm": "Archive this template? Existing buyers keep access; only new sales stop.",
+  "ui.template_edit.delete_action": "Delete this template",
+  "ui.template_edit.delete_confirm": "Delete template “{title}” and all its draft versions, imports and plans? Only unsold templates can be deleted; published templates cannot. Source artifacts are kept by design.",
   "ui.template_edit.content": "Content and translations",
   "ui.template_edit.description": "Full description",
   "ui.template_edit.gate_blocked": "Not met",
