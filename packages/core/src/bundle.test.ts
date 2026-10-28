@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yauzl from 'yauzl';
-import { buildSelfhostBundle } from './bundle.ts';
+import { buildCleanSiteTree, buildSelfhostBundle, toCleanVariantText } from './bundle.ts';
 
 function entries(zipPath: string): Promise<Record<string, Buffer>> {
   return new Promise((resolve, reject) => {
@@ -99,5 +99,45 @@ describe('buildSelfhostBundle', () => {
     expect(files['docker-compose.yml']!.toString()).toContain('appdata:/app/data');
     expect(files['Dockerfile']!.toString()).not.toContain('RUN ');
     expect(files['README.md']!.toString()).toContain('Docker volume');
+  });
+});
+
+describe('toCleanVariantText', () => {
+  it('replaces the demo phone with the right placeholder per language and strips markers', () => {
+    const input = '<p data-vi="0967 136 099 (số demo)" data-en="0967 136 099 (demo number)">0967 136 099 (số demo)</p>';
+    expect(toCleanVariantText(input)).toBe('<p data-vi="Số điện thoại của bạn" data-en="Your phone number">Số điện thoại của bạn</p>');
+  });
+
+  it('replaces bare digits (comments, README prose) with the Vietnamese placeholder', () => {
+    expect(toCleanVariantText('Liên hệ demo: 0967 136 099, Zalo: 0967136099.')).toBe('Liên hệ demo: Số điện thoại của bạn, Zalo: Số điện thoại của bạn.');
+  });
+
+  it('removes stale 3T demo-warning sentences in both languages', () => {
+    const vi = 'Giữ nguyên. Riêng số demo 0967 136 099 là số demo của 3T: nếu quên thay, khách sẽ gọi nhầm. Hết.';
+    expect(toCleanVariantText(vi)).toBe('Giữ nguyên. Hết.');
+    const en = 'Keep this. The demo number 0967 136 099 belongs to 3T: replace it before publishing. Done.';
+    expect(toCleanVariantText(en)).toBe('Keep this. Done.');
+  });
+
+  it('rewrites the CONFIG comment parenthetical as a fill-in instruction', () => {
+    const input = '- Điện thoại demo: 0967 136 099 (số demo của 3T — người mua thay bằng số thật trước khi đăng)';
+    expect(toCleanVariantText(input)).toBe('- Điện thoại demo: Số điện thoại của bạn (thay bằng số thật trước khi đăng)');
+  });
+
+  it('leaves text without the demo phone untouched', () => {
+    const input = '<p data-vi="0900 xxx xxx (số mẫu)" data-en="0900 xxx xxx (sample)">0900 xxx xxx (số mẫu)</p>';
+    expect(toCleanVariantText(input)).toBe(input);
+  });
+
+  it('buildCleanSiteTree transforms html/md and copies the rest byte-for-byte', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'bundle-clean-'));
+    const src = join(dir, 'src');
+    const dest = join(dir, 'dest');
+    await mkdir(src, { recursive: true });
+    await writeFile(join(src, 'index.html'), '<p data-vi="0967 136 099 (số demo)" data-en="0967 136 099 (demo number)">x</p>');
+    await writeFile(join(src, 'styles.css'), 'body{color:red}');
+    await buildCleanSiteTree(src, dest);
+    expect(await readFile(join(dest, 'index.html'), 'utf8')).toBe('<p data-vi="Số điện thoại của bạn" data-en="Your phone number">x</p>');
+    expect(await readFile(join(dest, 'styles.css'), 'utf8')).toBe('body{color:red}');
   });
 });

@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { EmptyState, ErrorState, Loading, StatusBadge } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
+import { SetupWizard } from '@/components/setup-wizard';
 
 interface DownloadsData {
   entitlement: { id: string; mode: string; status: string; updates_until: string | null; template_slug: string; version: string };
@@ -26,9 +27,9 @@ function DownloadsInner() {
   }, [id]);
   useEffect(() => { void load(); }, [load]);
 
-  async function freshLink() {
+  async function freshLink(variant: 'demo' | 'clean') {
     setBusy(true); setActionError(null);
-    const res = await api<{ url: string }>(`/entitlements/${id}/download-links`, { method: 'POST' });
+    const res = await api<{ url: string }>(`/entitlements/${id}/download-links`, { method: 'POST', body: { variant } });
     setBusy(false);
     if (!res.ok) return setActionError(res.error);
     window.location.href = res.data.url;
@@ -51,9 +52,18 @@ function DownloadsInner() {
         </dl>
         {actionError ? <ErrorState error={actionError} /> : null}
         {e.mode === 'selfhost' ? (
-          <button type="button" className="button" disabled={busy || e.status !== 'active'} onClick={() => void freshLink()}>
-            {busy ? t('ui.state.saving') : t('ui.account.download_new_link')}
-          </button>
+          <div className="stack">
+            <SetupWizard slug={e.template_slug} version={e.version} />
+            <p>{t('ui.account.download_variant_note')}</p>
+            <div className="row">
+              <button type="button" className="button" disabled={busy || e.status !== 'active'} onClick={() => void freshLink('demo')}>
+                {busy ? t('ui.state.saving') : t('ui.account.download_new_link')}
+              </button>
+              <button type="button" className="button button--secondary" disabled={busy || e.status !== 'active'} onClick={() => void freshLink('clean')}>
+                {busy ? t('ui.state.saving') : t('ui.account.download_clean_link')}
+              </button>
+            </div>
+          </div>
         ) : null}
       </div>
       <h2>{t('ui.account.download_history')}</h2>
