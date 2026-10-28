@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import Link from 'next/link';
 import { useT } from '@/lib/i18n';
 
 type SiteType = 'landing' | 'news' | 'product';
@@ -47,7 +48,7 @@ function RadioRow<T extends string>({ name, value, options, onChange }: {
  * admin panel the template does not have.
  */
 export function HostingAdvisor({ adapter, sizeLabel }: { adapter: string | null; sizeLabel: string | null }) {
-  const { t } = useT();
+  const { t, locale } = useT();
   const [siteType, setSiteType] = useState<SiteType>('landing');
   const [domain, setDomain] = useState<Domain>('own');
   const [images, setImages] = useState<Images>('few');
@@ -63,12 +64,12 @@ export function HostingAdvisor({ adapter, sizeLabel }: { adapter: string | null;
   const countsDeploys = rec === 'pages' || rec === 'r2' || rec === 'cms';
   // Explicit literal keys (not dynamic template strings) so the
   // check-ui-strings gate verifies every recommendation key exists.
-  const recs: Record<Rec, { title: string; body: string; steps: string[] }> = {
-    pages: { title: t('ui.advisor.rec_pages_title'), body: t('ui.advisor.rec_pages_body'), steps: [t('ui.advisor.rec_pages_step1'), t('ui.advisor.rec_pages_step2'), t('ui.advisor.rec_pages_step3')] },
-    r2: { title: t('ui.advisor.rec_r2_title'), body: t('ui.advisor.rec_r2_body'), steps: [t('ui.advisor.rec_r2_step1'), t('ui.advisor.rec_r2_step2'), t('ui.advisor.rec_r2_step3')] },
-    cms: { title: t('ui.advisor.rec_cms_title'), body: t('ui.advisor.rec_cms_body'), steps: [t('ui.advisor.rec_cms_step1'), t('ui.advisor.rec_cms_step2'), t('ui.advisor.rec_cms_step3')] },
-    dynamic: { title: t('ui.advisor.rec_dynamic_title'), body: t('ui.advisor.rec_dynamic_body'), steps: [] },
-    runtime: { title: t('ui.advisor.rec_runtime_title'), body: t('ui.advisor.rec_runtime_body'), steps: [t('ui.advisor.rec_runtime_step1'), t('ui.advisor.rec_runtime_step2'), t('ui.advisor.rec_runtime_step3')] },
+  const recs: Record<Rec, { title: string; body: string; steps: string[]; guide: string }> = {
+    pages: { title: t('ui.advisor.rec_pages_title'), body: t('ui.advisor.rec_pages_body'), steps: [t('ui.advisor.rec_pages_step1'), t('ui.advisor.rec_pages_step2'), t('ui.advisor.rec_pages_step3')], guide: 'help-build-static' },
+    r2: { title: t('ui.advisor.rec_r2_title'), body: t('ui.advisor.rec_r2_body'), steps: [t('ui.advisor.rec_r2_step1'), t('ui.advisor.rec_r2_step2'), t('ui.advisor.rec_r2_step3')], guide: 'help-build-static' },
+    cms: { title: t('ui.advisor.rec_cms_title'), body: t('ui.advisor.rec_cms_body'), steps: [t('ui.advisor.rec_cms_step1'), t('ui.advisor.rec_cms_step2'), t('ui.advisor.rec_cms_step3')], guide: 'help-build-static' },
+    dynamic: { title: t('ui.advisor.rec_dynamic_title'), body: t('ui.advisor.rec_dynamic_body'), steps: [], guide: 'help-build-dynamic' },
+    runtime: { title: t('ui.advisor.rec_runtime_title'), body: t('ui.advisor.rec_runtime_body'), steps: [t('ui.advisor.rec_runtime_step1'), t('ui.advisor.rec_runtime_step2'), t('ui.advisor.rec_runtime_step3')], guide: 'help-build-dynamic' },
   };
   const recText = recs[rec];
 
@@ -125,6 +126,7 @@ export function HostingAdvisor({ adapter, sizeLabel }: { adapter: string | null;
             {recText.steps.map((s) => <li key={s}>{s}</li>)}
           </ol>
         ) : null}
+        <p style={{ margin: 0 }}><Link href={`/${locale}/help/${recText.guide}`}>{t('ui.advisor.guide_link')}</Link></p>
         {rec === 'pages' && siteType === 'news' ? <p style={{ margin: 0 }}>{t('ui.advisor.rec_news_note')}</p> : null}
         {rec === 'cms' && images === 'many' ? <p style={{ margin: 0 }}>{t('ui.advisor.cms_images_note')}</p> : null}
         {countsDeploys && frequency === 'often' ? <p style={{ margin: 0 }}>{t('ui.advisor.freq_note')}</p> : null}

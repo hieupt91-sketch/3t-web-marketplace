@@ -147,6 +147,22 @@ export default async function Home({ params }: Params) {
             </section>
           </div>
         </section>
+        <section className="stack">
+          <h2 style={{ margin: 0 }}>{t('ui.home.guides_title')}</h2>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.home.guides_lead')}</p>
+          <div className="grid-cards">
+            <section className="card stack">
+              <h3 style={{ margin: 0 }}>{t('ui.home.guide_static_title')}</h3>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.home.guide_static_body')}</p>
+              <div><Link href={`/${locale}/help/help-build-static`}>{t('ui.home.guide_action')}</Link></div>
+            </section>
+            <section className="card stack">
+              <h3 style={{ margin: 0 }}>{t('ui.home.guide_dynamic_title')}</h3>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.home.guide_dynamic_body')}</p>
+              <div><Link href={`/${locale}/help/help-build-dynamic`}>{t('ui.home.guide_action')}</Link></div>
+            </section>
+          </div>
+        </section>
         <section className="cta-band stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.cta_title')}</h2>
           <p style={{ margin: 0 }}>{t('ui.home.cta_body')}</p>
