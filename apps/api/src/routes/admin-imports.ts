@@ -457,7 +457,7 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
     const auth = requirePermission(request, 'template:import');
     const result = await tx(db, async (client) => {
       const row = await loadImport(client, request.params.id, true);
-      if (!['failed', 'cancelled'].includes(row.status)) throw errors.conflict('import.not_deletable');
+      if (!['failed', 'cancelled', 'rejected'].includes(row.status)) throw errors.conflict('import.not_deletable');
       const running = await client.query("SELECT 1 FROM jobs WHERE resource_type = 'import' AND resource_id = $1 AND status IN ('queued', 'running')", [row.id]);
       if (running.rowCount) throw errors.conflict('import.run_in_progress', true);
 
@@ -491,7 +491,7 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
           }
           const others = await client.query<{ id: string; status: string }>('SELECT id, status FROM imports WHERE id <> $1 AND (template_id = $2 OR version_id = $3)', [row.id, tpl.id, versionId ?? '']);
           for (const other of others.rows) {
-            if (!['failed', 'cancelled'].includes(other.status)) throw errors.conflict('import.delete_blocked_referenced');
+            if (!['failed', 'cancelled', 'rejected'].includes(other.status)) throw errors.conflict('import.delete_blocked_referenced');
           }
           if (others.rows.length) {
             await client.query('UPDATE imports SET template_id = NULL, version_id = NULL WHERE id = ANY($1)', [others.rows.map((o) => o.id)]);

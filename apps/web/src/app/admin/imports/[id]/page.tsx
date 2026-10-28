@@ -272,7 +272,7 @@ function ImportDetailInner() {
         {canImport && running && !detail.cancel_requested ? (
           <button type="button" className="button button--danger" onClick={() => void cancel()} disabled={busy}>{t('ui.import.detail.cancel')}</button>
         ) : null}
-        {canImport && (detail.status === 'failed' || detail.status === 'cancelled') ? (
+        {canImport && (detail.status === 'failed' || detail.status === 'cancelled' || detail.status === 'rejected') ? (
           <button type="button" className="button button--danger" onClick={() => void remove()} disabled={busy}>{t('ui.import.detail.delete')}</button>
         ) : null}
         {detail.cancel_requested && running ? <StatusBadge tone="warning">{t('ui.import.detail.cancelling')}</StatusBadge> : null}
