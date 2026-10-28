@@ -17,7 +17,7 @@ __pycache__/
 *.key
 *.log
 uploads/
-backups/
+/backups/
 runtime-data/
 .DS_Store
 Thumbs.db
