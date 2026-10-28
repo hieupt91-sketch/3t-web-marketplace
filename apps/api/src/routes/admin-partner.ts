@@ -15,7 +15,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
     requirePermission(request, 'partner:read');
     const status = request.query.status;
     const { rows } = await db.query(
-      `SELECT p.id, p.code, p.display_name, p.channel, p.domain, p.status, p.review_reason, p.created_at, u.email AS owner_email
+      `SELECT p.id, p.code, p.display_name, p.channel, p.domain, p.status, p.review_reason, p.created_at, u.email_normalized AS owner_email
        FROM partner_accounts p JOIN users u ON u.id = p.user_id
        WHERE $1::text IS NULL OR p.status = $1 ORDER BY p.created_at DESC LIMIT 100`,
       [status ?? null],
