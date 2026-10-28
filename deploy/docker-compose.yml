@@ -50,6 +50,7 @@ services:
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
+      - PREVIEW_INTERNAL_URL=http://preview:4100
     volumes:
       - appdata:/app/runtime-data
     depends_on:
