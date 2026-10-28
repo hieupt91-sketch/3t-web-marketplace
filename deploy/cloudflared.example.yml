@@ -6,10 +6,10 @@ tunnel: <TUNNEL_ID>
 credentials-file: /root/.cloudflared/<TUNNEL_ID>.json
 ingress:
   # Main site: the compose web service published on host loopback :3000.
-  - hostname: shop.example.com
+  - hostname: webmaket.com
     service: http://localhost:3000
   # Demo previews: one wildcard route for every demo label. Without this,
   # the main site works but every demo preview fails to load.
-  - hostname: "*.preview.example.com"
+  - hostname: "*.preview.webmaket.com"
     service: http://localhost:4100
   - service: http_status:404
