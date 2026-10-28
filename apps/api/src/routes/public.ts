@@ -1,4 +1,7 @@
 import type { FastifyInstance } from 'fastify';
+import { createReadStream } from 'node:fs';
+import { access, constants } from 'node:fs/promises';
+import { resolve, sep } from 'node:path';
 import { loadActivePlans, previewOrigin, startingPrices, type PlatformConfig } from '@3t/core';
 import { DEFAULT_LOCALE, LOCALES, type Locale } from '@3t/i18n';
 import { ADAPTERS, IMPLEMENTED_ADAPTERS } from '@3t/template-sdk';
@@ -48,6 +51,7 @@ interface PublicTemplateRow {
   slug: string;
   manifest_json: { adapter?: string; export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
   size_bytes: string | null;
+  artifact_key: string | null;
   demo_label: string | null;
   requested_title: string | null;
   requested_summary: string | null;
@@ -61,7 +65,7 @@ interface PublicTemplateRow {
  * Localised summary with explicit fallback metadata (docs/07 §3): when the requested locale has
  * no published translation the response says so instead of passing Vietnamese off as English.
  */
-function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfig, startingPricesList: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[] = []) {
+function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfig, startingPricesList: { deployment_mode: string; amount_minor: string; currency: string; interval: string }[] = [], previewImage: string | null = null) {
   const translated = row.requested_title !== null;
   return {
     id: row.id,
@@ -72,7 +76,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
     translation_status: translated ? 'published' : 'fallback',
     title: translated ? row.requested_title : row.fallback_title,
     summary: translated ? row.requested_summary : row.fallback_summary,
-    preview_image: null,
+    preview_image: previewImage,
     adapter: row.manifest_json.adapter ?? null,
     size_bytes: row.size_bytes ?? null,
     modes: row.manifest_json.export?.modes ?? [],
@@ -84,7 +88,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
 }
 
 const TEMPLATE_SELECT = `
-  SELECT t.id, t.created_at, t.slug, v.manifest_json, a.size_bytes::text AS size_bytes,
+  SELECT t.id, t.created_at, t.slug, v.manifest_json, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          rt.title AS requested_title, rt.summary AS requested_summary, rt.slug AS requested_slug,
@@ -95,6 +99,32 @@ const TEMPLATE_SELECT = `
   JOIN template_translations ft ON ft.template_id = t.id AND ft.locale = '${DEFAULT_LOCALE}' AND ft.status = 'published'
   LEFT JOIN template_translations rt ON rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published'
   WHERE t.status = 'published'`;
+
+/** Hero photo candidates inside a built site tree, in preference order. */
+const HERO_CANDIDATES = ['images/hero.jpg', 'images/hero.jpeg', 'images/hero.png', 'images/hero.webp'] as const;
+const HERO_MIME: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
+
+/** First readable hero photo inside a stored artifact tree, or null when the
+ *  published version ships no hero photo (then cards keep the gradient). */
+async function heroFile(store: FastifyInstance['deps']['store'], artifactKey: string | null): Promise<{ path: string; mime: string } | null> {
+  if (!artifactKey) return null;
+  const base = store.pathFor(artifactKey);
+  for (const file of HERO_CANDIDATES) {
+    const full = resolve(base, file);
+    if (!full.startsWith(base + sep)) continue;
+    try {
+      await access(full, constants.R_OK);
+      return { path: full, mime: HERO_MIME[file.slice(file.lastIndexOf('.'))] ?? 'application/octet-stream' };
+    } catch {
+      // Try the next candidate.
+    }
+  }
+  return null;
+}
+
+function previewImageUrl(slug: string): string {
+  return `/api/v1/templates/${encodeURIComponent(slug)}/preview-image`;
+}
 
 export async function publicRoutes(app: FastifyInstance): Promise<void> {
   const { db, config } = app.deps;
@@ -192,7 +222,11 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     sql += ` ORDER BY t.created_at DESC, t.id DESC LIMIT $${params.length}`;
     const { rows } = await db.query<PublicTemplateRow>(sql, params);
     const prices = await startingPricesFor(db, rows.slice(0, limit).map((r) => r.id));
-    return page(rows, limit, (row) => toSummary(row, request.locale, config, prices.get(row.id) ?? []));
+    const previews = new Map<string, string>();
+    await Promise.all(rows.slice(0, limit).map(async (row) => {
+      if (await heroFile(app.deps.store, row.artifact_key)) previews.set(row.id, previewImageUrl(row.slug));
+    }));
+    return page(rows, limit, (row) => toSummary(row, request.locale, config, prices.get(row.id) ?? [], previews.get(row.id) ?? null));
   });
 
   app.get<{ Params: { id: string } }>('/plans/:id', async (request) => {
@@ -221,9 +255,36 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const row = rows[0];
     if (!row) throw errors.notFound();
     const plans = await loadActivePlans(db, row.id, PLATFORM_CURRENCY);
+    const hero = await heroFile(app.deps.store, row.artifact_key);
     return {
-      data: { ...toSummary(row, request.locale, config, startingPrices(plans)), plans },
+      data: { ...toSummary(row, request.locale, config, startingPrices(plans), hero ? previewImageUrl(row.slug) : null), plans },
       meta: { request_id: request.id, revision: null },
     };
+  });
+
+  /** Public hero photo of the published version (the card image). No auth: the
+   *  photo is part of the public demo. 404 when the version has no hero photo. */
+  app.get<{ Params: { slug: string } }>('/templates/:slug/preview-image', async (request, reply) => {
+    const slug = request.params.slug;
+    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(slug)) throw errors.notFound();
+    const { rows } = await db.query<{ artifact_key: string | null; source_sha: string | null }>(
+      `SELECT a.object_key AS artifact_key, v.source_sha AS source_sha
+       FROM templates t
+       JOIN template_versions v ON v.id = t.published_version_id
+       LEFT JOIN artifacts a ON a.id = v.artifact_id
+       WHERE t.status = 'published' AND (t.slug = $1 OR EXISTS (
+         SELECT 1 FROM template_translations x WHERE x.template_id = t.id AND x.slug = $1 AND x.status = 'published'))
+       LIMIT 1`,
+      [slug],
+    );
+    const row = rows[0];
+    const hero = await heroFile(app.deps.store, row?.artifact_key ?? null);
+    if (!row || !hero) throw errors.notFound();
+    const etag = row.source_sha ? `"${row.source_sha}"` : null;
+    if (etag && request.headers['if-none-match'] === etag) return reply.code(304).send();
+    reply.header('content-type', hero.mime);
+    reply.header('cache-control', 'public, max-age=86400');
+    if (etag) reply.header('etag', etag);
+    return reply.send(createReadStream(hero.path));
   });
 }
