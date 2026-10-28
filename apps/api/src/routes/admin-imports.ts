@@ -518,6 +518,13 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
       }
 
       await client.query('DELETE FROM previews WHERE import_id = $1', [row.id]);
+      // Mutual FKs (imports.version_id <-> template_versions.import_id and
+      // imports.template_id -> templates) refuse deleting the version or
+      // the template while this import still points at them, so break its
+      // links first; the import row itself goes away below in this tx.
+      // (Rejected/cancelled imports usually have no links, which is why
+      // this only bites version-linked imports such as health failures.)
+      await client.query('UPDATE imports SET version_id = NULL, template_id = NULL WHERE id = $1', [row.id]);
       if (versionId) {
         await client.query('DELETE FROM template_capabilities WHERE version_id = $1', [versionId]);
         // Migration 0015 lets the guard allow this: status 'ready' plus

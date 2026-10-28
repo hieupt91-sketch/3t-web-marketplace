@@ -835,6 +835,8 @@
   "ui.template.status.published": "Đã công bố",
   "ui.template_edit.archive_action": "Ngừng bán",
   "ui.template_edit.archive_confirm": "Ngừng bán mẫu này? Khách đã mua vẫn giữ quyền; chỉ dừng đơn mới.",
+  "ui.template_edit.delete_action": "Xóa mẫu này",
+  "ui.template_edit.delete_confirm": "Xóa mẫu “{title}” và toàn bộ phiên bản nháp, bản nhập, gói giá của nó? Chỉ xóa được mẫu chưa bán; mẫu đã bán không xóa được. File gốc (artifact) vẫn giữ nguyên theo thiết kế.",
   "ui.template_edit.content": "Nội dung và bản dịch",
   "ui.template_edit.description": "Mô tả chi tiết",
   "ui.template_edit.gate_blocked": "Chưa đạt",

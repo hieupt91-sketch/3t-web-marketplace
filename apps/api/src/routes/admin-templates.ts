@@ -381,4 +381,97 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     return { data: rows, page: { next_cursor: null, has_more: false } };
   });
 
+  // Delete an uploaded landing page that was never sold. Safety rules,
+  // mirroring the delete-failed-import scope:
+  //  - the template must still be a draft with no published version;
+  //  - every version must still be 'ready' (migration 0015 refuses
+  //    deleting any other version status at the database level);
+  //  - every import of the template must be terminal (no import may be
+  //    mid-flight) and no queued/running job may point at one;
+  //  - any commercial reference (order item, entitlement, download,
+  //    site, deployment, demo session) on any version blocks it (409);
+  //  - artifact rows and their stored blobs are immutable by design and
+  //    are left untouched; everything relational (previews, capabilities,
+  //    plans + prices, translations, versions, imports + their steps,
+  //    logs, jobs, build runs, upload sessions, the template itself)
+  //    is removed in one transaction.
+  app.delete<{ Params: { id: string } }>('/templates/:id', async (request, reply) => {
+    const auth = requirePermission(request, 'template:import');
+    const result = await tx(db, async (client) => {
+      const template = await loadTemplate(client, request.params.id, true);
+      if (template.status !== 'draft' || template.published_version_id) throw errors.conflict('template.delete_blocked_published');
+      const versions = await client.query<{ id: string; status: string }>(
+        'SELECT id, status FROM template_versions WHERE template_id = $1', [template.id],
+      );
+      for (const v of versions.rows) {
+        if (v.status !== 'ready') throw errors.conflict('template.delete_blocked_version');
+      }
+      const versionIds = versions.rows.map((v) => v.id);
+      const imports = await client.query<{ id: string; status: string; upload_session_id: string | null }>(
+        'SELECT id, status, upload_session_id FROM imports WHERE template_id = $1', [template.id],
+      );
+      for (const imp of imports.rows) {
+        if (!['ready', 'failed', 'rejected', 'cancelled'].includes(imp.status)) throw errors.conflict('template.delete_blocked_running');
+      }
+      const importIds = imports.rows.map((i) => i.id);
+      const running = await client.query(
+        "SELECT 1 FROM jobs WHERE resource_type = 'import' AND resource_id = ANY($1::uuid[]) AND status IN ('queued', 'running') LIMIT 1",
+        [importIds],
+      );
+      if (running.rowCount) throw errors.conflict('template.delete_blocked_running');
+      if (versionIds.length) {
+        const refs = await client.query(
+          `SELECT 'order_items' AS src FROM order_items WHERE version_id = ANY($1::uuid[])
+           UNION ALL SELECT 'order_items' FROM order_items WHERE template_id = $2
+           UNION ALL SELECT 'entitlements' FROM entitlements WHERE version_id = ANY($1::uuid[])
+           UNION ALL SELECT 'download_events' FROM download_events WHERE version_id = ANY($1::uuid[])
+           UNION ALL SELECT 'sites' FROM sites WHERE template_version_id = ANY($1::uuid[])
+           UNION ALL SELECT 'deployments' FROM deployments WHERE version_id = ANY($1::uuid[])
+           UNION ALL SELECT 'demo_sessions' FROM demo_sessions WHERE version_id = ANY($1::uuid[])
+           LIMIT 1`,
+          [versionIds, template.id],
+        );
+        if (refs.rowCount) throw errors.conflict('template.delete_blocked_referenced');
+      }
+      const plans = await client.query<{ id: string }>('SELECT id FROM plans WHERE template_id = $1', [template.id]);
+      const planIds = plans.rows.map((p) => p.id);
+      if (planIds.length) {
+        await client.query('DELETE FROM plan_prices WHERE plan_id = ANY($1::uuid[])', [planIds]);
+        await client.query('DELETE FROM plans WHERE id = ANY($1::uuid[])', [planIds]);
+      }
+      if (importIds.length) {
+        await client.query('DELETE FROM previews WHERE import_id = ANY($1::uuid[])', [importIds]);
+      }
+      if (versionIds.length) {
+        await client.query('DELETE FROM previews WHERE version_id = ANY($1::uuid[])', [versionIds]);
+        await client.query('DELETE FROM template_capabilities WHERE version_id = ANY($1::uuid[])', [versionIds]);
+      }
+      if (importIds.length) {
+        await client.query('DELETE FROM import_steps WHERE import_id = ANY($1::uuid[])', [importIds]);
+        await client.query('DELETE FROM import_logs WHERE import_id = ANY($1::uuid[])', [importIds]);
+        await client.query('DELETE FROM build_runs WHERE import_id = ANY($1::uuid[])', [importIds]);
+        await client.query('DELETE FROM github_webhook_deliveries WHERE import_id = ANY($1::uuid[])', [importIds]);
+        await client.query("DELETE FROM jobs WHERE resource_type = 'import' AND resource_id = ANY($1::uuid[])", [importIds]);
+      }
+      // Mutual FKs (imports.version_id <-> template_versions.import_id and
+      // imports.template_id -> templates) refuse deleting either side
+      // while the other points at it, so break the imports' links first;
+      // the import rows themselves go away below in the same transaction.
+      if (importIds.length) {
+        await client.query('UPDATE imports SET version_id = NULL, template_id = NULL WHERE id = ANY($1::uuid[])', [importIds]);
+      }
+      await client.query('DELETE FROM template_translations WHERE template_id = $1', [template.id]);
+      await client.query('DELETE FROM template_versions WHERE template_id = $1', [template.id]);
+      if (importIds.length) {
+        await client.query('DELETE FROM imports WHERE id = ANY($1::uuid[])', [importIds]);
+        const sessionIds = imports.rows.map((i) => i.upload_session_id).filter((s): s is string => !!s);
+        if (sessionIds.length) await client.query('DELETE FROM upload_sessions WHERE id = ANY($1::uuid[])', [sessionIds]);
+      }
+      await client.query('DELETE FROM templates WHERE id = $1', [template.id]);
+      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.deleted', resourceType: 'template', resourceId: template.id, traceId: request.id, diff: { slug: template.slug, versions: versionIds.length, imports: importIds.length, plans: planIds.length } });
+      return { versions: versionIds.length, imports: importIds.length, plans: planIds.length, slug: template.slug };
+    });
+    return reply.send({ data: { resource_id: request.params.id, deleted: result } });
+  });
+
 }
