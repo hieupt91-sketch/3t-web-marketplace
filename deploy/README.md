@@ -26,11 +26,11 @@ Edit `.env` and fill in every `change-me` value. Generate the secrets with
 - `DB_PASSWORD` — the database password. It is used both by postgres and by
   the app containers, so keep it in this one file only.
 - `PORTAL_ORIGIN` — the public URL visitors will use through the tunnel,
-  for example `https://shop.example.com`. It must match the tunnel hostname
+  `https://webmaket.com`. It must match the tunnel hostname
   exactly, or logins and form posts fail with `origin_mismatch`.
 
-`PREVIEW_BASE_DOMAIN` must be a different host from the portal host, for
-example `preview.example.com` when the portal is `shop.example.com`.
+`PREVIEW_BASE_DOMAIN` must be a different host from the portal host:
+`preview.webmaket.com` when the portal is `webmaket.com`.
 
 ## 2. Start the stack
 
@@ -66,8 +66,8 @@ cloudflared tunnel create web-marketplace
 This prints a tunnel ID and writes a credentials file. Then, in the
 Cloudflare dashboard for your domain, add two DNS routes for that tunnel:
 
-- `shop.example.com` (or your subdomain)
-- `*.preview.example.com` (wildcard — without it the main site works but
+- `webmaket.com`
+- `*.preview.webmaket.com` (wildcard — without it the main site works but
   every demo preview fails to load)
 
 Copy `cloudflared.example.yml` to `cloudflared.yml`, replace `<TUNNEL_ID>`
@@ -143,7 +143,7 @@ docker compose down -v     # DANGER: also deletes the database and app data
 - `origin_mismatch` on login or form posts: `PORTAL_ORIGIN` in `.env` does
   not equal the tunnel hostname. Fix it and restart api + web.
 - Main site works but demos show an error: the wildcard tunnel route
-  (`*.preview.example.com`) is missing or points elsewhere.
+  (`*.preview.webmaket.com`) is missing or points elsewhere.
 - `api` keeps restarting: run `docker compose logs api` — the usual cause
   is a wrong `DB_PASSWORD` or a missing required secret in `.env`.
 - Pages load but images/uploads are missing after a rebuild: the `appdata`
