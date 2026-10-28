@@ -1,7 +1,7 @@
 'use client';
 
 import Link from 'next/link';
-import { useParams } from 'next/navigation';
+import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RequirePermission, useCurrentUser } from '@/components/dashboard-shell';
 import { ImportStepper, stepperIndex } from '@/components/import-stepper';
@@ -154,6 +154,7 @@ function ImportDetailInner() {
   const me = useCurrentUser();
   const params = useParams<{ id: string }>();
   const id = params.id;
+  const router = useRouter();
   const [detail, setDetail] = useState<ImportDetail | null>(null);
   const [etag, setEtag] = useState<string | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
@@ -212,6 +213,15 @@ function ImportDetailInner() {
     await load();
   }
 
+  async function remove() {
+    if (!window.confirm(t('ui.import.detail.delete_confirm', { name: detail?.name ?? '' }))) return;
+    setBusy(true);
+    const res = await api(`/admin/imports/${id}`, { method: 'DELETE' });
+    setBusy(false);
+    if (!res.ok) return setActionError(res.error);
+    router.push('/admin/imports');
+  }
+
   if (error && !detail) return <ErrorState error={error} onRetry={() => void load()} />;
   if (!detail) return <Loading />;
 
@@ -261,6 +271,9 @@ function ImportDetailInner() {
         ) : null}
         {canImport && running && !detail.cancel_requested ? (
           <button type="button" className="button button--danger" onClick={() => void cancel()} disabled={busy}>{t('ui.import.detail.cancel')}</button>
+        ) : null}
+        {canImport && (detail.status === 'failed' || detail.status === 'cancelled') ? (
+          <button type="button" className="button button--danger" onClick={() => void remove()} disabled={busy}>{t('ui.import.detail.delete')}</button>
         ) : null}
         {detail.cancel_requested && running ? <StatusBadge tone="warning">{t('ui.import.detail.cancelling')}</StatusBadge> : null}
       </div>

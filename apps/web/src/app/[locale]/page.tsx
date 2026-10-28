@@ -1,9 +1,9 @@
 import type { Metadata } from 'next';
-import type { CSSProperties } from 'react';
 import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
+import { TemplateFinder } from '@/components/template-finder';
 import { DemoCatalog } from '@/components/demo-catalog';
 
 type Params = { params: Promise<{ locale: Locale }> };
@@ -15,19 +15,6 @@ export async function generateMetadata({ params }: Params): Promise<Metadata> {
     alternates: { canonical: `/${locale}`, languages: { vi: '/vi', en: '/en', 'x-default': '/vi' } },
   };
 }
-
-/** One clear level of categories (docs/10); each card links to the filtered catalog.
- *  a/b are the card illustration gradients (Canva v6); wording stays the site's own. */
-const CATEGORIES = [
-  { code: 'landing', desc: 'ui.home.cat_landing', a: '#1d4ed8', b: '#7c3aed' },
-  { code: 'business', desc: 'ui.home.cat_business', a: '#0f766e', b: '#0ea5e9' },
-  { code: 'food', desc: 'ui.home.cat_food', a: '#ea580c', b: '#f43f5e' },
-  { code: 'realestate', desc: 'ui.home.cat_realestate', a: '#0284c7', b: '#6366f1' },
-  { code: 'store', desc: 'ui.home.cat_store', a: '#db2777', b: '#8b5cf6' },
-  { code: 'beauty', desc: 'ui.home.cat_beauty', a: '#06b6d4', b: '#3b82f6' },
-  { code: 'blog', desc: 'ui.home.cat_blog', a: '#d97706', b: '#ea580c' },
-  { code: 'portfolio', desc: 'ui.home.cat_portfolio', a: '#475569', b: '#8b5cf6' },
-] as const;
 
 /** Small stroke icons for the hero trust points (Canva v6: eye, bolt, headset). */
 function TrustIcon({ kind }: { kind: 'eye' | 'bolt' | 'headset' }) {
@@ -84,6 +71,7 @@ export default async function Home({ params }: Params) {
         </div>
       </section>
       <div className="container stack">
+        <TemplateFinder />
         <section className="stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.intro_title')}</h2>
           <p className="muted" style={{ margin: 0, maxWidth: 760 }}>{t('ui.home.intro_lead')}</p>
@@ -93,23 +81,6 @@ export default async function Home({ params }: Params) {
                 <h3 style={{ margin: 0 }}>{t(`ui.home.intro_p${pillar}_title`)}</h3>
                 <p className="muted" style={{ margin: 0 }}>{t(`ui.home.intro_p${pillar}_body`)}</p>
               </section>
-            ))}
-          </div>
-        </section>
-        <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.categories_title')}</h2>
-          <p className="muted" style={{ margin: 0 }}>{t('ui.home.categories_lead')}</p>
-          <div className="grid-cards">
-            {CATEGORIES.map((category) => (
-              <Link key={category.code} className="card category-card" href={`/${locale}/templates?category=${category.code}`}>
-                <div className="cat-art" aria-hidden="true" style={{ '--cat-a': category.a, '--cat-b': category.b } as CSSProperties}>
-                  <div className="cat-art__dots"><i /><i /><i /></div>
-                  <div className="cat-art__hero" />
-                  <div className="cat-art__row"><i /><i /><i /></div>
-                </div>
-                <h3 style={{ margin: 0 }}>{t(`ui.category.${category.code}`)}</h3>
-                <p className="muted" style={{ margin: 0 }}>{t(category.desc)}</p>
-              </Link>
             ))}
           </div>
         </section>
@@ -155,6 +126,24 @@ export default async function Home({ params }: Params) {
               <h3 style={{ margin: 0 }}>{t('ui.home.project_title')}</h3>
               <p className="muted" style={{ margin: 0 }}>{t('ui.home.project_body')}</p>
               <div><Link href={`/${locale}/contact`}>{t('ui.home.project_action')}</Link></div>
+            </section>
+          </div>
+        </section>
+        <section className="stack">
+          <h2 style={{ margin: 0 }}>{t('ui.home.after_title')}</h2>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_lead')}</p>
+          <div className="grid-cards">
+            <section className="card stack">
+              <h3 style={{ margin: 0 }}>{t('ui.home.after_domain_title')}</h3>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_domain_body')}</p>
+            </section>
+            <section className="card stack">
+              <h3 style={{ margin: 0 }}>{t('ui.home.after_hosting_title')}</h3>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_hosting_body')}</p>
+            </section>
+            <section className="card stack">
+              <h3 style={{ margin: 0 }}>{t('ui.home.after_package_title')}</h3>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.home.after_package_body')}</p>
             </section>
           </div>
         </section>

@@ -1,6 +1,6 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { resolveTxt } from 'node:dns/promises';
+import { lookup, resolveTxt } from 'node:dns/promises';
 import { domainToASCII } from 'node:url';
 import { isIP } from 'node:net';
 import type { FastifyInstance } from 'fastify';
@@ -130,6 +130,61 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(201).send({ data: { id: created.siteId, status: 'creating', job_id: created.jobId, deployment_id: created.deploymentId, progress_url: `/api/v1/jobs/${created.jobId}` } });
     },
   );
+
+  /**
+   * Subdomain availability for the post-purchase setup wizard: checks the
+   * platform's own subdomain registry (the sites table) plus the reserved
+   * list. It does NOT reserve or sell the name — assignment and the
+   * subdomain fee are owner steps at handover.
+   */
+  app.get<{ Querystring: { subdomain?: string } }>('/sites/check-subdomain', async (request) => {
+    requireUser(request);
+    const raw = (request.query.subdomain ?? '').toLowerCase();
+    if (!SUBDOMAIN_RE.test(raw)) return { data: { subdomain: raw, available: false, reason: 'invalid' } };
+    if (RESERVED.has(raw)) return { data: { subdomain: raw, available: false, reason: 'reserved' } };
+    const { rows } = await db.query('SELECT 1 FROM sites WHERE subdomain = $1 LIMIT 1', [raw]);
+    return { data: { subdomain: raw, available: rows.length === 0, reason: rows.length === 0 ? null : 'taken' } };
+  });
+
+  /**
+   * Connection check for the "our subdomain + customer's own VPS" case:
+   * resolves the hostname from the server (never trusts the browser's
+   * view), refuses IP literals and private/reserved targets, then fetches
+   * the HTTPS URL with a short timeout and reports only the status. The
+   * body is never read or returned. DNS failures are reported as data,
+   * not errors, because "not propagated yet" is the normal state right
+   * after setup.
+   */
+  app.get<{ Querystring: { hostname?: string } }>('/sites/connection-check', async (request) => {
+    requireUser(request);
+    const hostname = (request.query.hostname ?? '').toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{0,61}(\.[a-z0-9][a-z0-9-]{0,61})+$/.test(hostname) || hostname.length > 253 || isIP(hostname)) {
+      throw errors.validation([{ field: 'hostname', code: 'invalid' }]);
+    }
+    let addresses: string[] = [];
+    try {
+      addresses = (await lookup(hostname, { all: true })).map((a) => a.address);
+    } catch {
+      return { data: { hostname, dns_ok: false, addresses: 0, private: false, http_ok: false, http_status: null }, meta: { request_id: request.id } };
+    }
+    const isPrivate = (ip: string): boolean => {
+      if (ip.includes(':')) return ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb');
+      const [a, b] = ip.split('.').map(Number);
+      return a === 10 || a === 127 || (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168);
+    };
+    if (addresses.length === 0 || addresses.some(isPrivate)) {
+      return { data: { hostname, dns_ok: addresses.length > 0, addresses: addresses.length, private: true, http_ok: false, http_status: null }, meta: { request_id: request.id } };
+    }
+    let http_status: number | null = null;
+    try {
+      const res = await fetch(`https://${hostname}/`, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(8000) });
+      http_status = res.status;
+      await res.body?.cancel().catch(() => undefined);
+    } catch {
+      http_status = null;
+    }
+    return { data: { hostname, dns_ok: true, addresses: addresses.length, private: false, http_ok: http_status !== null, http_status }, meta: { request_id: request.id } };
+  });
 
   app.get('/sites', async (request) => {
     const auth = requireUser(request);

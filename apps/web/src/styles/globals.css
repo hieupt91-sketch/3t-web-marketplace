@@ -864,6 +864,44 @@ table.table {
     bottom: var(--space-3);
   }
 }
+/* Quick-advice assistant bubble: bottom left, so it never covers the
+ * contact widget at bottom right. */
+.quick-assistant {
+  position: fixed;
+  left: var(--space-4);
+  bottom: var(--space-4);
+  z-index: 50;
+}
+.quick-assistant__button {
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
+  box-shadow: var(--shadow-card);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+}
+.quick-assistant__panel {
+  position: fixed;
+  left: var(--space-4);
+  bottom: calc(var(--space-4) + 64px);
+  z-index: 50;
+  width: min(360px, calc(100vw - 2 * var(--space-4)));
+  max-height: min(70vh, 560px);
+  overflow-y: auto;
+  box-shadow: var(--shadow-card);
+}
+@media (max-width: 639px) {
+  .quick-assistant {
+    left: var(--space-3);
+    bottom: var(--space-3);
+  }
+  .quick-assistant__panel {
+    left: var(--space-3);
+    bottom: calc(var(--space-3) + 64px);
+  }
+}
 /* Catalog: filter sidebar (Canva v3) + results, collapsing on tablet and below. */
 .catalog-layout {
   display: grid;

@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from '@3t/core';
 import {
+  buildCleanSiteTree,
   buildSelfhostBundle,
   emitEvent,
   getSetting,
@@ -623,9 +624,14 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Issue a short-lived download grant for a self-host entitlement; the bundle is built on demand.
-  app.post<{ Params: { id: string } }>('/entitlements/:id/download-links', async (request, reply) => {
+  // variant 'demo' (default) ships the template as-is; 'clean' strips the
+  // 3T demo phone to a fill-in placeholder (see toCleanVariantText).
+  app.post<{ Params: { id: string }; Body: { variant?: unknown } }>('/entitlements/:id/download-links', async (request, reply) => {
     const auth = requireUser(request);
     assertId(request.params.id);
+    const body = (request.body ?? {}) as { variant?: unknown };
+    const variant = body.variant ?? 'demo';
+    if (variant !== 'demo' && variant !== 'clean') throw errors.validation([{ field: 'variant', code: 'invalid' }], 'download.variant_invalid');
     const ent = await db.query<{ id: string; mode: string; status: string; version_id: string; updates_until: Date | null }>(
       'SELECT id, mode, status, version_id, updates_until FROM entitlements WHERE id = $1 AND user_id = $2',
       [request.params.id, auth.userId],
@@ -648,7 +654,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
     // v2 bundles carry the runtime layout (app/ + compose) for runtime adapters;
     // v1 bundles were static-only and are never served again.
-    const bundleKey = `bundles/selfhost/v2/${e.version_id}.zip`;
+    // Clean bundles are a separate cached key so demo and clean never mix.
+    const bundleKey = `bundles/selfhost/v2/${e.version_id}${variant === 'clean' ? '-clean' : ''}.zip`;
     let bundle: { size: number; sha256: string };
     if (await store.exists(bundleKey)) {
       const info = await db.query<{ size_bytes: string; sha256: string }>("SELECT size_bytes::text, sha256 FROM artifacts WHERE object_key = $1", [bundleKey]);
@@ -659,20 +666,29 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
     async function rebuildBundle() {
       const siteDir = store.pathFor(v!.site_key);
+      let treeDir = siteDir;
+      let cleanDir: string | null = null;
+      if (variant === 'clean') {
+        cleanDir = join(config.workDir, 'bundles-clean', `${e!.version_id}`);
+        await rm(cleanDir, { recursive: true, force: true });
+        await buildCleanSiteTree(siteDir, cleanDir);
+        treeDir = cleanDir;
+      }
       const tmpDir = join(config.workDir, 'bundles');
       await mkdir(tmpDir, { recursive: true });
-      const tmp = join(tmpDir, `${e!.version_id}.zip`);
+      const tmp = join(tmpDir, `${e!.version_id}${variant === 'clean' ? '-clean' : ''}.zip`);
       await rm(tmp, { force: true });
-      const built = await buildSelfhostBundle(siteDir, tmp, { slug: v!.slug, version: v!.semver, title: v!.title, manifest: v!.manifest_json });
+      const built = await buildSelfhostBundle(treeDir, tmp, { slug: v!.slug, version: v!.semver, title: v!.title, manifest: v!.manifest_json });
       if (!(await store.exists(bundleKey))) {
         await store.putStream(bundleKey, createReadStream(tmp), built.size + 1);
         await db.query(
           `INSERT INTO artifacts (object_key, sha256, size_bytes, media_type, kind, retention_class, metadata_json)
            VALUES ($1, $2, $3, 'application/zip', 'source_archive', 'permanent', $4) ON CONFLICT (object_key) DO NOTHING`,
-          [bundleKey, built.sha256, String(built.size), { kind: 'selfhost_bundle', version_id: e!.version_id }],
+          [bundleKey, built.sha256, String(built.size), { kind: 'selfhost_bundle', variant, version_id: e!.version_id }],
         );
       }
       await rm(tmp, { force: true });
+      if (cleanDir) await rm(cleanDir, { recursive: true, force: true });
       return built;
     }
 
@@ -683,13 +699,14 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
        VALUES ($1, $2, $3, $4, $5, now() + interval '5 minutes')`,
       [e.id, artifactRow.rows[0]!.id, e.version_id, auth.userId, hashToken(token)],
     );
-    await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'download.issued', resourceType: 'entitlement', resourceId: e.id, traceId: request.id });
+    await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'download.issued', resourceType: 'entitlement', resourceId: e.id, traceId: request.id, diff: { variant } });
     return reply.status(201).send({
       data: {
         url: `${config.portalOrigin}/api/v1/downloads/${token}`,
-        filename: `${v.slug}-${v.semver}.zip`,
+        filename: `${v.slug}-${v.semver}${variant === 'clean' ? '-clean' : ''}.zip`,
         sha256: bundle.sha256,
         size_bytes: String(bundle.size),
+        variant,
         expires_at: new Date(Date.now() + 5 * 60_000).toISOString(),
       },
     });
@@ -712,8 +729,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       if (g.expired || g.used_at) throw errors.conflict('download.link_expired', true);
       if (g.ent_status !== 'active') throw errors.forbidden('entitlement.inactive');
       await client.query('UPDATE download_events SET used_at = now() WHERE id = $1', [g.id]);
-      const artifact = await client.query<{ object_key: string; size_bytes: string; slug: string; semver: string }>(
-        `SELECT a.object_key, a.size_bytes::text, t.slug, v.semver
+      const artifact = await client.query<{ object_key: string; size_bytes: string; slug: string; semver: string; metadata_json: { variant?: string } | null }>(
+        `SELECT a.object_key, a.size_bytes::text, t.slug, v.semver, a.metadata_json
          FROM artifacts a JOIN download_events d ON d.artifact_id = a.id
          JOIN template_versions v ON v.id = d.version_id JOIN templates t ON t.id = v.template_id
          WHERE a.id = $1 AND d.id = $2`,
@@ -723,7 +740,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     });
     reply.header('content-type', 'application/zip');
     reply.header('content-length', grant.size_bytes);
-    reply.header('content-disposition', `attachment; filename="${grant.slug}-${grant.semver}.zip"`);
+    reply.header('content-disposition', `attachment; filename="${grant.slug}-${grant.semver}${grant.metadata_json?.variant === 'clean' ? '-clean' : ''}.zip"`);
     return reply.send(store.read(grant.object_key));
   });
 

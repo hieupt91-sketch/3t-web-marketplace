@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
+import { HostingAdvisor } from '@/components/hosting-advisor';
 import { coverGradient } from '@/components/template-card';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
@@ -64,6 +65,9 @@ export default async function TemplateDetail({ params }: Props) {
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.hosting_title')}</h2>
         <p style={{ margin: 0 }}>{template.adapter === 'node-http' || template.adapter === 'next-standalone' ? t('ui.detail.hosting_runtime') : t('ui.detail.hosting_static')}</p>
         <p style={{ margin: 0 }}><Link href={`/${locale}/help/help-hosting-choice`}>{t('ui.detail.hosting_guide')}</Link></p>
+      </section>
+      <section className="card stack">
+        <HostingAdvisor adapter={template.adapter} sizeLabel={template.size_bytes ? formatSize(template.size_bytes) : null} />
       </section>
       <section className="stack">
         <h2 style={{ marginBottom: 0 }}>{t('ui.detail.plans')}</h2>

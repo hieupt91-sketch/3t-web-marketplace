@@ -41,6 +41,7 @@ interface ImportRow {
   errors_json: unknown[];
   template_id: string | null;
   version_id: string | null;
+  upload_session_id: string | null;
   cancel_requested_at: Date | null;
   row_version: number;
   created_at: Date;
@@ -435,6 +436,112 @@ export async function adminImportRoutes(app: FastifyInstance): Promise<void> {
       return immediate ? 'cancelled' : 'cancelling';
     });
     return reply.status(202).send({ data: { resource_id: request.params.id, status } });
+  });
+
+  // Delete a failed or cancelled import and the draft data it created.
+  // Safety rules (agreed scope, enforced here and by the database):
+  //  - only status 'failed' or 'cancelled', and no queued/running job;
+  //  - the draft version must still be 'ready' (never published) and the
+  //    template a draft with no published version and no other versions;
+  //  - any commercial reference (order item, entitlement, download,
+  //    site, deployment, demo session) or a live import pointing at the
+  //    same template/version blocks the whole delete (409);
+  //  - other failed/cancelled imports sharing the draft have their draft
+  //    link cleared first, so the shared version can go away;
+  //  - artifact rows and their stored blobs are immutable by design and
+  //    are left untouched (content-addressed audit blobs, KBs each);
+  //    everything relational (previews, capabilities, translations,
+  //    version, template, steps, logs, jobs, build runs, the import row
+  //    itself and its upload session) is removed in one transaction.
+  app.delete<{ Params: { id: string } }>('/imports/:id', async (request, reply) => {
+    const auth = requirePermission(request, 'template:import');
+    const result = await tx(db, async (client) => {
+      const row = await loadImport(client, request.params.id, true);
+      if (!['failed', 'cancelled'].includes(row.status)) throw errors.conflict('import.not_deletable');
+      const running = await client.query("SELECT 1 FROM jobs WHERE resource_type = 'import' AND resource_id = $1 AND status IN ('queued', 'running')", [row.id]);
+      if (running.rowCount) throw errors.conflict('import.run_in_progress', true);
+
+      let templateId = row.template_id;
+      let versionId = row.version_id;
+      let deletedTemplate = false;
+      let deletedVersion = false;
+      let nulledOtherImports = 0;
+
+      if (versionId) {
+        const v = await client.query<{ id: string; status: string; template_id: string }>('SELECT id, status, template_id FROM template_versions WHERE id = $1 FOR UPDATE', [versionId]);
+        if (v.rows[0]) {
+          const version = v.rows[0];
+          if (version.status !== 'ready') throw errors.conflict('import.delete_blocked_version');
+          templateId = version.template_id;
+        } else {
+          versionId = null;
+        }
+      }
+
+      if (templateId) {
+        const t = await client.query<{ id: string; status: string; published_version_id: string | null }>('SELECT id, status, published_version_id FROM templates WHERE id = $1 FOR UPDATE', [templateId]);
+        if (t.rows[0]) {
+          const tpl = t.rows[0];
+          if (tpl.status !== 'draft' || tpl.published_version_id) throw errors.conflict('import.delete_blocked_published');
+          const versions = await client.query('SELECT id FROM template_versions WHERE template_id = $1', [tpl.id]);
+          if (versionId) {
+            if (versions.rows.length !== 1 || versions.rows[0]!.id !== versionId) throw errors.conflict('import.delete_blocked_other_versions');
+          } else if (versions.rows.length !== 0) {
+            throw errors.conflict('import.delete_blocked_other_versions');
+          }
+          const others = await client.query<{ id: string; status: string }>('SELECT id, status FROM imports WHERE id <> $1 AND (template_id = $2 OR version_id = $3)', [row.id, tpl.id, versionId ?? '']);
+          for (const other of others.rows) {
+            if (!['failed', 'cancelled'].includes(other.status)) throw errors.conflict('import.delete_blocked_referenced');
+          }
+          if (others.rows.length) {
+            await client.query('UPDATE imports SET template_id = NULL, version_id = NULL WHERE id = ANY($1)', [others.rows.map((o) => o.id)]);
+            nulledOtherImports = others.rows.length;
+          }
+        } else {
+          templateId = null;
+        }
+      }
+
+      if (versionId) {
+        const refs = await client.query(
+          `SELECT 'order_items' AS src FROM order_items WHERE version_id = $1
+           UNION ALL SELECT 'entitlements' FROM entitlements WHERE version_id = $1
+           UNION ALL SELECT 'download_events' FROM download_events WHERE version_id = $1
+           UNION ALL SELECT 'sites' FROM sites WHERE template_version_id = $1
+           UNION ALL SELECT 'deployments' FROM deployments WHERE version_id = $1
+           UNION ALL SELECT 'demo_sessions' FROM demo_sessions WHERE version_id = $1
+           UNION ALL SELECT 'deployment_jobs' FROM deployments WHERE job_id IN (SELECT id FROM jobs WHERE resource_type = 'import' AND resource_id = $2)
+           LIMIT 1`,
+          [versionId, row.id],
+        );
+        if (refs.rowCount) throw errors.conflict('import.delete_blocked_referenced');
+      }
+
+      await client.query('DELETE FROM previews WHERE import_id = $1', [row.id]);
+      if (versionId) {
+        await client.query('DELETE FROM template_capabilities WHERE version_id = $1', [versionId]);
+        // Migration 0015 lets the guard allow this: status 'ready' plus
+        // every foreign key above already refused a referenced version.
+        await client.query('DELETE FROM template_versions WHERE id = $1', [versionId]);
+        deletedVersion = true;
+      }
+      if (templateId) {
+        await client.query('DELETE FROM template_translations WHERE template_id = $1', [templateId]);
+        await client.query('DELETE FROM templates WHERE id = $1', [templateId]);
+        deletedTemplate = true;
+      }
+      await client.query('DELETE FROM build_runs WHERE import_id = $1', [row.id]);
+      await client.query('DELETE FROM import_steps WHERE import_id = $1', [row.id]);
+      await client.query('DELETE FROM import_logs WHERE import_id = $1', [row.id]);
+      await client.query('DELETE FROM github_webhook_deliveries WHERE import_id = $1', [row.id]);
+      await client.query("DELETE FROM jobs WHERE resource_type = 'import' AND resource_id = $1", [row.id]);
+      const sessionId = row.upload_session_id;
+      await client.query('DELETE FROM imports WHERE id = $1', [row.id]);
+      if (sessionId) await client.query('DELETE FROM upload_sessions WHERE id = $1', [sessionId]);
+      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'import.deleted', resourceType: 'import', resourceId: row.id, traceId: request.id, diff: { name: row.name_hint, deleted_template: deletedTemplate, deleted_version: deletedVersion, nulled_other_imports: nulledOtherImports } });
+      return { deletedTemplate, deletedVersion, nulledOtherImports, name: row.name_hint };
+    });
+    return reply.send({ data: { resource_id: request.params.id, deleted: result } });
   });
 
   app.get<{ Params: { id: string }; Querystring: { after?: string; limit?: string } }>('/imports/:id/logs', async (request) => {

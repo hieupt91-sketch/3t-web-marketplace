@@ -109,6 +109,11 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       messenger: contactRaw.messenger?.trim() || null,
       email: contactRaw.email?.trim() || null,
     };
+    const feeRow = await db.query<{ value_json: { amount_minor?: number | null; period?: string } }>("SELECT value_json FROM settings WHERE key = 'subdomain.fee'");
+    const feeRaw = feeRow.rows[0]?.value_json;
+    const subdomain_fee = feeRaw
+      ? { amount_minor: typeof feeRaw.amount_minor === 'number' ? feeRaw.amount_minor : null, period: feeRaw.period === 'monthly' ? 'monthly' : 'once' }
+      : null;
     return {
       data: {
         brand: { name: 'Web Marketplace' },
@@ -117,6 +122,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         currency: config.currency,
         terms_version: terms.rows[0]?.value_json.current ?? null,
         contact,
+        subdomain_fee,
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
       },
     };

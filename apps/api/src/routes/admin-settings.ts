@@ -81,4 +81,57 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({ data: next });
     },
   );
+
+  app.get('/settings/subdomain-fee', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const { rows } = await db.query<{ value_json: { amount_minor?: number | null; period?: string } }>(
+      "SELECT value_json FROM settings WHERE key = 'subdomain.fee'",
+    );
+    const raw = rows[0]?.value_json ?? {};
+    return {
+      data: {
+        amount_minor: typeof raw.amount_minor === 'number' ? raw.amount_minor : null,
+        period: raw.period === 'monthly' ? 'monthly' : 'once',
+      },
+    };
+  });
+
+  app.post<{ Body: { amount_minor?: number | null; period?: string } }>(
+    '/settings/subdomain-fee',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            amount_minor: { type: ['integer', 'null'] },
+            period: { enum: ['once', 'monthly'] },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const amount = request.body.amount_minor ?? null;
+      const period = request.body.period === 'monthly' ? 'monthly' : 'once';
+      if (amount !== null && (!Number.isInteger(amount) || amount <= 0)) {
+        throw errors.validation([{ field: 'amount_minor', code: 'invalid' }]);
+      }
+      const next = { amount_minor: amount, period };
+      await db.query(
+        `INSERT INTO settings (key, value_json) VALUES ('subdomain.fee', $1::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+        [JSON.stringify(next)],
+      );
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.subdomain_fee_updated',
+        resourceType: 'settings',
+        resourceId: 'subdomain.fee',
+        traceId: request.id,
+      });
+      return reply.status(200).send({ data: next });
+    },
+  );
 }

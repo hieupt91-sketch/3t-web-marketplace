@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { readdir, stat } from 'node:fs/promises';
-import { join, posix, relative, sep } from 'node:path';
+import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { dirname, join, posix, relative, sep } from 'node:path';
 import { ZipFile } from 'yazl';
 
 /**
@@ -263,6 +263,71 @@ function readmeRuntime(meta: BundleMeta, m: RuntimeManifest, port: number, start
     '',
   );
   return lines.join('\n');
+}
+
+/**
+ * Demo-to-clean text transform for the "clean" download variant.
+ *
+ * The demo variant ships the template as-is (demo phone, demo labels).
+ * The clean variant replaces the 3T demo phone with a fill-in
+ * placeholder so buyers enter their real info before publishing:
+ *  - inside data-en="..." attributes: "Your phone number";
+ *  - everywhere else (visible text mirrors data-vi, comments and README
+ *    prose are Vietnamese): "Số điện thoại của bạn";
+ *  - leftover "(số demo)" / "(demo number)" markers are stripped;
+ *  - stale demo-warning sentences that reference the 3T demo number are
+ *    removed on a best-effort basis (wording varies across READMEs, so a
+ *    warning without a trailing period may survive — it then mentions a
+ *    placeholder, never a real number).
+ * Deliberately NOT stripped: the SVG illustrations (artwork, not info),
+ * sample prices/addresses/emails/hours (the template's base sample
+ * content, already labelled as samples) — clean means "no demo phone",
+ * not "empty page".
+ */
+const DEMO_PHONE_SPACED = '0967 136 099';
+const DEMO_PHONE_PLAIN = '0967136099';
+const VI_PHONE_PLACEHOLDER = 'Số điện thoại của bạn';
+const EN_PHONE_PLACEHOLDER = 'Your phone number';
+
+export function toCleanVariantText(text: string): string {
+  let out = text.replace(/data-en="[^"]*"/g, (attr) =>
+    attr
+      .split(DEMO_PHONE_SPACED).join(EN_PHONE_PLACEHOLDER)
+      .split(DEMO_PHONE_PLAIN).join(EN_PHONE_PLACEHOLDER)
+      .replaceAll(' (demo number)', ''),
+  );
+  out = out.split(DEMO_PHONE_SPACED).join(VI_PHONE_PLACEHOLDER).split(DEMO_PHONE_PLAIN).join(VI_PHONE_PLACEHOLDER);
+  out = out.replaceAll(' (số demo)', '').replaceAll(' (demo number)', '');
+  out = out.replace(/[^.]*số demo của 3T[^.]*\./g, '');
+  out = out.replace(/[^.]*demo number[^.]*3T[^.]*\./g, '');
+  // CONFIG comments carry the demo phone in a parenthetical without a
+  // trailing period ("(số demo của 3T — ...)"); rewrite it as a plain
+  // fill-in instruction instead of leaving a stale fragment behind.
+  out = out.replace(/\(số demo của 3T[^)]*\)/g, '(thay bằng số thật trước khi đăng)');
+  out = out.replaceAll(`demo number ${VI_PHONE_PLACEHOLDER}`, EN_PHONE_PLACEHOLDER);
+  return out;
+}
+
+/**
+ * Copy an artifact tree to `destDir`, applying the clean-variant transform
+ * to *.html and *.md files and copying everything else byte-for-byte.
+ * The manifest version is unchanged: variant is a download option, not a
+ * new version.
+ */
+export async function buildCleanSiteTree(srcDir: string, destDir: string): Promise<void> {
+  await mkdir(destDir, { recursive: true });
+  for (const file of await listFiles(srcDir)) {
+    const src = join(srcDir, ...file.split('/'));
+    const rel = relative(srcDir, src);
+    if (rel.startsWith('..') || rel.includes(`..${sep}`)) continue;
+    const dest = join(destDir, ...file.split('/'));
+    await mkdir(dirname(dest), { recursive: true });
+    if (file.endsWith('.html') || file.endsWith('.md')) {
+      await writeFile(dest, toCleanVariantText(await readFile(src, 'utf8')), 'utf8');
+    } else {
+      await copyFile(src, dest);
+    }
+  }
 }
 
 /**
