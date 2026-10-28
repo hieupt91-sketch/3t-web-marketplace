@@ -1,0 +1,33 @@
+{
+  "name": "@3t/api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "start": "tsx src/main.ts",
+    "migrate": "tsx ../../packages/core/src/migrate-cli.ts",
+    "create-owner": "tsx src/cli/create-owner.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "echo 'no lint rules beyond typecheck'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@3t/core": "workspace:*",
+    "@3t/i18n": "workspace:*",
+    "@3t/template-sdk": "workspace:*",
+    "@fastify/cookie": "11.0.2",
+    "@fastify/rate-limit": "10.3.0",
+    "fastify": "5.6.2"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  },
+  "exports": {
+    "./test-helpers": "./src/test-helpers.ts",
+    "./app": "./src/app.ts"
+  }
+}

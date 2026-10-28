@@ -114,7 +114,8 @@ def main():
     bad = copy.deepcopy(fixture); bad['env'] = [{'name':'KEY','scope':'server','secret':True,'required':True,'description':'bad','defaultValue':'not-allowed'}]; negatives.append(bad)
     for i, bad in enumerate(negatives):
         require(not matches(bad, schema, '$'), f'negative fixture {i} unexpectedly accepted')
-    markdown = list(ROOT.rglob('*.md'))
+    skip = {'node_modules', '.next', '.git', 'runtime-data', 'dist', 'coverage'}
+    markdown = [p for p in ROOT.rglob('*.md') if not skip.intersection(p.relative_to(ROOT).parts)]
     for path in markdown:
         text = path.read_text()
         require(len(re.findall(r'^```', text, re.M)) % 2 == 0, f'{path}: unclosed code fence')
