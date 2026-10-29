@@ -154,6 +154,9 @@ h3 {
   color: var(--color-text);
   text-decoration: none;
   white-space: nowrap;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
 }
 .site-nav {
   display: flex;

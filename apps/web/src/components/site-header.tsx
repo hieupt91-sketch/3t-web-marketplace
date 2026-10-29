@@ -14,7 +14,8 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
     <header className="site-header">
       <div className="site-header__inner">
         <Link href={base} className="brand">
-          Web Marketplace
+          <img src="/logo.svg" alt="" width={30} height={30} />
+          <span>webmaket</span>
         </Link>
         <nav className="site-nav" aria-label={t('ui.nav.main')}>
           <Link href={`${base}/templates`}>{t('ui.nav.templates')}</Link>
