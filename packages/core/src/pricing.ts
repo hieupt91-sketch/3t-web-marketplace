@@ -68,6 +68,8 @@ export interface PublishGate {
 export interface PublishReadiness {
   ready: boolean;
   gates: PublishGate[];
+  /** The version the demo_ready gate proved (latest ready/published version with demo evidence), or null. */
+  version_id: string | null;
 }
 
 /**
@@ -85,10 +87,20 @@ export async function publishReadiness(db: Queryable, templateId: string, defaul
   const template = tplRows[0];
   const gates: PublishGate[] = [];
 
+  // demo_ready evidence differs by adapter: static adapters prove the demo via an
+  // active previews row, but runtime adapters (node-http, next-standalone) have no
+  // static preview origin — import spawns the runtime for health/smoke instead of
+  // inserting a previews row, and buyer demos are session-scoped spawns. A ready
+  // runtime version has therefore already proven it boots and answers health
+  // checks during import, so readiness itself is the evidence for those adapters.
   const { rows: versionRows } = await db.query<{ version_id: string }>(
     `SELECT v.id AS version_id FROM template_versions v
-     JOIN previews p ON p.version_id = v.id AND p.status = 'active'
-     WHERE v.template_id = $1 AND v.status IN ('ready', 'published') ORDER BY v.created_at DESC LIMIT 1`,
+     WHERE v.template_id = $1 AND v.status IN ('ready', 'published')
+       AND (
+         EXISTS (SELECT 1 FROM previews p WHERE p.version_id = v.id AND p.status = 'active')
+         OR v.adapter IN ('node-http', 'next-standalone')
+       )
+     ORDER BY v.created_at DESC LIMIT 1`,
     [templateId],
   );
   const readyVersion = versionRows[0]?.version_id ?? null;
@@ -108,5 +120,5 @@ export async function publishReadiness(db: Queryable, templateId: string, defaul
   const exportOk = offeredModes.size > 0 && [...offeredModes].every((mode) => exportModes.has(mode));
   gates.push({ code: 'export_modes', passed: exportOk });
 
-  return { ready: readyVersion !== null && gates.every((g) => g.passed), gates };
+  return { ready: readyVersion !== null && gates.every((g) => g.passed), gates, version_id: readyVersion };
 }

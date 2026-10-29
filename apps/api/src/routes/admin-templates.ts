@@ -335,12 +335,11 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       if (template.row_version !== expected) throw errors.preconditionFailed();
       const readiness = await publishReadiness(client, template.id, DEFAULT_LOCALE, PLATFORM_CURRENCY);
       if (!readiness.ready) throw new AppError(409, 'template.publish_gate_failed', readiness.gates.filter((g) => !g.passed).map((g) => ({ field: g.code, code: 'gate_failed' })));
-      const version = await client.query<{ id: string }>(
-        `SELECT v.id FROM template_versions v JOIN previews p ON p.version_id = v.id AND p.status = 'active'
-         WHERE v.template_id = $1 AND v.status IN ('ready', 'published') ORDER BY v.created_at DESC LIMIT 1`,
-        [template.id],
-      );
-      const versionId = version.rows[0]!.id;
+      // Use the version publishReadiness proved: its demo_ready evidence is
+      // adapter-aware (runtime adapters have no previews row), so re-querying
+      // with a previews join here would find nothing for them.
+      const versionId = readiness.version_id;
+      if (!versionId) throw errors.preconditionFailed();
       await client.query("UPDATE template_versions SET status = 'published' WHERE id = $1 AND status = 'ready'", [versionId]);
       await client.query("UPDATE previews SET visibility = 'public' WHERE version_id = $1 AND status = 'active'", [versionId]);
       const updated = await client.query<{ row_version: number }>(
