@@ -37,6 +37,7 @@ const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
     { href: '/admin/templates', labelKey: 'ui.admin.nav.templates', permission: 'template:read' },
     { href: '/admin/imports', labelKey: 'ui.admin.nav.imports', permission: 'template:read' },
     { href: '/admin/imports/new', labelKey: 'ui.admin.nav.import_new', permission: 'template:import' },
+    { href: '/admin/pricing', labelKey: 'ui.admin.nav.pricing', permission: 'pricing:write' },
     { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
     { href: '/admin/settings/contact', labelKey: 'ui.admin.nav.contact_settings', permission: 'settings:manage' },
     { href: '/admin/settings/subdomain-fee', labelKey: 'ui.admin.nav.subdomain_fee_settings', permission: 'settings:manage' },

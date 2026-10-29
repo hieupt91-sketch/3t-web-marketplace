@@ -52,6 +52,7 @@ interface Detail {
   id: string;
   slug: string;
   status: string;
+  hidden: boolean;
   category_id: string | null;
   published_version_id: string | null;
   translations: Translation[];
@@ -285,6 +286,77 @@ function PlanCard({ plan, onChanged }: { plan: Plan; onChanged: () => void }) {
   );
 }
 
+/** Quick price + visibility box: sets the VND one_time price of the standard
+ *  selfhost plan (the catalog's starting price) and toggles storefront
+ *  visibility, without the If-Match dance of the full plan editor below. */
+function QuickPriceBox({ templateId, detail, canPrice, canWrite, onChanged }: { templateId: string; detail: Detail; canPrice: boolean; canWrite: boolean; onChanged: () => void }) {
+  const { t, locale } = useT();
+  const [amount, setAmount] = useState('');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [invalid, setInvalid] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  const now = Date.now();
+  const activeSelfhost = detail.plans.filter((p) => p.deployment_mode === 'selfhost' && p.status === 'active');
+  const standard = activeSelfhost.find((p) => p.code === 'selfhost') ?? activeSelfhost[0];
+  const currentPrices = (standard?.prices ?? []).filter(
+    (p) => p.currency === 'VND' && p.interval === 'one_time' && Date.parse(p.effective_from) <= now && (!p.effective_to || Date.parse(p.effective_to) > now),
+  );
+  const current = currentPrices.reduce<Price | null>((min, p) => (min === null || BigInt(p.amount_minor) < BigInt(min.amount_minor) ? p : min), null);
+
+  async function savePrice() {
+    if (!/^\d+$/.test(amount) || BigInt(amount) <= 0n) return setInvalid(true);
+    setInvalid(false);
+    setSaved(false);
+    setBusy(true);
+    setError(null);
+    const res = await api(`/admin/templates/${templateId}/quick-price`, { method: 'PUT', body: { amount_minor: amount } });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    setAmount('');
+    setSaved(true);
+    onChanged();
+  }
+
+  async function toggleVisibility() {
+    setBusy(true);
+    setError(null);
+    const res = await api(`/admin/templates/${templateId}/visibility`, { method: 'POST', body: { hidden: !detail.hidden } });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
+    onChanged();
+  }
+
+  return (
+    <section className="card stack">
+      <h2 style={{ marginTop: 0 }}>{t('ui.pricing.quick_title')}</h2>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.pricing.quick_hint')}</p>
+      {error ? <ErrorState error={error} /> : null}
+      {invalid ? <Alert tone="error"><p>{t('ui.pricing.invalid_amount')}</p></Alert> : null}
+      {saved ? <Alert tone="success" live><p>{t('ui.pricing.saved_price')}</p></Alert> : null}
+      <p style={{ margin: 0 }}>
+        {t('ui.pricing.current_price')}:{' '}
+        <strong className="tabular">{current ? formatMoney(current, locale) : t('ui.admin.templates.price_unset')}</strong>
+      </p>
+      {canPrice ? (
+        <div className="row" style={{ alignItems: 'flex-end' }}>
+          <FormField label={t('ui.pricing.col_new_price')}>
+            {(p) => <input {...p} className="input tabular" inputMode="numeric" value={amount} onChange={(e) => setAmount(e.target.value.replace(/\D/g, ''))} />}
+          </FormField>
+          <button type="button" className="button" disabled={busy || !amount} onClick={() => void savePrice()}>{t('ui.pricing.set_price')}</button>
+        </div>
+      ) : null}
+      {canWrite ? (
+        <label className="row">
+          <input type="checkbox" checked={!detail.hidden} onChange={() => void toggleVisibility()} disabled={busy} aria-label={t('ui.pricing.col_visibility')} />
+          <span>{detail.hidden ? t('ui.pricing.hidden_state') : t('ui.pricing.visible')}</span>
+        </label>
+      ) : null}
+    </section>
+  );
+}
+
 function TemplateDetailInner() {
   const { t, dt } = useT();
   const me = useCurrentUser();
@@ -342,6 +414,7 @@ function TemplateDetailInner() {
   const canPublish = me.permissions.includes('template:publish');
   const canImport = me.permissions.includes('template:import');
   const canPrice = me.permissions.includes('pricing:write');
+  const canWrite = me.permissions.includes('template:write');
   const canTranslate = me.permissions.includes('translation:write');
   const title = detail.translations.find((tr) => tr.locale === 'vi')?.title ?? detail.slug;
   const localeStatus = (locale: Locale): LocaleStatus => {
@@ -354,7 +427,10 @@ function TemplateDetailInner() {
       <p><Link href="/admin/templates">← {t('ui.admin.templates.title')}</Link></p>
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h1 style={{ margin: 0 }}>{title}</h1>
-        <StatusBadge tone={templateTone(detail.status)}>{t(`ui.template.status.${detail.status}`)}</StatusBadge>
+        <div className="row">
+          <StatusBadge tone={templateTone(detail.status)}>{t(`ui.template.status.${detail.status}`)}</StatusBadge>
+          {detail.hidden ? <StatusBadge tone="warning">{t('ui.pricing.hidden_state')}</StatusBadge> : null}
+        </div>
       </div>
 
       {/* A09 — publish gates */}
@@ -385,6 +461,11 @@ function TemplateDetailInner() {
         </div>
         {!detail.publish.ready && detail.status !== 'published' ? <p id="publish-hint" className="field__hint">{t('ui.template_edit.publish_hint')}</p> : null}
       </section>
+
+      {/* Quick price + visibility */}
+      {canPrice || canWrite ? (
+        <QuickPriceBox templateId={id} detail={detail} canPrice={canPrice} canWrite={canWrite} onChanged={() => void load()} />
+      ) : null}
 
       {/* A06 — localized metadata */}
       <section className="card stack">

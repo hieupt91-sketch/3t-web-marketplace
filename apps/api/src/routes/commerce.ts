@@ -254,7 +254,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
   async function loadPlanForPurchase(templateId: string, planId: string): Promise<{ plan: PublicPlan; versionId: string } | null> {
     const { rows } = await db.query<{ published_version_id: string | null }>(
-      "SELECT published_version_id FROM templates WHERE id = $1 AND status = 'published'",
+      "SELECT published_version_id FROM templates WHERE id = $1 AND status = 'published' AND NOT hidden",
       [templateId],
     );
     if (!rows[0]?.published_version_id) return null;

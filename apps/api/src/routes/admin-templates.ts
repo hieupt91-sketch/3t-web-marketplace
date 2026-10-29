@@ -21,8 +21,8 @@ function assertId(id: string) {
 
 async function loadTemplate(db: Queryable, id: string, lock = false) {
   assertId(id);
-  const { rows } = await db.query<{ id: string; slug: string; status: string; category_id: string | null; published_version_id: string | null; row_version: number }>(
-    `SELECT id, slug, status, category_id, published_version_id, row_version FROM templates WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
+  const { rows } = await db.query<{ id: string; slug: string; status: string; hidden: boolean; category_id: string | null; published_version_id: string | null; row_version: number }>(
+    `SELECT id, slug, status, hidden, category_id, published_version_id, row_version FROM templates WHERE id = $1${lock ? ' FOR UPDATE' : ''}`,
     [id],
   );
   if (!rows[0]) throw errors.notFound();
@@ -33,6 +33,89 @@ async function loadTemplate(db: Queryable, id: string, lock = false) {
 function parseAmountMinor(value: unknown): string {
   if (typeof value !== 'string' || !/^\d{1,18}$/.test(value)) throw errors.validation([{ field: 'amount_minor', code: 'invalid' }]);
   return String(BigInt(value));
+}
+
+/** The standard plan the import/publish tooling creates for every template;
+ *  quick pricing targets exactly this plan so admin and tooling stay consistent. */
+const STANDARD_PLAN_CODE = 'selfhost';
+const STANDARD_PLAN_NAME = { vi: 'Gói tự triển khai', en: 'Self-host package' } as const;
+
+/** Quick-price amount: a POSITIVE integer in minor units, as a digit string or a JSON integer. */
+function parsePositiveAmount(value: unknown): string {
+  const text = typeof value === 'number' && Number.isSafeInteger(value) ? String(value)
+    : typeof value === 'string' ? value : null;
+  if (text === null || !/^\d{1,18}$/.test(text) || BigInt(text) <= 0n) {
+    throw errors.validation([{ field: 'amount_minor', code: 'must_be_positive_integer' }]);
+  }
+  return String(BigInt(text));
+}
+
+interface BulkScopeInput {
+  type: 'all' | 'category' | 'ids';
+  category_id?: string;
+  template_ids?: string[];
+}
+
+/**
+ * Quick-price one template inside an open transaction: append the new VND
+ * one_time price to the template's standard selfhost plan (creating + activating
+ * the plan when missing, mirroring the publish tooling), so the newest price is
+ * the current one and old price rows keep their history. The plan modelled here
+ * is the same one startingPrices() reads, so the catalog reflects it at once.
+ */
+async function applyQuickPrice(client: Queryable, templateId: string, amount: string, actorId: string, traceId: string) {
+  const template = await loadTemplate(client, templateId, true);
+  let plan: { id: string; status: string } | undefined;
+  const standard = await client.query<{ id: string; status: string }>(
+    'SELECT id, status FROM plans WHERE template_id = $1 AND code = $2 FOR UPDATE',
+    [template.id, STANDARD_PLAN_CODE],
+  );
+  plan = standard.rows[0];
+  if (!plan) {
+    const active = await client.query<{ id: string; status: string }>(
+      "SELECT id, status FROM plans WHERE template_id = $1 AND deployment_mode = 'selfhost' AND status = 'active' ORDER BY code LIMIT 1 FOR UPDATE",
+      [template.id],
+    );
+    plan = active.rows[0];
+  }
+  let createdPlan = false;
+  if (!plan) {
+    const inserted = await client.query<{ id: string }>(
+      `INSERT INTO plans (template_id, code, deployment_mode, name_json, limits_json) VALUES ($1, $2, 'selfhost', $3, '{}'::jsonb) RETURNING id`,
+      [template.id, STANDARD_PLAN_CODE, STANDARD_PLAN_NAME],
+    );
+    plan = { id: inserted.rows[0]!.id, status: 'draft' };
+    createdPlan = true;
+  }
+  const from = new Date();
+  // Same close-open-range rule as POST /plans/:planId/prices: ranges never overlap.
+  await client.query(
+    `UPDATE plan_prices SET effective_to = $4
+     WHERE plan_id = $1 AND currency = $2 AND interval = $3
+       AND effective_from < $4 AND (effective_to IS NULL OR effective_to > $4)`,
+    [plan.id, PLATFORM_CURRENCY, 'one_time', from.toISOString()],
+  );
+  await client.query(
+    `INSERT INTO plan_prices (plan_id, currency, amount_minor, interval, effective_from) VALUES ($1, $2, $3, 'one_time', $4)`,
+    [plan.id, PLATFORM_CURRENCY, amount, from.toISOString()],
+  );
+  if (plan.status !== 'active') {
+    await client.query("UPDATE plans SET status = 'active', row_version = row_version + 1 WHERE id = $1", [plan.id]);
+  }
+  await client.query('UPDATE templates SET row_version = row_version + 1 WHERE id = $1', [template.id]);
+  await writeAudit(client, { actorType: 'user', actorId, action: 'template.quick_price', resourceType: 'template', resourceId: template.id, traceId, diff: { amount_minor: amount, currency: PLATFORM_CURRENCY, interval: 'one_time', plan_id: plan.id, created_plan: createdPlan } });
+  return { template_id: template.id, plan_id: plan.id, amount_minor: amount, currency: PLATFORM_CURRENCY, interval: 'one_time' as const };
+}
+
+/** Show/hide one template inside an open transaction (migration 0019). */
+async function applyVisibility(client: Queryable, templateId: string, hidden: boolean, actorId: string, traceId: string) {
+  const template = await loadTemplate(client, templateId, true);
+  const { rows } = await client.query<{ row_version: number }>(
+    'UPDATE templates SET hidden = $2, row_version = row_version + 1 WHERE id = $1 RETURNING row_version',
+    [template.id, hidden],
+  );
+  await writeAudit(client, { actorType: 'user', actorId, action: 'template.visibility_changed', resourceType: 'template', resourceId: template.id, traceId, diff: { hidden } });
+  return rows[0]!.row_version;
 }
 
 export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
@@ -75,6 +158,7 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
         id: template.id,
         slug: template.slug,
         status: template.status,
+        hidden: template.hidden,
         category_id: template.category_id,
         published_version_id: template.published_version_id,
         translations: translations.rows,
@@ -323,6 +407,133 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
         if (isUniqueViolation(error) || (error as { code?: string }).code === '23P01') throw errors.conflict('price.overlap');
         throw error;
       }
+    },
+  );
+
+  /** Resolve a bulk scope to template ids. `ids` keeps unknown ids in the list so
+   *  the per-template loop can report them as failures, but a scope that matches
+   *  zero existing templates is a client error (400 bulk.scope_empty). */
+  async function resolveBulkScope(scope: BulkScopeInput): Promise<string[]> {
+    if (scope.type === 'all') {
+      const { rows } = await db.query<{ id: string }>('SELECT id FROM templates ORDER BY slug');
+      if (rows.length === 0) throw new AppError(400, 'bulk.scope_empty');
+      return rows.map((r) => r.id);
+    }
+    if (scope.type === 'category') {
+      if (!scope.category_id || !UUID.test(scope.category_id)) throw errors.validation([{ field: 'scope.category_id', code: 'invalid' }]);
+      const { rows } = await db.query<{ id: string }>('SELECT id FROM templates WHERE category_id = $1 ORDER BY slug', [scope.category_id]);
+      if (rows.length === 0) throw new AppError(400, 'bulk.scope_empty');
+      return rows.map((r) => r.id);
+    }
+    const ids = [...new Set(scope.template_ids ?? [])];
+    if (ids.length === 0) throw new AppError(400, 'bulk.scope_empty');
+    for (const id of ids) {
+      if (!UUID.test(id)) throw errors.validation([{ field: 'scope.template_ids', code: 'invalid' }]);
+    }
+    const existing = await db.query('SELECT 1 FROM templates WHERE id = ANY($1::uuid[]) LIMIT 1', [ids]);
+    if (existing.rowCount === 0) throw new AppError(400, 'bulk.scope_empty');
+    return ids;
+  }
+
+  /** Run a per-template mutation in its own transaction so one failure never rolls back the rest. */
+  async function runBulk(ids: string[], apply: (client: Queryable, templateId: string) => Promise<unknown>) {
+    const updated: string[] = [];
+    const failures: { template_id: string; code: string }[] = [];
+    for (const id of ids) {
+      try {
+        await tx(db, (client) => apply(client, id));
+        updated.push(id);
+      } catch (error) {
+        failures.push({ template_id: id, code: error instanceof AppError ? error.code : 'internal.error' });
+      }
+    }
+    return { updated_count: updated.length, failure_count: failures.length, updated, failures };
+  }
+
+  const bulkScopeSchema = {
+    type: 'object',
+    additionalProperties: false,
+    required: ['type'],
+    properties: {
+      type: { enum: ['all', 'category', 'ids'] },
+      category_id: { type: 'string' },
+      template_ids: { type: 'array', items: { type: 'string' }, maxItems: 500 },
+    },
+  } as const;
+
+  // Quick pricing & visibility overview: one row per template with the price
+  // the catalog would show ("current price" = the current VND one_time price of
+  // the template's active selfhost plan; lowest when several qualify), computed
+  // in a single query.
+  app.get('/templates/pricing-overview', async (request) => {
+    requirePermission(request, 'template:read');
+    const { rows } = await db.query<{
+      id: string; slug: string; title_vi: string | null; category_id: string | null; category_code: string | null;
+      status: string; hidden: boolean; current_price_minor: string | null;
+    }>(
+      `SELECT t.id, t.slug, tt.title AS title_vi, t.category_id, c.code AS category_code, t.status, t.hidden,
+              (SELECT pp.amount_minor::text
+                 FROM plans p JOIN plan_prices pp ON pp.plan_id = p.id
+                WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'selfhost'
+                  AND pp.currency = $1 AND pp.interval = 'one_time'
+                  AND pp.effective_from <= now() AND (pp.effective_to IS NULL OR pp.effective_to > now())
+                ORDER BY pp.amount_minor ASC LIMIT 1) AS current_price_minor
+         FROM templates t
+         LEFT JOIN template_categories c ON c.id = t.category_id
+         LEFT JOIN template_translations tt ON tt.template_id = t.id AND tt.locale = $2
+        ORDER BY t.slug`,
+      [PLATFORM_CURRENCY, DEFAULT_LOCALE],
+    );
+    return { data: rows, page: { next_cursor: null, has_more: false } };
+  });
+
+  // Quick price for one template — deliberately If-Match-free (speed is the
+  // point); the change still bumps the template row_version and is audited.
+  app.put<{ Params: { id: string }; Body: { amount_minor: string | number } }>(
+    '/templates/:id/quick-price',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor'], properties: { amount_minor: { type: ['string', 'integer'] } } } } },
+    async (request) => {
+      const auth = requirePermission(request, 'pricing:write');
+      const amount = parsePositiveAmount(request.body.amount_minor);
+      const result = await tx(db, (client) => applyQuickPrice(client, request.params.id, amount, auth.userId, request.id));
+      return { data: result, meta: { request_id: request.id, revision: null } };
+    },
+  );
+
+  // Bulk quick price: all templates, one category, or an explicit id list.
+  app.post<{ Body: { amount_minor: string | number; scope: BulkScopeInput } }>(
+    '/templates/bulk-price',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor', 'scope'], properties: { amount_minor: { type: ['string', 'integer'] }, scope: bulkScopeSchema } } } },
+    async (request) => {
+      const auth = requirePermission(request, 'pricing:write');
+      const amount = parsePositiveAmount(request.body.amount_minor);
+      const ids = await resolveBulkScope(request.body.scope);
+      const result = await runBulk(ids, (client, id) => applyQuickPrice(client, id, amount, auth.userId, request.id));
+      return { data: { amount_minor: amount, currency: PLATFORM_CURRENCY, ...result } };
+    },
+  );
+
+  // Show/hide one template (hidden = absent from the whole public surface).
+  app.post<{ Params: { id: string }; Body: { hidden: boolean } }>(
+    '/templates/:id/visibility',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['hidden'], properties: { hidden: { type: 'boolean' } } } } },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'template:write');
+      const next = await tx(db, (client) => applyVisibility(client, request.params.id, request.body.hidden, auth.userId, request.id));
+      reply.header('etag', `"${next}"`);
+      return { data: { id: request.params.id, hidden: request.body.hidden }, meta: { request_id: request.id, revision: next } };
+    },
+  );
+
+  // Bulk show/hide with the same scope shape as bulk-price.
+  app.post<{ Body: { hidden: boolean; scope: BulkScopeInput } }>(
+    '/templates/bulk-visibility',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['hidden', 'scope'], properties: { hidden: { type: 'boolean' }, scope: bulkScopeSchema } } } },
+    async (request) => {
+      const auth = requirePermission(request, 'template:write');
+      const ids = await resolveBulkScope(request.body.scope);
+      const result = await runBulk(ids, (client, id) => applyVisibility(client, id, request.body.hidden, auth.userId, request.id));
+      return { data: { hidden: request.body.hidden, ...result } };
     },
   );
 

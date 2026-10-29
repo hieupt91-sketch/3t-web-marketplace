@@ -99,7 +99,7 @@ const TEMPLATE_SELECT = `
   LEFT JOIN artifacts a ON a.id = v.artifact_id
   JOIN template_translations ft ON ft.template_id = t.id AND ft.locale = '${DEFAULT_LOCALE}' AND ft.status = 'published'
   LEFT JOIN template_translations rt ON rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published'
-  WHERE t.status = 'published'`;
+  WHERE t.status = 'published' AND NOT t.hidden`;
 
 /** Hero photo candidates inside a built site tree, in preference order. */
 const HERO_CANDIDATES = [
@@ -254,13 +254,13 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
 
   app.get<{ Params: { id: string } }>('/plans/:id', async (request) => {
     if (!/^[0-9a-f-]{36}$/.test(request.params.id)) throw errors.notFound();
-    const { rows } = await db.query<{ template_id: string; template_status: string }>(
-      `SELECT p.template_id, t.status AS template_status FROM plans p JOIN templates t ON t.id = p.template_id
+    const { rows } = await db.query<{ template_id: string; template_status: string; template_hidden: boolean }>(
+      `SELECT p.template_id, t.status AS template_status, t.hidden AS template_hidden FROM plans p JOIN templates t ON t.id = p.template_id
        WHERE p.id = $1 AND p.status = 'active'`,
       [request.params.id],
     );
     const plan = rows[0];
-    if (!plan || plan.template_status !== 'published') throw errors.notFound();
+    if (!plan || plan.template_status !== 'published' || plan.template_hidden) throw errors.notFound();
     const plans = await loadActivePlans(db, plan.template_id, PLATFORM_CURRENCY);
     const found = plans.find((p) => p.id === request.params.id);
     if (!found) throw errors.notFound();
@@ -295,7 +295,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
        FROM templates t
        JOIN template_versions v ON v.id = t.published_version_id
        LEFT JOIN artifacts a ON a.id = v.artifact_id
-       WHERE t.status = 'published' AND (t.slug = $1 OR EXISTS (
+       WHERE t.status = 'published' AND NOT t.hidden AND (t.slug = $1 OR EXISTS (
          SELECT 1 FROM template_translations x WHERE x.template_id = t.id AND x.slug = $1 AND x.status = 'published'))
        LIMIT 1`,
       [slug],
