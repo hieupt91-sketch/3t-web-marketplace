@@ -5,9 +5,16 @@ import { extname, join, posix, sep } from 'node:path';
 import type { Db, LocalObjectStore, PlatformConfig } from '@3t/core';
 
 /**
- * Preview origin server (docs/03 §6–7). Serves immutable static artifacts by hostname label on a
+ * Preview origin server (docs/03 §6–7). Serves immutable static artifacts by label on a
  * registrable domain separate from the portal, so untrusted template HTML/JS can never read
  * portal cookies. No directory listing, no path escape, GET/HEAD only.
+ *
+ * Two label modes, chosen per request:
+ * - Host mode (default): the label is the subdomain, `<label>.<previewBaseDomain>`.
+ * - Path mode: when the Host IS the base domain itself (e.g. preview.webmaket.com),
+ *   the label is the first path segment, `<baseDomain>/<label>/...`. Production uses
+ *   this so demo URLs live on a single-label subdomain, which the platform's TLS
+ *   certificate covers (a wildcard only spans one label level).
  */
 const MIME: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -35,6 +42,8 @@ const MIME: Record<string, string> = {
   '.pdf': 'application/pdf',
   '.webmanifest': 'application/manifest+json',
 };
+
+const LABEL_RE = /^[a-z0-9]{20,63}$/;
 
 interface PreviewTarget {
   root: string;
@@ -128,12 +137,32 @@ export function createPreviewServer(deps: PreviewServerDeps): Server {
       return plain(res, 405, 'Method Not Allowed');
     }
     const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '');
-    if (!host.endsWith(suffix)) return plain(res, 404, 'Not Found');
-    const label = host.slice(0, -suffix.length);
-    if (!/^[a-z0-9]{20,63}$/.test(label)) return plain(res, 404, 'Not Found');
+    const rawUrl = req.url ?? '/';
+    let label: string;
+    let url = rawUrl;
+    if (host === deps.config.previewBaseDomain) {
+      // Path mode: label is the first path segment, the rest is the artifact path.
+      const queryAt = rawUrl.search(/[?#]/);
+      const pathname = queryAt === -1 ? rawUrl : rawUrl.slice(0, queryAt);
+      const query = queryAt === -1 ? '' : rawUrl.slice(queryAt);
+      const segment = pathname.split('/')[1] ?? '';
+      if (!LABEL_RE.test(segment)) return plain(res, 404, 'Not Found');
+      if (pathname === `/${segment}`) {
+        // Relative asset URLs only resolve correctly below a trailing slash.
+        res.statusCode = 302;
+        res.setHeader('location', `/${segment}/${query}`);
+        return res.end();
+      }
+      label = segment;
+      url = (pathname.slice(segment.length + 1) || '/') + query;
+    } else {
+      // Host mode: label is the subdomain of the preview base domain.
+      if (!host.endsWith(suffix)) return plain(res, 404, 'Not Found');
+      label = host.slice(0, -suffix.length);
+      if (!LABEL_RE.test(label)) return plain(res, 404, 'Not Found');
+    }
     const target = await lookup(label);
     if (!target) return plain(res, 404, 'Preview not found or no longer available');
-    const url = req.url ?? '/';
     if (url === '/__health') {
       res.setHeader('content-type', 'application/json');
       return res.end(JSON.stringify({ status: 'ok' }));

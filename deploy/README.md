@@ -67,7 +67,8 @@ This prints a tunnel ID and writes a credentials file. Then, in the
 Cloudflare dashboard for your domain, add two DNS routes for that tunnel:
 
 - `webmaket.com`
-- `*.preview.webmaket.com` (wildcard — without it the main site works but
+- `preview.webmaket.com` (demo previews live under it as paths,
+  `preview.webmaket.com/<label>/` — without it the main site works but
   every demo preview fails to load)
 
 Copy `cloudflared.example.yml` to `cloudflared.yml`, replace `<TUNNEL_ID>`
@@ -142,8 +143,8 @@ docker compose down -v     # DANGER: also deletes the database and app data
 
 - `origin_mismatch` on login or form posts: `PORTAL_ORIGIN` in `.env` does
   not equal the tunnel hostname. Fix it and restart api + web.
-- Main site works but demos show an error: the wildcard tunnel route
-  (`*.preview.webmaket.com`) is missing or points elsewhere.
+- Main site works but demos show an error: the preview tunnel route
+  (`preview.webmaket.com`) is missing or points elsewhere.
 - `api` keeps restarting: run `docker compose logs api` — the usual cause
   is a wrong `DB_PASSWORD` or a missing required secret in `.env`.
 - Pages load but images/uploads are missing after a rebuild: the `appdata`
