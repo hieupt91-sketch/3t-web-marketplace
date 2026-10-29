@@ -102,7 +102,11 @@ const TEMPLATE_SELECT = `
   WHERE t.status = 'published'`;
 
 /** Hero photo candidates inside a built site tree, in preference order. */
-const HERO_CANDIDATES = ['images/hero.jpg', 'images/hero.jpeg', 'images/hero.png', 'images/hero.webp'] as const;
+const HERO_CANDIDATES = [
+  'images/hero.jpg', 'images/hero.jpeg', 'images/hero.png', 'images/hero.webp',
+  // Runtime (node-http) templates ship their hero under public/ instead.
+  'public/images/hero.jpg', 'public/images/hero.jpeg', 'public/images/hero.png', 'public/images/hero.webp',
+] as const;
 const HERO_MIME: Record<string, string> = { '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.png': 'image/png', '.webp': 'image/webp' };
 
 /** First readable hero photo inside a stored artifact tree, or null when the

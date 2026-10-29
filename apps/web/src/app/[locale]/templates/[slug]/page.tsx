@@ -46,7 +46,11 @@ export default async function TemplateDetail({ params }: Props) {
   const template = result.data;
   return (
     <div className="container stack">
-      <div aria-hidden="true" style={{ height: 200, borderRadius: 'var(--radius-card)', background: coverGradient(template.slug), boxShadow: 'var(--shadow-card)' }} />
+      {template.preview_image ? (
+        <img src={template.preview_image} alt={t('ui.catalog.screenshot_alt', { title: template.title })} style={{ display: 'block', width: '100%', height: 200, objectFit: 'cover', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)' }} />
+      ) : (
+        <div aria-hidden="true" style={{ height: 200, borderRadius: 'var(--radius-card)', background: coverGradient(template.slug), boxShadow: 'var(--shadow-card)' }} />
+      )}
       <h1 lang={template.resolved_locale}>{template.title}</h1>
       {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
       {template.summary ? <p lang={template.resolved_locale}>{template.summary}</p> : null}
