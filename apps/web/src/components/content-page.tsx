@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPage } from '@/lib/content-server';
+import { languageAlternates } from '@/lib/seo';
 import { RichText } from '@/components/rich-text';
 
 /** Shared renderer for a CMS page by slug (P05 how-it-works, P07 partners). */
@@ -11,7 +12,7 @@ export async function contentPageMetadata(slug: string, locale: Locale): Promise
   return {
     title: result.data.title ?? translate(locale, 'ui.content.untitled'),
     robots: result.data.translation_status === 'fallback' ? { index: false, follow: true } : undefined,
-    alternates: { canonical: `/${locale}/${slug}` },
+    alternates: { canonical: `/${locale}/${slug}`, languages: languageAlternates(`/${slug}`) },
   };
 }
 

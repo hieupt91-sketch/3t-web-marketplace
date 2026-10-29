@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPolicy } from '@/lib/content-server';
+import { languageAlternates } from '@/lib/seo';
 import { RichText } from '@/components/rich-text';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
@@ -9,7 +10,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale, slug } = await params;
   const result = await fetchPolicy(slug, locale);
   if (!result.ok) return { title: translate(locale, 'ui.not_found.title'), robots: { index: false } };
-  return { title: result.data.title ?? '', robots: result.data.translation_status === 'fallback' ? { index: false } : undefined, alternates: { canonical: `/${locale}/policies/${slug}` } };
+  return { title: result.data.title ?? '', robots: result.data.translation_status === 'fallback' ? { index: false } : undefined, alternates: { canonical: `/${locale}/policies/${slug}`, languages: languageAlternates(`/policies/${slug}`) } };
 }
 
 /** P08 — policy document (latest effective version). */

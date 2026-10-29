@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPage } from '@/lib/content-server';
+import { languageAlternates } from '@/lib/seo';
 import { RichText } from '@/components/rich-text';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
@@ -10,7 +11,7 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale, slug } = await params;
   const result = await fetchPage(slug, locale);
   if (!result.ok) return { title: translate(locale, 'ui.not_found.title'), robots: { index: false } };
-  return { title: result.data.title ?? '', robots: result.data.translation_status === 'fallback' ? { index: false } : undefined, alternates: { canonical: `/${locale}/help/${slug}` } };
+  return { title: result.data.title ?? '', robots: result.data.translation_status === 'fallback' ? { index: false } : undefined, alternates: { canonical: `/${locale}/help/${slug}`, languages: languageAlternates(`/help/${slug}`) } };
 }
 
 /** P06 — help article detail. */

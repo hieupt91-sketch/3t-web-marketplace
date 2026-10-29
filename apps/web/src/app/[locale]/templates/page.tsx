@@ -4,6 +4,8 @@ import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
 import { DemoCatalog } from '@/components/demo-catalog';
+import { JsonLd } from '@/components/json-ld';
+import { itemListJsonLd } from '@/lib/seo';
 
 type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string; mode?: string; capability?: string; category?: string; min_price?: string; max_price?: string }> };
 
@@ -38,6 +40,7 @@ export default async function Templates({ params, searchParams }: Props) {
   const hasFilter = q || mode || capability || category || min_price || max_price;
   return (
     <div className="container stack">
+      {result.ok && result.data.length > 0 ? <JsonLd data={itemListJsonLd(result.data, locale)} /> : null}
       <h1>{t('ui.catalog.title')}</h1>
       <form className="search" method="get" role="search">
         {mode ? <input type="hidden" name="mode" value={mode} /> : null}

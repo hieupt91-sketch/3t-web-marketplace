@@ -5,6 +5,8 @@ import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
 import { HostingAdvisor } from '@/components/hosting-advisor';
+import { JsonLd } from '@/components/json-ld';
+import { absoluteUrl, breadcrumbJsonLd, languageAlternates, productJsonLd, SITE_NAME, siteBaseUrl } from '@/lib/seo';
 import { coverGradient } from '@/lib/cover-gradient';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
@@ -22,11 +24,28 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const result = await fetchPublic<TemplateSummary>(`/templates/${encodeURIComponent(slug)}`, locale);
   if (!result.ok) return { title: translate(locale, 'ui.not_found.title'), robots: { index: false } };
   // A fallback (untranslated) page is not indexable in this locale (docs/07 §3).
+  const images = result.data.preview_image ? [{ url: absoluteUrl(result.data.preview_image), alt: result.data.title }] : undefined;
   return {
     title: result.data.title,
     description: result.data.summary ?? undefined,
     robots: result.data.translation_status === 'fallback' ? { index: false, follow: true } : undefined,
-    alternates: { canonical: `/${locale}/templates/${result.data.slug}` },
+    alternates: { canonical: `/${locale}/templates/${slug}`, languages: languageAlternates(`/templates/${slug}`) },
+    openGraph: {
+      type: 'website',
+      siteName: SITE_NAME,
+      url: `${siteBaseUrl()}/${locale}/templates/${slug}`,
+      title: result.data.title,
+      description: result.data.summary ?? undefined,
+      locale: locale === 'vi' ? 'vi_VN' : 'en_US',
+      alternateLocale: [locale === 'vi' ? 'en_US' : 'vi_VN'],
+      images,
+    },
+    twitter: {
+      card: 'summary_large_image',
+      title: result.data.title,
+      description: result.data.summary ?? undefined,
+      images: images?.map((image) => image.url),
+    },
   };
 }
 
@@ -46,6 +65,14 @@ export default async function TemplateDetail({ params }: Props) {
   const template = result.data;
   return (
     <div className="container stack">
+      <JsonLd data={productJsonLd(template, locale)} />
+      <JsonLd
+        data={breadcrumbJsonLd([
+          { name: SITE_NAME, path: `/${locale}` },
+          { name: t('ui.catalog.title'), path: `/${locale}/templates` },
+          { name: template.title, path: `/${locale}/templates/${template.slug}` },
+        ])}
+      />
       {template.preview_image ? (
         <img src={template.preview_image} alt={t('ui.catalog.screenshot_alt', { title: template.title })} style={{ display: 'block', width: '100%', height: 200, objectFit: 'cover', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)' }} />
       ) : (

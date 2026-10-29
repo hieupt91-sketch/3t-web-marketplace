@@ -2,11 +2,12 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchHelpIndex } from '@/lib/content-server';
+import { languageAlternates } from '@/lib/seo';
 
 type Props = { params: Promise<{ locale: Locale }> };
 export async function generateMetadata({ params }: Props): Promise<Metadata> {
   const { locale } = await params;
-  return { title: translate(locale, 'ui.help.title'), alternates: { canonical: `/${locale}/help` } };
+  return { title: translate(locale, 'ui.help.title'), alternates: { canonical: `/${locale}/help`, languages: languageAlternates('/help') } };
 }
 
 /** P06 — help index. */
