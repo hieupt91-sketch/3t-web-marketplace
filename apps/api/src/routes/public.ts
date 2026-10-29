@@ -52,6 +52,7 @@ interface PublicTemplateRow {
   manifest_json: { adapter?: string; export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
   size_bytes: string | null;
   artifact_key: string | null;
+  source_sha: string | null;
   demo_label: string | null;
   requested_title: string | null;
   requested_summary: string | null;
@@ -88,7 +89,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
 }
 
 const TEMPLATE_SELECT = `
-  SELECT t.id, t.created_at, t.slug, v.manifest_json, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
+  SELECT t.id, t.created_at, t.slug, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          rt.title AS requested_title, rt.summary AS requested_summary, rt.slug AS requested_slug,
@@ -124,6 +125,24 @@ async function heroFile(store: FastifyInstance['deps']['store'], artifactKey: st
 
 function previewImageUrl(slug: string): string {
   return `/api/v1/templates/${encodeURIComponent(slug)}/preview-image`;
+}
+
+/** Hero-existence results cached in-process. A published version's artifact
+ *  tree is immutable and content-addressed, so the result can never go stale
+ *  for a given version: republishing points at a NEW version whose source_sha
+ *  differs, which misses the cache and re-checks the filesystem. This removes
+ *  up to 4 fs.access calls per row from every catalog list request. */
+const heroCache = new Map<string, { path: string; mime: string } | null>();
+
+async function heroFileCached(store: FastifyInstance['deps']['store'], artifactKey: string | null, sourceSha: string | null): Promise<{ path: string; mime: string } | null> {
+  if (!artifactKey) return null;
+  const key = `${artifactKey}|${sourceSha ?? ''}`;
+  const hit = heroCache.get(key);
+  if (hit !== undefined) return hit;
+  const hero = await heroFile(store, artifactKey);
+  if (heroCache.size >= 512) heroCache.clear(); // bound memory; entries are tiny
+  heroCache.set(key, hero);
+  return hero;
 }
 
 export async function publicRoutes(app: FastifyInstance): Promise<void> {
@@ -224,7 +243,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const prices = await startingPricesFor(db, rows.slice(0, limit).map((r) => r.id));
     const previews = new Map<string, string>();
     await Promise.all(rows.slice(0, limit).map(async (row) => {
-      if (await heroFile(app.deps.store, row.artifact_key)) previews.set(row.id, previewImageUrl(row.slug));
+      if (await heroFileCached(app.deps.store, row.artifact_key, row.source_sha)) previews.set(row.id, previewImageUrl(row.slug));
     }));
     return page(rows, limit, (row) => toSummary(row, request.locale, config, prices.get(row.id) ?? [], previews.get(row.id) ?? null));
   });
@@ -255,7 +274,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const row = rows[0];
     if (!row) throw errors.notFound();
     const plans = await loadActivePlans(db, row.id, PLATFORM_CURRENCY);
-    const hero = await heroFile(app.deps.store, row.artifact_key);
+    const hero = await heroFileCached(app.deps.store, row.artifact_key, row.source_sha);
     return {
       data: { ...toSummary(row, request.locale, config, startingPrices(plans), hero ? previewImageUrl(row.slug) : null), plans },
       meta: { request_id: request.id, revision: null },
@@ -278,7 +297,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       [slug],
     );
     const row = rows[0];
-    const hero = await heroFile(app.deps.store, row?.artifact_key ?? null);
+    const hero = await heroFileCached(app.deps.store, row?.artifact_key ?? null, row?.source_sha ?? null);
     if (!row || !hero) throw errors.notFound();
     const etag = row.source_sha ? `"${row.source_sha}"` : null;
     if (etag && request.headers['if-none-match'] === etag) return reply.code(304).send();
