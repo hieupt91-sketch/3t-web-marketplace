@@ -5,7 +5,7 @@ import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
 import { HostingAdvisor } from '@/components/hosting-advisor';
-import { coverGradient } from '@/components/template-card';
+import { coverGradient } from '@/lib/cover-gradient';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
 

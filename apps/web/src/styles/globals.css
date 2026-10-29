@@ -194,6 +194,14 @@ h3 {
   padding: var(--space-5) var(--space-4);
   text-align: center;
 }
+@media (max-width: 639px) {
+  /* Extra bottom room so the last footer lines rest clear of the fixed
+   * bottom widgets (assistant bubble bottom-left, contact bottom-right)
+   * instead of sliding underneath them at the end of the page. */
+  .page-footer {
+    padding-bottom: calc(var(--space-3) + 68px);
+  }
+}
 
 .dashboard {
   display: grid;
