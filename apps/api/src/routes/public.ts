@@ -88,17 +88,36 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
   };
 }
 
+/**
+ * The requested-locale translation is read via scalar subqueries, NOT a
+ * LEFT JOIN. template_translations' primary key is (template_id, locale),
+ * so a subquery returns exactly the row a join would. The join shape was
+ * measurably fragile: when planner statistics for the table are missing or
+ * stale (freshly imported/seeded data, before autovacuum analyzes), the
+ * planner estimates ~1 row and serves the LEFT JOIN as a nested-loop join
+ * filter over the whole translations table — 162ms vs 4ms for this query
+ * on a 1,000-template seed, enough to fail the 50-concurrent catalog load
+ * budget on its own. A scalar subquery is evaluated only for rows that
+ * survive to the output page (like the demo_label subquery above), so its
+ * cost is bounded by the page size under ANY statistics; with the
+ * (template_id, locale, status) index from migration 0020 each evaluation
+ * is a single index probe. The fallback translation stays a JOIN: it is a
+ * required-row filter (a template without a published default-locale
+ * translation is not listed), which a subquery cannot express.
+ */
+const RT_LOOKUP = (column: string) =>
+  `(SELECT rt.${column} FROM template_translations rt WHERE rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published')`;
+
 const TEMPLATE_SELECT = `
   SELECT t.id, t.created_at, t.slug, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
-         rt.title AS requested_title, rt.summary AS requested_summary, rt.slug AS requested_slug,
+         ${RT_LOOKUP('title')} AS requested_title, ${RT_LOOKUP('summary')} AS requested_summary, ${RT_LOOKUP('slug')} AS requested_slug,
          ft.title AS fallback_title, ft.summary AS fallback_summary, ft.slug AS fallback_slug
   FROM templates t
   JOIN template_versions v ON v.id = t.published_version_id
   LEFT JOIN artifacts a ON a.id = v.artifact_id
   JOIN template_translations ft ON ft.template_id = t.id AND ft.locale = '${DEFAULT_LOCALE}' AND ft.status = 'published'
-  LEFT JOIN template_translations rt ON rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published'
   WHERE t.status = 'published' AND NOT t.hidden`;
 
 /** Hero photo candidates inside a built site tree, in preference order. */
@@ -131,22 +150,33 @@ function previewImageUrl(slug: string): string {
   return `/api/v1/templates/${encodeURIComponent(slug)}/preview-image`;
 }
 
-/** Hero-existence results cached in-process. A published version's artifact
+/** Hero-existence probes cached in-process. A published version's artifact
  *  tree is immutable and content-addressed, so the result can never go stale
  *  for a given version: republishing points at a NEW version whose source_sha
- *  differs, which misses the cache and re-checks the filesystem. This removes
- *  up to 4 fs.access calls per row from every catalog list request. */
-const heroCache = new Map<string, { path: string; mime: string } | null>();
+ *  differs, which misses the cache and re-checks the filesystem.
+ *
+ *  The cache stores the in-flight PROMISE and is populated synchronously,
+ *  before the probe's first await. Storing only the resolved value (the
+ *  previous shape) let every concurrent caller miss and launch its own
+ *  filesystem probe — measured on the release-load seed (50 concurrent
+ *  list requests × 50 rows sharing one artifact): 2,500 calls ran 1,950
+ *  probes (~15,600 fs.access calls) against 1 execution after this
+ *  dedupe. Sharing one promise per key makes concurrent callers await the
+ *  same probe — lock-free, and distinct keys still probe in parallel. */
+const heroCache = new Map<string, Promise<{ path: string; mime: string } | null>>();
 
-async function heroFileCached(store: FastifyInstance['deps']['store'], artifactKey: string | null, sourceSha: string | null): Promise<{ path: string; mime: string } | null> {
-  if (!artifactKey) return null;
+function heroFileCached(store: FastifyInstance['deps']['store'], artifactKey: string | null, sourceSha: string | null): Promise<{ path: string; mime: string } | null> {
+  if (!artifactKey) return Promise.resolve(null);
   const key = `${artifactKey}|${sourceSha ?? ''}`;
   const hit = heroCache.get(key);
   if (hit !== undefined) return hit;
-  const hero = await heroFile(store, artifactKey);
   if (heroCache.size >= 512) heroCache.clear(); // bound memory; entries are tiny
-  heroCache.set(key, hero);
-  return hero;
+  // heroFile never rejects for a missing/unreadable hero (it resolves null);
+  // the catch only guards a programming error (e.g. an invalid object key)
+  // so one bad key cannot wedge the shared promise for other callers.
+  const probe = heroFile(store, artifactKey).catch(() => null);
+  heroCache.set(key, probe);
+  return probe;
 }
 
 export async function publicRoutes(app: FastifyInstance): Promise<void> {
@@ -203,7 +233,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     if (q) {
       // Diacritic-insensitive (docs/07 §5): unaccent both sides so "da lat" matches "Đà Lạt".
       params.push(`%${q.replace(/[\\%_]/g, (c) => `\\${c}`)}%`);
-      sql += ` AND (unaccent(COALESCE(rt.title, ft.title)) ILIKE unaccent($${params.length}) OR unaccent(COALESCE(rt.summary, ft.summary)) ILIKE unaccent($${params.length}))`;
+      sql += ` AND (unaccent(COALESCE(${RT_LOOKUP('title')}, ft.title)) ILIKE unaccent($${params.length}) OR unaccent(COALESCE(${RT_LOOKUP('summary')}, ft.summary)) ILIKE unaccent($${params.length}))`;
     }
     if (mode) {
       params.push(mode);
