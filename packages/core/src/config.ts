@@ -18,6 +18,10 @@ export interface PlatformConfig {
   previewBaseDomain: string;
   /** Where the worker reaches the preview server for smoke checks. */
   previewInternalUrl: string;
+  /** Base domain for hosted customer sites: <subdomain>.<siteBaseDomain>. */
+  siteBaseDomain: string;
+  /** Public origin template for a hosted site, e.g. https://{label}.webmaket.com. */
+  siteOriginTemplate: string;
   cookieSecure: boolean;
   sessionTtlHours: number;
   mailTransport: 'file' | 'disabled';
@@ -71,6 +75,8 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     previewOriginTemplate: env('PREVIEW_ORIGIN_TEMPLATE', mode === 'production' ? undefined : 'http://{label}.preview.localhost:4100'),
     previewBaseDomain: env('PREVIEW_BASE_DOMAIN', mode === 'production' ? undefined : 'preview.localhost'),
     previewInternalUrl: env('PREVIEW_INTERNAL_URL', 'http://127.0.0.1:4100'),
+    siteBaseDomain: env('SITE_BASE_DOMAIN', mode === 'production' ? undefined : 'sites.localhost'),
+    siteOriginTemplate: env('SITE_ORIGIN_TEMPLATE', mode === 'production' ? undefined : 'http://{label}.sites.localhost:4200'),
     cookieSecure: env('COOKIE_SECURE', mode === 'production' ? 'true' : 'false') === 'true',
     sessionTtlHours: Number(env('SESSION_TTL_HOURS', '336')),
     mailTransport: env('MAIL_TRANSPORT', mode === 'production' ? 'disabled' : 'file') as 'file' | 'disabled',
@@ -97,7 +103,17 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
   if (portalHost === config.previewBaseDomain || portalHost.endsWith(`.${config.previewBaseDomain}`)) {
     throw new Error('Preview base domain must differ from the portal host (ADR-005)');
   }
+  if (config.siteBaseDomain === config.previewBaseDomain) {
+    throw new Error('Site base domain must differ from the preview base domain');
+  }
+  if (!config.siteOriginTemplate.includes('{label}')) {
+    throw new Error('SITE_ORIGIN_TEMPLATE must contain {label}');
+  }
   return config;
+}
+
+export function siteOrigin(config: PlatformConfig, subdomain: string): string {
+  return config.siteOriginTemplate.replace('{label}', subdomain);
 }
 
 export function previewOrigin(config: PlatformConfig, label: string): string {

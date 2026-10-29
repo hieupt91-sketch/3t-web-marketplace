@@ -12,8 +12,9 @@ pids=()
 trap 'kill "${pids[@]}" 2>/dev/null || true' EXIT INT TERM
 pnpm --filter @3t/api run dev > runtime-data/logs/api.log 2>&1 & pids+=($!)
 pnpm --filter @3t/preview run dev > runtime-data/logs/preview.log 2>&1 & pids+=($!)
+pnpm --filter @3t/site-router run dev > runtime-data/logs/site-router.log 2>&1 & pids+=($!)
 pnpm --filter @3t/worker run dev > runtime-data/logs/worker.log 2>&1 & pids+=($!)
 pnpm --filter @3t/web run dev > runtime-data/logs/web.log 2>&1 & pids+=($!)
-echo "Web: http://localhost:3000  API: http://127.0.0.1:4000  Preview: http://<label>.preview.localhost:4100"
+echo "Web: http://localhost:3000  API: http://127.0.0.1:4000  Preview: http://<label>.preview.localhost:4100  Sites: http://<subdomain>.sites.localhost:4200"
 echo "Logs: runtime-data/logs/  (Ctrl+C to stop)"
 wait

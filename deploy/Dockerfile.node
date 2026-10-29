@@ -1,4 +1,4 @@
-# Staging image for the TypeScript services (api, worker, preview).
+# Staging image for the TypeScript services (api, worker, preview, site-router).
 # They run from source with tsx, exactly like development — this keeps staging
 # faithful without a separate compile step. Production hardening (compiled
 # builds, non-root user, read-only rootfs) is a later milestone.
@@ -10,6 +10,7 @@ COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/
 COPY apps/preview/package.json apps/preview/
+COPY apps/site-router/package.json apps/site-router/
 COPY apps/web/package.json apps/web/
 COPY packages/core/package.json packages/core/
 COPY packages/i18n/package.json packages/i18n/

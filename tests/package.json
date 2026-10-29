@@ -12,6 +12,7 @@
     "@3t/api": "workspace:*",
     "@3t/core": "workspace:*",
     "@3t/preview": "workspace:*",
+    "@3t/site-router": "workspace:*",
     "@3t/template-sdk": "workspace:*",
     "@3t/worker": "workspace:*"
   },

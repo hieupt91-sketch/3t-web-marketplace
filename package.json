@@ -14,6 +14,7 @@
     "dev:api": "pnpm --filter @3t/api run dev",
     "dev:worker": "pnpm --filter @3t/worker run dev",
     "dev:preview": "pnpm --filter @3t/preview run dev",
+    "dev:site-router": "pnpm --filter @3t/site-router run dev",
     "dev:web": "pnpm --filter @3t/web run dev",
     "typecheck": "pnpm -r run typecheck",
     "lint": "pnpm -r run lint",

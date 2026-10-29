@@ -1,5 +1,5 @@
 import { randomBytes } from 'node:crypto';
-import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool, loadConfig } from '@3t/core';
+import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool, enqueueJob, loadConfig } from '@3t/core';
 import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
 import { SITE_JOB_TYPES, runSiteJob } from './site-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
@@ -27,6 +27,27 @@ function logLine(event: string, fields: Record<string, unknown> = {}) {
 }
 
 logLine('started', { screenshots: screenshotter !== null });
+
+// Boot sweep: site servers are children of this process and die with it (and
+// with the host). Re-enqueue a restart for every live site so hosted sites
+// come back after a worker/VPS reboot without waiting for a visitor; the
+// site router's lazy restart covers anything this sweep misses.
+try {
+  const { rows } = await db.query<{ id: string; owner_id: string }>("SELECT id, owner_id FROM sites WHERE status IN ('active', 'grace')");
+  for (const site of rows) {
+    await enqueueJob(db, {
+      type: 'site.restart',
+      dedupeKey: `site.restart:boot:${site.id}:${Math.floor(Date.now() / 3_600_000)}`,
+      payload: { site_id: site.id, boot: true },
+      resourceType: 'site',
+      resourceId: site.id,
+      ownerId: site.owner_id,
+    });
+  }
+  if (rows.length > 0) logLine('boot_site_restarts_enqueued', { count: rows.length });
+} catch (error) {
+  logLine('boot_sweep_failed', { error: (error as Error).message });
+}
 while (!stopping) {
   const job = await claimJob(db, workerId, [IMPORT_JOB_TYPE, ...SITE_JOB_TYPES], LEASE_SECONDS).catch((error: Error) => {
     logLine('claim_failed', { error: error.message });

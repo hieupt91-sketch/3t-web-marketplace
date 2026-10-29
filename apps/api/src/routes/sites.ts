@@ -34,7 +34,10 @@ interface SiteView {
   [key: string]: unknown;
 }
 
-function siteUrl(row: { runtime_port: number | null; subdomain: string | null }): string | null {
+function siteUrl(row: { runtime_port: number | null; subdomain: string | null }, originTemplate: string): string | null {
+  // Public URL via the site router once the site has its subdomain; the
+  // loopback runtime URL remains only as an internal fallback.
+  if (row.subdomain) return `${originTemplate.replace('{label}', row.subdomain)}/`;
   if (row.runtime_port) return `http://127.0.0.1:${row.runtime_port}/`;
   return null;
 }
@@ -195,7 +198,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
        ORDER BY s.created_at DESC LIMIT 100`,
       [auth.userId],
     );
-    return { data: rows.map((r) => ({ ...r, url: siteUrl(r) })) };
+    return { data: rows.map((r) => ({ ...r, url: siteUrl(r, config.siteOriginTemplate) })) };
   });
 
   app.get<{ Params: { id: string } }>('/sites/:id', async (request) => {
@@ -207,7 +210,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       db.query('SELECT * FROM subscriptions WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1', [site.id]),
       db.query<{ template_id: string }>('SELECT template_id FROM template_versions WHERE id = $1', [site.template_version_id]),
     ]);
-    return { data: { ...site, url: siteUrl(site), template_id: template.rows[0]?.template_id ?? null, deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null } };
+    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null } };
   });
 
   app.get<{ Params: { id: string } }>('/sites/:id/deployments', async (request) => {

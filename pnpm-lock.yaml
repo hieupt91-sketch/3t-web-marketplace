@@ -61,6 +61,25 @@ importers:
         specifier: 3.2.4
         version: 3.2.4(@types/node@22.20.5)(tsx@4.23.15)
 
+  apps/site-router:
+    dependencies:
+      '@3t/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+    devDependencies:
+      '@types/node':
+        specifier: 22.20.5
+        version: 22.20.5
+      tsx:
+        specifier: 4.23.15
+        version: 4.23.15
+      typescript:
+        specifier: 5.9.3
+        version: 5.9.3
+      vitest:
+        specifier: 3.2.4
+        version: 3.2.4(@types/node@22.20.5)(tsx@4.23.15)
+
   apps/web:
     dependencies:
       '@3t/i18n':
@@ -205,6 +224,9 @@ importers:
       '@3t/preview':
         specifier: workspace:*
         version: link:../apps/preview
+      '@3t/site-router':
+        specifier: workspace:*
+        version: link:../apps/site-router
       '@3t/template-sdk':
         specifier: workspace:*
         version: link:../packages/template-sdk

@@ -70,6 +70,15 @@ Cloudflare dashboard for your domain, add two DNS routes for that tunnel:
 - `preview.webmaket.com` (demo previews live under it as paths,
   `preview.webmaket.com/<label>/` — without it the main site works but
   every demo preview fails to load)
+- `*.webmaket.com` (one wildcard route: hosted customer sites are served
+  by the site router on `:4200` at `https://<subdomain>.webmaket.com` —
+  without it the storefront works but every hosted customer site fails
+  to load; one label deep is covered by the free certificate)
+
+Also set `SITE_BASE_DOMAIN=webmaket.com` and
+`SITE_ORIGIN_TEMPLATE=https://{label}.webmaket.com` in `.env` before
+starting the stack — the api/worker refuse to start in production
+without them.
 
 Copy `cloudflared.example.yml` to `cloudflared.yml`, replace `<TUNNEL_ID>`
 and the hostnames, and run:

@@ -13,4 +13,11 @@ ingress:
   # but every demo preview fails to load.
   - hostname: "preview.webmaket.com"
     service: http://localhost:4100
+  # Hosted customer sites: every <subdomain>.webmaket.com resolves through
+  # the site router on :4200, which proxies to that site's own process.
+  # Specific hostnames above win over this wildcard, and one label deep is
+  # covered by the free Universal certificate. Needs one wildcard DNS
+  # record (*.webmaket.com, proxied, to this tunnel) in Cloudflare.
+  - hostname: "*.webmaket.com"
+    service: http://localhost:4200
   - service: http_status:404

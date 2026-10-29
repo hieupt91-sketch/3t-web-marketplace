@@ -3,6 +3,7 @@
  * renewals, lifecycle, admin operations, tenant isolation (AT-22..AT-29, AT-47).
  */
 import { createHash, randomUUID } from 'node:crypto';
+import { request as httpRequest } from 'node:http';
 import { readdir, readFile } from 'node:fs/promises';
 import type { AddressInfo } from 'node:net';
 import { join, relative } from 'node:path';
@@ -10,6 +11,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { claimJob, IMPORT_JOB_TYPE, REPO_ROOT } from '@3t/core';
 import { buildZip, type RawZipEntry } from '@3t/template-sdk/testing';
 import { createPreviewServer } from '@3t/preview';
+import { createSiteRouterServer } from '@3t/site-router';
 import { runImportJob } from '@3t/worker/pipeline';
 import { SITE_JOB_TYPES, runSiteJob } from '@3t/worker/site-jobs';
 import { createTestContext, createUser, ORIGIN, type TestContext } from '@3t/api/test-helpers';
@@ -19,6 +21,8 @@ let owner: { id: string; cookie: string };
 let buyer: { id: string; cookie: string };
 let other: { id: string; cookie: string };
 let closePreview: () => Promise<void>;
+let closeRouter: () => Promise<void>;
+let routerPort = 0;
 let templateId = '';
 let planId = '';
 let siteId = '';
@@ -31,6 +35,13 @@ beforeAll(async () => {
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
   ctx.config.previewInternalUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   closePreview = () => new Promise((resolve) => server.close(() => resolve()));
+  // The site router is the public entry for hosted sites: the API returns
+  // public URLs from siteOriginTemplate, and this instance serves them.
+  const router = createSiteRouterServer({ config: { siteBaseDomain: 'sites.test' }, db: ctx.db, cacheMs: 0 });
+  await new Promise<void>((resolve) => router.listen(0, '127.0.0.1', resolve));
+  routerPort = (router.address() as AddressInfo).port;
+  ctx.config.siteOriginTemplate = `http://{label}.sites.test:${routerPort}`;
+  closeRouter = () => new Promise((resolve) => router.close(() => resolve()));
   owner = await createUser(ctx, 'owner@example.com', 'platform_owner');
   buyer = await createUser(ctx, 'buyer@example.com');
   other = await createUser(ctx, 'other@example.com');
@@ -42,11 +53,26 @@ beforeAll(async () => {
 
 afterAll(async () => {
   await closePreview();
+  await closeRouter();
   await ctx.close();
 });
 
 const admin = () => ({ cookie: owner.cookie, origin: ORIGIN });
 const as = (u: { cookie: string }) => ({ cookie: u.cookie, origin: ORIGIN });
+
+/** Fetch a public site URL through the router instance (Host header routing). */
+function fetchRouted(url: string): Promise<{ status: number; body: string }> {
+  const parsed = new URL(url);
+  return new Promise((resolvePromise, rejectPromise) => {
+    const req = httpRequest({ hostname: '127.0.0.1', port: routerPort, path: parsed.pathname + parsed.search, headers: { host: parsed.host } }, (res) => {
+      const chunks: Buffer[] = [];
+      res.on('data', (chunk) => chunks.push(chunk as Buffer));
+      res.on('end', () => resolvePromise({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
+    });
+    req.on('error', rejectPromise);
+    req.end();
+  });
+}
 
 async function walk(dir: string, root = dir): Promise<RawZipEntry[]> {
   const out: RawZipEntry[] = [];
@@ -111,8 +137,8 @@ describe('M5 hosting', () => {
     expect(detail.json().data.status).toBe('active');
     expect(detail.json().data.subscription).toBeTruthy();
     siteUrl = detail.json().data.url as string;
-    expect(siteUrl).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/);
-    const home = await fetch(siteUrl);
+    expect(siteUrl).toBe(`http://my-shop.sites.test:${routerPort}/`);
+    const home = await fetchRouted(siteUrl);
     expect(home.status).toBe(200);
     // Tenant isolation: another user sees nothing (AT-24).
     expect((await ctx.app.inject({ method: 'GET', url: `/api/v1/sites/${siteId}`, headers: as(other) })).statusCode).toBe(404);
@@ -133,7 +159,7 @@ describe('M5 hosting', () => {
     const detail = await ctx.app.inject({ method: 'GET', url: `/api/v1/sites/${siteId}`, headers: as(buyer) });
     expect(detail.json().data.status).toBe('active');
     expect(detail.json().data.id).toBe(siteId);
-    const home = await fetch(detail.json().data.url as string);
+    const home = await fetchRouted(detail.json().data.url as string);
     expect(home.status).toBe(200);
     siteUrl = detail.json().data.url as string;
   });
@@ -152,6 +178,9 @@ describe('M5 hosting', () => {
     expect(verified.json().data).toMatchObject({ status: 'verified', verified: true });
     const primary = await ctx.app.inject({ method: 'POST', url: `/api/v1/sites/${siteId}/domains/${domainId}/make-primary`, headers: as(buyer) });
     expect(primary.statusCode).toBe(200);
+    // The verified custom domain serves the site through the router (KB2).
+    const viaDomain = await fetchRouted('http://shop.example.com/');
+    expect(viaDomain.status).toBe(200);
     const released = await ctx.app.inject({ method: 'POST', url: `/api/v1/sites/${siteId}/domains/${domainId}/release`, headers: as(buyer) });
     expect(released.json().data.status).toBe('released');
     // Re-attach mints a fresh token (AT-27).
@@ -175,7 +204,7 @@ describe('M5 hosting', () => {
     await drainAll();
     const detail = await ctx.app.inject({ method: 'GET', url: `/api/v1/sites/${siteId}`, headers: as(buyer) });
     expect(detail.json().data.status).toBe('active');
-    expect((await fetch(detail.json().data.url as string)).status).toBe(200);
+    expect((await fetchRouted(detail.json().data.url as string)).status).toBe(200);
     const deployment = detail.json().data.deployments.find((d: { operation: string }) => d.operation === 'restore');
     expect(deployment.status).toBe('succeeded');
   });
