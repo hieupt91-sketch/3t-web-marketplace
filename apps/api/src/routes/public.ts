@@ -17,7 +17,15 @@ function demoInfo(config: PlatformConfig, row: PublicTemplateRow) {
   const mode = row.manifest_json.demo?.mode ?? 'publicReadonly';
   // Only publicReadonly demos are exposed directly; isolatedAdmin demos need a session (POST /demo-sessions, D02).
   const available = row.demo_label !== null && mode === 'publicReadonly';
-  return { available, mode, url: available ? `${previewOrigin(config, row.demo_label!)}/` : null };
+  return {
+    available,
+    mode,
+    url: available ? `${previewOrigin(config, row.demo_label!)}/` : null,
+    // Runtime templates demo through an isolated session: the web offers a
+    // start link for the published version instead of a public URL.
+    session: mode === 'isolatedAdmin',
+    version_id: row.published_version_id,
+  };
 }
 
 /** Lowest current price per (template, deployment_mode) for a set of templates, in one query. */
@@ -47,6 +55,7 @@ async function startingPricesFor(
 
 interface PublicTemplateRow {
   id: string;
+  published_version_id: string;
   created_at: Date;
   slug: string;
   manifest_json: { adapter?: string; export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
@@ -109,7 +118,7 @@ const RT_LOOKUP = (column: string) =>
   `(SELECT rt.${column} FROM template_translations rt WHERE rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published')`;
 
 const TEMPLATE_SELECT = `
-  SELECT t.id, t.created_at, t.slug, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
+  SELECT t.id, t.published_version_id, t.created_at, t.slug, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          ${RT_LOOKUP('title')} AS requested_title, ${RT_LOOKUP('summary')} AS requested_summary, ${RT_LOOKUP('slug')} AS requested_slug,

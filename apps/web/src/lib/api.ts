@@ -87,3 +87,7 @@ export function safeReturnPath(value: string | null | undefined, fallback = '/ac
   if (value.startsWith('/auth/')) return fallback;
   return value;
 }
+
+/** localStorage key carrying a sanitized return path across the email
+ * verification hop of registration (register stores it, verify consumes it). */
+export const AUTH_NEXT_KEY = 'mp_auth_next';

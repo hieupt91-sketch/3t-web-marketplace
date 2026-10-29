@@ -29,6 +29,11 @@ export default async function DemoPage({ params }: Props) {
       <h1>{t('ui.demo.heading', { title: template.title })}</h1>
       {template.demo.available && template.demo.url ? (
         <DemoViewer url={template.demo.url} title={template.title} slug={template.slug} />
+      ) : template.demo.session ? (
+        <div className="alert alert--info">
+          <p>{t('ui.demo.start_body')}</p>
+          <p><Link className="button" href={`/${locale}/demo/start/${template.demo.version_id}`}>{t('ui.catalog.view_demo_live')}</Link></p>
+        </div>
       ) : (
         <div className="alert alert--info"><p>{t('ui.demo.unavailable')}</p></div>
       )}

@@ -34,6 +34,8 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=4000
       - PREVIEW_INTERNAL_URL=http://preview:4100
+      # Demo session servers must be reachable by the site-router container.
+      - RUNTIME_BIND_HOST=0.0.0.0
     volumes:
       - appdata:/app/runtime-data
     depends_on:
@@ -51,6 +53,8 @@ services:
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
       - PREVIEW_INTERNAL_URL=http://preview:4100
+      # Site servers must be reachable by the site-router container.
+      - RUNTIME_BIND_HOST=0.0.0.0
     volumes:
       - appdata:/app/runtime-data
     depends_on:
@@ -89,11 +93,19 @@ services:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
       - SITE_ROUTER_HOST=0.0.0.0
       - SITE_ROUTER_PORT=4200
+      # Site processes live in the worker container, demo session processes
+      # in the api container; both bind 0.0.0.0 inside the stack (above).
+      - SITE_ROUTER_SITES_HOST=worker
+      - SITE_ROUTER_SESSIONS_HOST=api
     ports:
       - "127.0.0.1:4200:4200"
     depends_on:
       postgres:
         condition: service_healthy
+      api:
+        condition: service_started
+      worker:
+        condition: service_started
     restart: unless-stopped
 
   web:

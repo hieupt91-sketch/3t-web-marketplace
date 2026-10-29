@@ -22,6 +22,11 @@ export interface PlatformConfig {
   siteBaseDomain: string;
   /** Public origin template for a hosted site, e.g. https://{label}.webmaket.com. */
   siteOriginTemplate: string;
+  /** Interface spawned site/demo servers bind to. Loopback for single-host
+   * dev; 0.0.0.0 inside the compose stack so the site router (its own
+   * container) can reach processes spawned by the worker/api containers.
+   * Those ports are never published, so exposure stays inside the stack. */
+  runtimeBindHost: string;
   cookieSecure: boolean;
   sessionTtlHours: number;
   mailTransport: 'file' | 'disabled';
@@ -77,6 +82,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     previewInternalUrl: env('PREVIEW_INTERNAL_URL', 'http://127.0.0.1:4100'),
     siteBaseDomain: env('SITE_BASE_DOMAIN', mode === 'production' ? undefined : 'sites.localhost'),
     siteOriginTemplate: env('SITE_ORIGIN_TEMPLATE', mode === 'production' ? undefined : 'http://{label}.sites.localhost:4200'),
+    runtimeBindHost: env('RUNTIME_BIND_HOST', '127.0.0.1'),
     cookieSecure: env('COOKIE_SECURE', mode === 'production' ? 'true' : 'false') === 'true',
     sessionTtlHours: Number(env('SESSION_TTL_HOURS', '336')),
     mailTransport: env('MAIL_TRANSPORT', mode === 'production' ? 'disabled' : 'file') as 'file' | 'disabled',

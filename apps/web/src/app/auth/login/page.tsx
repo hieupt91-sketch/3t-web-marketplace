@@ -52,7 +52,7 @@ function LoginForm() {
           {busy ? t('ui.state.saving') : t('ui.auth.login.submit')}
         </button>
         <Link href="/auth/forgot-password">{t('ui.auth.login.forgot')}</Link>
-        <Link href="/auth/register">{t('ui.auth.login.create')}</Link>
+        <Link href={next === '/account' ? '/auth/register' : `/auth/register?next=${encodeURIComponent(next)}`}>{t('ui.auth.login.create')}</Link>
       </div>
     </form>
   );

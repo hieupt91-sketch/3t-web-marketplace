@@ -86,6 +86,11 @@ export default async function TemplateDetail({ params }: Props) {
           <Link className="button" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link>
         </div>
       ) : null}
+      {template.demo.session ? (
+        <div className="row">
+          <Link className="button" href={`/${locale}/demo/start/${template.demo.version_id}`}>{t('ui.catalog.view_demo_live')}</Link>
+        </div>
+      ) : null}
       <section className="card stack">
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.features')}</h2>
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>

@@ -71,19 +71,25 @@ export function Loading({ label }: { label?: string }) {
   );
 }
 
-/** Label + hint + error wired with aria-describedby. Children receive the generated ids. */
+/** Label + hint + error wired with aria-describedby. Children receive the field id:
+ * the label's htmlFor and the control's id are always the same value. Pass an
+ * explicit id when something else must link to the control (e.g. an error
+ * summary anchor); never override the id on the control itself. */
 export function FormField({
   label,
   hint,
   error,
+  id: explicitId,
   children,
 }: {
   label: ReactNode;
   hint?: ReactNode;
   error?: ReactNode;
+  id?: string;
   children: (props: { id: string; 'aria-describedby'?: string; 'aria-invalid'?: boolean }) => ReactNode;
 }) {
-  const id = useId();
+  const generated = useId();
+  const id = explicitId ?? generated;
   const hintId = hint ? `${id}-hint` : undefined;
   const errorId = error ? `${id}-error` : undefined;
   const describedBy = [hintId, errorId].filter(Boolean).join(' ') || undefined;

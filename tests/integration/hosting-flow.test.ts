@@ -37,7 +37,7 @@ beforeAll(async () => {
   closePreview = () => new Promise((resolve) => server.close(() => resolve()));
   // The site router is the public entry for hosted sites: the API returns
   // public URLs from siteOriginTemplate, and this instance serves them.
-  const router = createSiteRouterServer({ config: { siteBaseDomain: 'sites.test' }, db: ctx.db, cacheMs: 0 });
+  const router = createSiteRouterServer({ config: { siteBaseDomain: 'sites.test', previewBaseDomain: 'preview.test' }, db: ctx.db, cacheMs: 0 });
   await new Promise<void>((resolve) => router.listen(0, '127.0.0.1', resolve));
   routerPort = (router.address() as AddressInfo).port;
   ctx.config.siteOriginTemplate = `http://{label}.sites.test:${routerPort}`;

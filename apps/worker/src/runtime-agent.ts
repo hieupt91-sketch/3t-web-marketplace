@@ -75,7 +75,7 @@ export async function spawnServer(config: PlatformConfig, spec: SpawnSpec): Prom
   const argv = spec.kind === 'static' ? [process.execPath, SERVE_DIR, spec.dir] : spec.start!;
   const proc: ChildProcess = spawn(argv[0]!, argv.slice(1), {
     cwd: spec.dir,
-    env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production', PORT: String(port), HOST: '127.0.0.1', ...(spec.env ?? {}) },
+    env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production', PORT: String(port), HOST: config.runtimeBindHost, ...(spec.env ?? {}) },
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   });

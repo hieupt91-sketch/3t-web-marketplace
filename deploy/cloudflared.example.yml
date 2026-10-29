@@ -8,6 +8,12 @@ ingress:
   # Main site: the compose web service published on host loopback :3000.
   - hostname: webmaket.com
     service: http://localhost:3000
+  # Runtime demo sessions: dynamic-template demos (with their admin) are
+  # proxied by the site router under /session/<uuid>/ on the preview origin.
+  # This path rule must come before the general preview rule below.
+  - hostname: "preview.webmaket.com"
+    path: "^/session/.*"
+    service: http://localhost:4200
   # Demo previews: every demo lives under one host as a path
   # (preview.webmaket.com/<label>/). Without this route, the main site works
   # but every demo preview fails to load.

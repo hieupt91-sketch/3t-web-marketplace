@@ -88,7 +88,7 @@ async function spawnDemoServer(
   await makeWritable(dir);
   const port = await freePort();
   const start = version.manifest_json.runtime?.start ?? ['node', 'server.js'];
-  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production', PORT: String(port), HOST: '127.0.0.1' };
+  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production', PORT: String(port), HOST: deps.config.runtimeBindHost };
   for (const item of version.manifest_json.env ?? []) {
     if (item.scope === 'public' && item.defaultValue !== undefined) env[item.name] = item.defaultValue;
   }
@@ -130,8 +130,16 @@ async function loadSession(db: Db, id: string) {
   return rows[0] ?? null;
 }
 
-function sessionUrl(config: PlatformConfig, row: { preview_label: string | null; runtime_port: number | null }): string | null {
-  if (row.runtime_port) return `http://127.0.0.1:${row.runtime_port}/`;
+function sessionUrl(config: PlatformConfig, row: { id?: string; preview_label: string | null; runtime_port: number | null }): string | null {
+  if (row.runtime_port) {
+    // Path-mode preview origin (production): runtime demo servers are reached
+    // through the site router's session proxy on the preview origin — never
+    // hand visitors a loopback URL, which would point at their own machine.
+    if (row.id && config.previewOriginTemplate.endsWith('/{label}')) {
+      return `${config.previewOriginTemplate.replace('{label}', `session/${row.id}`)}/`;
+    }
+    return `http://127.0.0.1:${row.runtime_port}/`;
+  }
   if (row.preview_label) return `${previewOrigin(config, row.preview_label)}/`;
   return null;
 }
@@ -191,7 +199,7 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
           throw error;
         }
       }
-      const url = sessionUrl(config, { preview_label: previewLabel, runtime_port: runtimePort });
+      const url = sessionUrl(config, { id: sessionId, preview_label: previewLabel, runtime_port: runtimePort });
       return reply.status(201).send({ data: { id: sessionId, version_id: v.id, url, admin_url: null, status: 'active', expires_at: created.rows[0]!.expires_at.toISOString() } });
     },
   );

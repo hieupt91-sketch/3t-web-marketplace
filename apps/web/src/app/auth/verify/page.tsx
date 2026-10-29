@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, ErrorState, Loading } from '@/components/ui';
 import { ResendVerification } from '@/components/resend-verification';
-import { api, type ApiError } from '@/lib/api';
+import { api, safeReturnPath, AUTH_NEXT_KEY, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { useUrlToken } from '@/lib/use-url-token';
 
@@ -15,7 +15,23 @@ export default function VerifyPage() {
   const { t } = useT();
   const { token, ready } = useUrlToken();
   const [state, setState] = useState<State>({ kind: 'idle' });
+  const [returnPath, setReturnPath] = useState<string | null>(null);
   const started = useRef(false);
+
+  // Registration may have stashed a return path (e.g. back to checkout):
+  // offer to continue there via login once the email is verified.
+  useEffect(() => {
+    if (state.kind !== 'verified') return;
+    try {
+      const stored = window.localStorage.getItem(AUTH_NEXT_KEY);
+      if (stored) {
+        window.localStorage.removeItem(AUTH_NEXT_KEY);
+        setReturnPath(safeReturnPath(stored));
+      }
+    } catch {
+      /* storage unavailable */
+    }
+  }, [state.kind]);
 
   useEffect(() => {
     if (!ready || !token || started.current) return;
@@ -33,6 +49,9 @@ export default function VerifyPage() {
       {state.kind === 'verified' ? (
         <Alert tone="success" live>
           <p>{t('ui.auth.verify.success')}</p>
+          {returnPath ? (
+            <p><Link className="button" href={`/auth/login?next=${encodeURIComponent(returnPath)}`}>{t('ui.auth.verify.continue')}</Link></p>
+          ) : null}
           <p><Link href="/account">{t('ui.nav.account')}</Link></p>
         </Alert>
       ) : null}

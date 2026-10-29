@@ -22,6 +22,9 @@ const enqueued: unknown[][] = [];
 
 const SITES = new Map<string, SiteRow>();
 const DOMAINS = new Map<string, SiteRow>();
+const SESSION_ID = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee';
+const EXPIRED_SESSION_ID = 'ffffffff-1111-4222-8333-444444444444';
+const SESSIONS = new Map<string, number>();
 
 function fakeDb(): Db {
   return {
@@ -30,6 +33,7 @@ function fakeDb(): Db {
         enqueued.push(params);
         return { rows: [{ id: 'job-1' }] };
       }
+      if (sql.includes('FROM demo_sessions')) return { rows: SESSIONS.has(params[0] as string) ? [{ runtime_port: SESSIONS.get(params[0] as string) }] : [] };
       if (sql.includes('FROM domains')) return { rows: DOMAINS.has(params[0] as string) ? [DOMAINS.get(params[0] as string)] : [] };
       if (sql.includes('FROM sites')) return { rows: SITES.has(params[0] as string) ? [SITES.get(params[0] as string)] : [] };
       return { rows: [] };
@@ -75,8 +79,9 @@ beforeAll(async () => {
   SITES.set('dead-shop', { id: 'site-4', owner_id: 'owner-1', status: 'active', runtime_port: deadPort });
   SITES.set('gone-shop', { id: 'site-5', owner_id: 'owner-1', status: 'delete_scheduled', runtime_port: upstreamPort });
   DOMAINS.set('shop.example.com', { id: 'site-6', owner_id: 'owner-2', status: 'active', runtime_port: upstreamPort });
+  SESSIONS.set(SESSION_ID, upstreamPort);
 
-  router = createSiteRouterServer({ config: { siteBaseDomain: BASE }, db: fakeDb(), cacheMs: 0, restartCooldownMs: 0 });
+  router = createSiteRouterServer({ config: { siteBaseDomain: BASE, previewBaseDomain: 'preview.localhost' }, db: fakeDb(), cacheMs: 0, restartCooldownMs: 0 });
   await new Promise<void>((r) => router.listen(0, '127.0.0.1', r));
   routerPort = (router.address() as AddressInfo).port;
 });
@@ -141,5 +146,29 @@ describe('site router host resolution', () => {
     const res = await call(routerPort, 'anything.example', '/__health');
     expect(res.status).toBe(200);
     expect(JSON.parse(res.body)).toEqual({ status: 'ok' });
+  });
+});
+
+describe('demo session proxy on the preview origin', () => {
+  it('proxies /session/<uuid>/... with the prefix stripped', async () => {
+    const res = await call(routerPort, 'preview.localhost', `/session/${SESSION_ID}/admin?tab=menu`);
+    expect(res.status).toBe(200);
+    const echoed = JSON.parse(res.body) as { url: string };
+    expect(echoed.url).toBe('/admin?tab=menu');
+  });
+
+  it('redirects /session/<uuid> to the trailing slash', async () => {
+    const res = await call(routerPort, 'preview.localhost', `/session/${SESSION_ID}`);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(`/session/${SESSION_ID}/`);
+  });
+
+  it('404s expired or unknown sessions and malformed session paths', async () => {
+    expect((await call(routerPort, 'preview.localhost', `/session/${EXPIRED_SESSION_ID}/`)).status).toBe(404);
+    expect((await call(routerPort, 'preview.localhost', '/session/not-a-uuid/')).status).toBe(404);
+  });
+
+  it('does not treat other preview-origin paths as sessions', async () => {
+    expect((await call(routerPort, 'preview.localhost', '/some-label/')).status).toBe(404);
   });
 });
