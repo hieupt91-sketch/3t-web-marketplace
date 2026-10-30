@@ -47,6 +47,7 @@ export async function GET(): Promise<Response> {
   lines.push('', '## Trang chính', '');
   lines.push(`- [${translate('vi', 'ui.home.meta_title')}](${base}/vi)`);
   lines.push(`- [${translate('vi', 'ui.home.how_it_works')}](${base}/vi/how-it-works)`);
+  lines.push(`- [${translate('vi', 'ui.plans.title')}](${base}/vi/plans/compare)`);
   lines.push(`- [${translate('vi', 'ui.footer.partners')}](${base}/vi/partners)`);
   lines.push(`- [${translate('vi', 'ui.help.title')}](${base}/vi/help)`);
   lines.push(`- [${translate('vi', 'ui.contact.title')}](${base}/vi/contact)`);

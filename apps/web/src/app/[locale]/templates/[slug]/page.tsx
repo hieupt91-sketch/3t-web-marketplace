@@ -1,10 +1,11 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { notFound } from 'next/navigation';
-import { translate, type Locale } from '@3t/i18n';
+import { formatMoney, translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
 import { SaveButton } from '@/components/save-button';
+import { LiveThumb } from '@/components/live-thumb';
 import { HostingAdvisor } from '@/components/hosting-advisor';
 import { JsonLd } from '@/components/json-ld';
 import { absoluteUrl, breadcrumbJsonLd, languageAlternates, productJsonLd, SITE_NAME, siteBaseUrl } from '@/lib/seo';
@@ -64,6 +65,12 @@ export default async function TemplateDetail({ params }: Props) {
     );
   }
   const template = result.data;
+  const cheapest = template.plans
+    .flatMap((p) => p.prices)
+    .reduce<PublicPlan['prices'][number] | null>(
+      (min, p) => (!min || BigInt(p.amount_minor) < BigInt(min.amount_minor) ? p : min),
+      null,
+    );
   return (
     <div className="container stack">
       <JsonLd data={productJsonLd(template, locale)} />
@@ -74,24 +81,47 @@ export default async function TemplateDetail({ params }: Props) {
           { name: template.title, path: `/${locale}/templates/${template.slug}` },
         ])}
       />
-      {template.preview_image ? (
-        <img src={template.preview_image} alt={t('ui.catalog.screenshot_alt', { title: template.title })} style={{ display: 'block', width: '100%', height: 200, objectFit: 'cover', borderRadius: 'var(--radius-card)', boxShadow: 'var(--shadow-card)' }} />
-      ) : (
-        <div aria-hidden="true" style={{ height: 200, borderRadius: 'var(--radius-card)', background: coverGradient(template.slug), boxShadow: 'var(--shadow-card)' }} />
-      )}
-      <h1 lang={template.resolved_locale}>{template.title}</h1>
-      {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
-      {template.summary ? <p lang={template.resolved_locale}>{template.summary}</p> : null}
-      {template.demo.available ? (
-        <div className="row">
-          <Link className="button" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link>
+      <div className="detail-grid">
+        <div className="stack">
+          <div className="detail-media" style={template.preview_image ? undefined : { background: coverGradient(template.slug) }}>
+            {template.preview_image ? (
+              <img src={template.preview_image} alt={t('ui.catalog.screenshot_alt', { title: template.title })} />
+            ) : null}
+            {template.demo.available && template.demo.url ? <LiveThumb url={template.demo.url} title={template.title} /> : null}
+          </div>
+          {template.demo.available || template.demo.session ? (
+            <div className="row">
+              {template.demo.available ? <Link className="button" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link> : null}
+              {template.demo.session ? <Link className="button" href={`/${locale}/demo/start/${template.demo.version_id}`}>{t('ui.catalog.view_demo_live')}</Link> : null}
+            </div>
+          ) : null}
         </div>
-      ) : null}
-      {template.demo.session ? (
-        <div className="row">
-          <Link className="button" href={`/${locale}/demo/start/${template.demo.version_id}`}>{t('ui.catalog.view_demo_live')}</Link>
-        </div>
-      ) : null}
+        <aside className="card stack detail-buy">
+          <h1 lang={template.resolved_locale} style={{ margin: 0 }}>{template.title}</h1>
+          {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
+          {template.summary ? <p lang={template.resolved_locale} style={{ margin: 0 }}>{template.summary}</p> : null}
+          {cheapest ? (
+            <p className="tabular" style={{ margin: 0 }}>
+              {t('ui.catalog.price_from')} <strong>{formatMoney(cheapest, locale)}</strong>
+            </p>
+          ) : null}
+          <h2 style={{ margin: 0 }}>{t('ui.detail.plans')}</h2>
+          {template.plans.length === 0 ? (
+            <p className="muted" style={{ margin: 0 }}>{t('ui.detail.no_plans')}</p>
+          ) : (
+            <>
+              <div className="stack">
+                {template.plans.map((plan) => <PriceBreakdown key={plan.id} plan={plan} locale={locale} />)}
+              </div>
+              <div className="row">
+                <Link className="button" href={`/checkout/configure?template=${template.slug}`}>{t('ui.detail.choose_plan')}</Link>
+                {template.plans.length > 1 ? <Link className="button button--secondary" href={`/${locale}/plans/compare?template=${template.slug}`}>{t('ui.detail.compare')}</Link> : null}
+                <SaveButton templateId={template.id} locale={locale} />
+              </div>
+            </>
+          )}
+        </aside>
+      </div>
       <section className="card stack">
         <h2 style={{ marginTop: 0 }}>{t('ui.detail.features')}</h2>
         <ul>{template.capabilities.map((c) => <li key={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</li>)}</ul>
@@ -105,23 +135,6 @@ export default async function TemplateDetail({ params }: Props) {
       </section>
       <section className="card stack">
         <HostingAdvisor adapter={template.adapter} sizeLabel={template.size_bytes ? formatSize(template.size_bytes) : null} />
-      </section>
-      <section className="stack">
-        <h2 style={{ marginBottom: 0 }}>{t('ui.detail.plans')}</h2>
-        {template.plans.length === 0 ? (
-          <p className="muted" style={{ margin: 0 }}>{t('ui.detail.no_plans')}</p>
-        ) : (
-          <>
-            <div className="grid-cards">
-              {template.plans.map((plan) => <PriceBreakdown key={plan.id} plan={plan} locale={locale} />)}
-            </div>
-            <div className="row">
-              <Link className="button" href={`/checkout/configure?template=${template.slug}`}>{t('ui.detail.choose_plan')}</Link>
-              {template.plans.length > 1 ? <Link className="button button--secondary" href={`/${locale}/plans/compare?template=${template.slug}`}>{t('ui.detail.compare')}</Link> : null}
-              <SaveButton templateId={template.id} locale={locale} />
-            </div>
-          </>
-        )}
       </section>
     </div>
   );

@@ -7,6 +7,7 @@ import type { TemplateSummary } from '@/lib/api-server';
 import { coverGradient } from '@/lib/cover-gradient';
 import { SaveButton } from '@/components/save-button';
 import { CompareToggle } from '@/components/compare-toggle';
+import { LiveThumb } from '@/components/live-thumb';
 
 export function TemplateCard({ template, locale, comparable = false }: { template: TemplateSummary; locale: Locale; comparable?: boolean }) {
   const t = (key: string, params?: Record<string, string>) => translate(locale, key, params);
@@ -27,6 +28,7 @@ export function TemplateCard({ template, locale, comparable = false }: { templat
         ) : (
           <span style={{ color: '#ffffff', fontWeight: 700, fontSize: 18, textAlign: 'center', padding: 'var(--space-4)' }}>{template.title}</span>
         )}
+        {template.demo.available && template.demo.url ? <LiveThumb url={template.demo.url} title={template.title} /> : null}
       </div>
       <h3 style={{ margin: 0 }}>
         <Link href={`/${locale}/templates/${template.slug}`}>{template.title}</Link>

@@ -576,6 +576,7 @@ table.table {
   gap: var(--space-3);
 }
 .template-card__image {
+  position: relative;
   aspect-ratio: 16 / 10;
   border-radius: var(--radius-input);
   background: var(--color-bg);
@@ -973,5 +974,43 @@ dl.details dd {
     margin-inline-start: 0;
     width: 100%;
     gap: var(--space-1) var(--space-4);
+  }
+}
+
+/* Template detail: media on one side, the buy box on the other (sticky on
+   desktop, stacked on mobile) instead of one long spread-out column. */
+.detail-grid {
+  display: grid;
+  gap: var(--space-5);
+  grid-template-columns: minmax(0, 1.5fr) minmax(300px, 1fr);
+  align-items: start;
+}
+@media (max-width: 900px) {
+  .detail-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.detail-media {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  border-radius: var(--radius-card);
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  background: var(--color-bg);
+}
+.detail-media img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+.detail-buy {
+  position: sticky;
+  top: var(--space-4);
+}
+@media (max-width: 900px) {
+  .detail-buy {
+    position: static;
   }
 }

@@ -31,7 +31,23 @@ function TrustIcon({ kind }: { kind: 'eye' | 'bolt' | 'headset' }) {
 export default async function Home({ params }: Params) {
   const { locale } = await params;
   const t = (key: string) => translate(locale, key);
-  const featured = await fetchPublic<TemplateSummary[]>('/templates?limit=6', locale);
+  const catalog = await fetchPublic<TemplateSummary[]>('/templates?limit=100', locale);
+  // The storefront groups templates by category (owner request): one section
+  // per category with a link into the filtered library.
+  const CATEGORY_ORDER = ['food', 'beauty', 'realestate', 'business', 'store', 'landing', 'portfolio', 'blog', 'website'];
+  const byCategory = new Map<string, TemplateSummary[]>();
+  if (catalog.ok) {
+    for (const tpl of catalog.data) {
+      const code = tpl.category ?? 'website';
+      const list = byCategory.get(code) ?? [];
+      list.push(tpl);
+      byCategory.set(code, list);
+    }
+  }
+  const categoryCodes = [
+    ...CATEGORY_ORDER.filter((c) => byCategory.has(c)),
+    ...[...byCategory.keys()].filter((c) => !CATEGORY_ORDER.includes(c)).sort(),
+  ];
   return (
     <>
       <section className="hero">
@@ -73,21 +89,31 @@ export default async function Home({ params }: Params) {
       </section>
       <div className="container stack">
         <TemplateFinder />
-        <section className="stack">
-          <h2 style={{ margin: 0 }}>{t('ui.home.featured')}</h2>
-          {!featured.ok ? (
+        {!catalog.ok ? (
+          <section className="stack">
             <div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div>
-          ) : featured.data.length === 0 ? (
-            <>
-              <div className="card"><p style={{ margin: 0 }}>{t('ui.catalog.empty_catalog')}</p></div>
-              <DemoCatalog locale={locale} />
-            </>
-          ) : (
-            <div className="grid-cards">
-              {featured.data.map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}
-            </div>
-          )}
-        </section>
+          </section>
+        ) : catalog.data.length === 0 ? (
+          <section className="stack">
+            <div className="card"><p style={{ margin: 0 }}>{t('ui.catalog.empty_catalog')}</p></div>
+            <DemoCatalog locale={locale} />
+          </section>
+        ) : (
+          categoryCodes.map((code) => {
+            const label = t(`ui.category.${code}`);
+            return (
+              <section className="stack" key={code}>
+                <div className="row" style={{ justifyContent: 'space-between' }}>
+                  <h2 style={{ margin: 0 }}>{label === `ui.category.${code}` ? code : label}</h2>
+                  <Link href={`/${locale}/templates?category=${code}`}>{t('ui.home.view_all')}</Link>
+                </div>
+                <div className="grid-cards">
+                  {byCategory.get(code)!.slice(0, 4).map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}
+                </div>
+              </section>
+            );
+          })
+        )}
         <section className="cta-band stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.cta_title')}</h2>
           <p style={{ margin: 0 }}>{t('ui.home.cta_body')}</p>

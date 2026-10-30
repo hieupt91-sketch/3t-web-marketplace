@@ -1404,5 +1404,6 @@
   "ui.how.b_step3": "Replace the content using the included guide, then publish to your hosting.",
   "ui.how.b_cta": "Browse downloadable templates",
   "ui.how.b_guide": "Read the self-hosting guide",
-  "ui.how.plans_link": "See the service plan comparison"
+  "ui.how.plans_link": "See the service plan comparison",
+  "ui.home.view_all": "View all"
 }
