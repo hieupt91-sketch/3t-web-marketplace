@@ -36,6 +36,19 @@ export default async function Templates({ params, searchParams }: Props) {
   if (cursor) query.set('cursor', cursor);
   const result = await fetchPublic<TemplateSummary[]>(`/templates?${query}`, locale);
   const categories = await fetchPublic<{ id: string; code: string; parent_id: string | null }[]>('/categories', locale);
+  // Category chips are the catalog's category filter: counts come from
+  // one unfiltered list read (best-effort — chips render without counts
+  // if it fails).
+  const allForCounts = await fetchPublic<TemplateSummary[]>('/templates?limit=100', locale);
+  const counts = new Map<string, number>();
+  if (allForCounts.ok) {
+    for (const tpl of allForCounts.data) counts.set(tpl.category ?? 'website', (counts.get(tpl.category ?? 'website') ?? 0) + 1);
+  }
+  const CATEGORY_ORDER = ['food', 'beauty', 'realestate', 'business', 'store', 'landing', 'portfolio', 'blog', 'website'];
+  const chipCodes = categories.ok
+    ? [...CATEGORY_ORDER.filter((c) => categories.data.some((x) => x.code === c)), ...categories.data.map((x) => x.code).filter((c) => !CATEGORY_ORDER.includes(c)).sort()]
+    : [];
+  const chipHref = (code: string) => `/${locale}/templates?${new URLSearchParams({ ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(code ? { category: code } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}) })}`;
   const base: Record<string, string> = { ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(category ? { category } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}) };
   const next = result.ok && result.page?.next_cursor ? `/${locale}/templates?${new URLSearchParams({ ...base, cursor: result.page.next_cursor })}` : null;
   const hasFilter = q || mode || capability || category || min_price || max_price;
@@ -53,10 +66,28 @@ export default async function Templates({ params, searchParams }: Props) {
         <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
         <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
       </form>
+      {chipCodes.length > 0 ? (
+        <nav className="cat-nav" aria-label={t('ui.catalog.filter_category')}>
+          <Link className={`cat-chip${category === '' ? ' cat-chip--active' : ''}`} href={chipHref('')}>
+            {t('ui.catalog.filter_all')}
+            {allForCounts.ok ? <span className="cat-chip__count">{allForCounts.data.length}</span> : null}
+          </Link>
+          {chipCodes.map((code) => {
+            const label = t(`ui.category.${code}`);
+            return (
+              <Link key={code} className={`cat-chip${category === code ? ' cat-chip--active' : ''}`} href={chipHref(code)}>
+                {label === `ui.category.${code}` ? code : label}
+                {counts.has(code) ? <span className="cat-chip__count">{counts.get(code)}</span> : null}
+              </Link>
+            );
+          })}
+        </nav>
+      ) : null}
       <div className="catalog-layout">
         <aside className="catalog-layout__filters card stack">
           <form className="stack" method="get">
             <input type="hidden" name="q" value={q} />
+            {category ? <input type="hidden" name="category" value={category} /> : null}
           <label className="field" style={{ minWidth: 200 }}>
             <span>{t('ui.catalog.filter_mode')}</span>
             <select className="select" name="mode" defaultValue={mode}>
@@ -69,13 +100,6 @@ export default async function Templates({ params, searchParams }: Props) {
             <select className="select" name="capability" defaultValue={capability}>
               <option value="">{t('ui.catalog.filter_all')}</option>
               {CAPABILITIES.map((c) => <option key={c} value={c}>{t(`ui.capability.${c.replace('.', '_')}`)}</option>)}
-            </select>
-          </label>
-          <label className="field" style={{ minWidth: 200 }}>
-            <span>{t('ui.catalog.filter_category')}</span>
-            <select className="select" name="category" defaultValue={category}>
-              <option value="">{t('ui.catalog.filter_all')}</option>
-              {categories.ok ? categories.data.map((c) => <option key={c.code} value={c.code}>{t(`ui.category.${c.code}`)}</option>) : null}
             </select>
           </label>
           <label className="field" style={{ minWidth: 140 }}>

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BankTransferProvider, MockPaymentProvider, WebhookVerificationError } from './payment.ts';
+import { BankTransferProvider, MockPaymentProvider, WebhookVerificationError, manualTransferRef, usdAmountFor } from './payment.ts';
 
 const provider = new MockPaymentProvider('test-secret', 'http://localhost:4000');
 
@@ -62,5 +62,24 @@ describe('BankTransferProvider', () => {
   it('accepts the generic hub shape too', () => {
     const body = JSON.stringify({ transaction_id: 'tx-1', code: 'WM3F9A2B7C4D', amount: 250000 });
     expect(provider.verifyWebhook(body, { 'x-hub-secret': 'hub-key-123' })).toMatchObject({ providerEventId: 'tx-1', status: 'settled', amountMinor: '250000' });
+  });
+});
+
+describe('manual transfer helpers (PayPal / USD)', () => {
+  it('generates prefixed, unique per-order references', () => {
+    const a = manualTransferRef('PP');
+    const b = manualTransferRef('US');
+    expect(a).toMatch(/^PP[0-9A-F]{10}$/);
+    expect(b).toMatch(/^US[0-9A-F]{10}$/);
+    expect(manualTransferRef('PP')).not.toBe(a);
+  });
+
+  it('quotes USD from a VND total at the owner rate, rounded half-up at the cent', () => {
+    expect(usdAmountFor('199999', 26000)).toBe('7.69');
+    expect(usdAmountFor('26000', 26000)).toBe('1.00');
+    expect(usdAmountFor('13000', 26000)).toBe('0.50');
+    expect(usdAmountFor('12987', 26000)).toBe('0.50'); // 0.4995 -> 0.50
+    expect(usdAmountFor('100000000', 25400)).toBe('3937.01');
+    expect(usdAmountFor('500000', 0)).toBe('0.00');
   });
 });

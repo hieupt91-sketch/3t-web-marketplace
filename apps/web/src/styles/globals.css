@@ -187,6 +187,90 @@ h3 {
   font-weight: 800;
   letter-spacing: 0.06em;
 }
+/* "Mẫu website" category dropdown: opens on hover (with a small close
+ * delay so the pointer can cross the gap) or via the chevron on touch. */
+.nav-dropdown {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+}
+.nav-dropdown__toggle {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 48px;
+  margin-inline-start: -8px;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--color-text-muted);
+  cursor: pointer;
+}
+.nav-dropdown__toggle:hover {
+  color: var(--color-primary);
+}
+.nav-dropdown__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: -12px;
+  z-index: 30;
+  /* Closed panels are display:none, not just visibility:hidden — a hidden
+   * but rendered panel still widens the page's scrollable overflow on
+   * mobile (measured: it pushed a 360px viewport to 463px). */
+  display: none;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  width: min(360px, 88vw);
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 16px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card-hover);
+}
+.nav-dropdown--open .nav-dropdown__panel {
+  display: grid;
+  animation: panel-in var(--motion) ease-out;
+}
+@keyframes panel-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.site-nav a.nav-dropdown__item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-2);
+  min-height: 44px;
+  padding-inline: var(--space-3);
+  border-radius: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+.site-nav a.nav-dropdown__item:hover {
+  background: var(--color-bg-accent);
+  color: var(--color-primary);
+}
+.nav-dropdown__count {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-bg-accent);
+  border-radius: var(--radius-pill);
+  padding: 1px 7px;
+}
+.site-nav a.nav-dropdown__item--all {
+  grid-column: 1 / -1;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0 0 10px 10px;
+  color: var(--color-primary);
+}
+@media (max-width: 639px) {
+  .nav-dropdown__panel {
+    right: auto;
+    left: 0;
+  }
+}
 /* Header icon shortcuts (saved templates, orders) with a count badge. */
 .header-icons {
   display: inline-flex;
@@ -221,43 +305,167 @@ h3 {
   line-height: 18px;
   text-align: center;
 }
-/* Language switch: a compact segmented control (globe + VI | EN). */
-.lang-switch {
+/* Language control: a globe icon only — hovering/tapping opens the
+ * language list (no VI/EN text in the header bar itself). */
+.lang-menu {
+  position: relative;
+  display: inline-flex;
+}
+.lang-menu__button {
   display: inline-flex;
   align-items: center;
-  gap: 2px;
-  padding: 3px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-pill);
-  background: var(--color-surface);
-  color: var(--color-text-muted);
-}
-.lang-switch__globe {
-  margin-inline: 5px 2px;
-  flex: none;
-}
-.lang-switch__option {
-  min-height: 34px;
-  padding: 0 10px;
+  justify-content: center;
+  width: 48px;
+  height: 48px;
+  padding: 0;
   border: 0;
-  border-radius: var(--radius-pill);
+  border-radius: 50%;
   background: none;
-  font: inherit;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   cursor: pointer;
-  transition: background var(--motion), color var(--motion);
 }
-.lang-switch__option:hover {
+.lang-menu__button:hover {
+  background: var(--color-bg-accent);
   color: var(--color-primary);
 }
-.lang-switch__option--active {
-  background: var(--color-gradient);
-  color: var(--color-on-primary);
+.lang-menu__panel {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 30;
+  /* display:none while closed for the same overflow reason as the
+   * category dropdown panel above. */
+  display: none;
+  gap: 2px;
+  min-width: 188px;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 14px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card-hover);
 }
-.lang-switch__option--active:hover {
-  color: var(--color-on-primary);
+.lang-menu--open .lang-menu__panel {
+  display: grid;
+  animation: panel-in var(--motion) ease-out;
+}
+.lang-menu__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: var(--space-3);
+  min-height: 44px;
+  padding-inline: var(--space-3);
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: pointer;
+  text-align: start;
+}
+.lang-menu__item:hover {
+  background: var(--color-bg-accent);
+  color: var(--color-primary);
+}
+.lang-menu__item--active {
+  color: var(--color-primary);
+}
+/* Quick search pinned in the menu bar (hidden where space is tight —
+ * the hero and catalog searches remain). */
+.header-search {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex: 0 1 300px;
+  height: 44px;
+  margin-inline-start: var(--space-3);
+  padding-inline: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-bg);
+  color: var(--color-text-muted);
+}
+.header-search:focus-within {
+  border-color: var(--color-primary);
+  box-shadow: 0 0 0 3px rgb(29 78 216 / 0.15);
+  background: var(--color-surface);
+}
+.header-search input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: none;
+  outline: none;
+  font: inherit;
+  color: var(--color-text);
+}
+@media (max-width: 1150px) {
+  .header-search {
+    display: none;
+  }
+}
+/* Advertising rails in the wide-screen margins. Hidden below 1800px:
+ * the 1440px banner column plus two 160px rails and gutters need that
+ * much room before a rail can sit in a true margin. */
+.side-rail {
+  display: none;
+}
+@media (min-width: 1800px) {
+  .side-rail {
+    display: block;
+    position: fixed;
+    top: 96px;
+    z-index: 15;
+    width: 160px;
+  }
+  .side-rail--left {
+    left: 16px;
+  }
+  .side-rail--right {
+    right: 16px;
+  }
+  .side-rail img {
+    display: block;
+    width: 160px;
+    height: auto;
+    max-height: calc(100vh - 128px);
+    object-fit: contain;
+    border-radius: 12px;
+  }
+  .side-rail a {
+    display: block;
+  }
+}
+/* Admin statistics: a pure-CSS daily bar chart (no chart library). */
+.stats-bars {
+  display: flex;
+  align-items: flex-end;
+  gap: 4px;
+  height: 180px;
+}
+.stats-bar {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: stretch;
+  height: 100%;
+  min-width: 0;
+}
+.stats-bar__fill {
+  display: block;
+  border-radius: 4px 4px 0 0;
+  background: var(--color-gradient);
+  min-height: 3px;
+}
+.stats-bar__label {
+  font-size: 10.5px;
+  color: var(--color-text-muted);
+  text-align: center;
+  margin-top: 6px;
+  white-space: nowrap;
+  overflow: hidden;
 }
 .container {
   max-width: var(--container-store);
@@ -299,6 +507,60 @@ h3 {
   padding: 0;
   display: grid;
   gap: var(--space-1);
+}
+.dashboard__nav-group + .dashboard__nav-group {
+  margin-top: var(--space-5);
+}
+.dashboard__nav-heading {
+  margin: 0 0 var(--space-2);
+  padding-inline: var(--space-3);
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+/* Visual step-by-step guide on /how-it-works: real screenshots in
+ * captioned figures, two per row on desktop. */
+.guide-steps figure {
+  margin: 0;
+  padding: var(--space-3);
+}
+.guide-steps img {
+  display: block;
+  width: 100%;
+  height: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+}
+.guide-steps figcaption {
+  margin-top: var(--space-3);
+  font-weight: 600;
+}
+/* On/off status pill used on settings cards and section headers. */
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 10px;
+  border-radius: var(--radius-pill);
+  background: var(--color-bg-accent);
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.status-pill::before {
+  content: '';
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: currentColor;
+  flex: none;
+}
+.status-pill--on {
+  background: rgb(22 163 74 / 0.12);
+  color: #15803d;
 }
 .dashboard__nav a {
   display: flex;
@@ -355,6 +617,11 @@ h3 {
 }
 .stack {
   display: grid;
+  /* The single implicit column must be minmax(0, 1fr), not auto: an auto
+   * column sizes to the widest child's max-content (e.g. unscaled photos
+   * in the finder tiles), which once stretched the homepage to 11,520px
+   * and gave the whole page a horizontal scrollbar. */
+  grid-template-columns: minmax(0, 1fr);
   gap: var(--space-4);
 }
 .row {
@@ -402,6 +669,20 @@ h3 {
   border-color: var(--color-primary);
   background: var(--color-bg-accent);
 }
+.cat-chip--active {
+  background: var(--color-gradient);
+  border-color: transparent;
+  color: var(--color-on-primary);
+  box-shadow: var(--shadow-button);
+}
+.cat-chip--active:hover {
+  background: var(--color-gradient-hover);
+  color: var(--color-on-primary);
+}
+.cat-chip--active .cat-chip__count {
+  background: rgb(255 255 255 / 0.22);
+  color: var(--color-on-primary);
+}
 .cat-chip__count {
   font-size: 0.8125rem;
   font-weight: 700;
@@ -421,23 +702,26 @@ h3 {
 .cat-section__spacer {
   flex: 1;
 }
+.marquee-wrap {
+  position: relative;
+}
 .marquee {
   overflow: hidden;
+  cursor: grab;
+  touch-action: pan-y;
   -webkit-mask-image: linear-gradient(90deg, transparent, #000 3.5%, #000 96.5%, transparent);
   mask-image: linear-gradient(90deg, transparent, #000 3.5%, #000 96.5%, transparent);
+}
+.marquee-wrap.marquee--dragging .marquee {
+  cursor: grabbing;
+}
+.marquee-wrap.marquee--dragging {
+  user-select: none;
 }
 .marquee__track {
   display: flex;
   width: max-content;
-  animation: marquee-scroll 45s linear infinite;
-}
-.marquee--reverse .marquee__track {
-  animation-direction: reverse;
-}
-.marquee:hover .marquee__track,
-.marquee:focus-within .marquee__track,
-.marquee[data-offscreen='true'] .marquee__track {
-  animation-play-state: paused;
+  will-change: transform;
 }
 .marquee__group {
   display: flex;
@@ -447,24 +731,39 @@ h3 {
 .marquee__group > .template-card {
   flex: 0 0 330px;
 }
-@keyframes marquee-scroll {
-  to {
-    transform: translateX(-50%);
-  }
+/* Shelf paging arrows: sit outside the faded mask zone, vertically
+ * centred on the row. */
+.marquee__nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  z-index: 4;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border: 1px solid var(--color-border);
+  border-radius: 50%;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  color: var(--color-text);
+  cursor: pointer;
+}
+.marquee__nav:hover {
+  color: var(--color-primary);
+  box-shadow: var(--shadow-card-hover);
+}
+.marquee__nav--prev {
+  left: 6px;
+}
+.marquee__nav--next {
+  right: 6px;
 }
 @media (max-width: 639px) {
   .marquee__group > .template-card {
     flex-basis: 264px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .marquee {
-    overflow-x: auto;
-    -webkit-mask-image: none;
-    mask-image: none;
-  }
-  .marquee__track {
-    animation: none;
   }
 }
 
@@ -905,6 +1204,15 @@ table.table {
 }
 .hero .container {
   padding-block: var(--space-7);
+  /* The banner spreads wider than the store column so the intro and the
+   * showcase get room to breathe (owner request: full-spread banner). */
+  max-width: 1440px;
+  padding-inline: var(--space-6);
+}
+@media (max-width: 639px) {
+  .hero .container {
+    padding-inline: var(--space-4);
+  }
 }
 /* Home redesign: badge, CTAs, trust points, category links, steps, CTA band. */
 .hero-badge {
@@ -965,6 +1273,10 @@ table.table {
  * so the picker stays a fraction of its former page height. */
 .finder-band {
   position: relative;
+  /* Grid-item minimum size: without min-width:0 the band's column in the
+   * page .stack sizes to the tiles' max-content (unscaled photo widths)
+   * and the whole page gains a horizontal scrollbar. */
+  min-width: 0;
   border: 1px solid var(--color-border);
   border-radius: var(--radius-card);
   background: linear-gradient(180deg, var(--color-bg-accent), var(--color-surface) 72%);
@@ -982,6 +1294,7 @@ table.table {
   display: grid;
   grid-template-columns: repeat(8, minmax(0, 1fr));
   gap: var(--space-3);
+  min-width: 0;
 }
 .purpose-tile {
   display: flex;
@@ -1089,8 +1402,8 @@ table.table {
 }
 .hero-layout {
   display: grid;
-  grid-template-columns: 1.05fr 0.95fr;
-  gap: var(--space-6);
+  grid-template-columns: 1.02fr 0.98fr;
+  gap: var(--space-7);
   align-items: center;
 }
 @media (max-width: 1023px) {

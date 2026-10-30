@@ -157,6 +157,26 @@ export class MockPaymentProvider implements PaymentProvider {
   }
 }
 
+/** Per-order reference for a manual transfer method (PayPal, USD bank
+ *  transfer): a short prefix plus 10 hex chars, written by the buyer in
+ *  the transfer note so staff can match the incoming money to the order.
+ *  It doubles as the payment attempt's provider_ref. */
+export function manualTransferRef(prefix: 'PP' | 'US'): string {
+  return `${prefix}${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
+}
+
+/** USD amount to quote for a VND total at the owner's configured rate
+ *  (VND per 1 USD, set in admin — never hard-coded). Returns a plain
+ *  decimal string with exactly two fraction digits, rounded half-up at
+ *  the cent. BigInt math keeps large totals exact. */
+export function usdAmountFor(totalMinorVnd: string, rateVndPerUsd: number): string {
+  const total = BigInt(totalMinorVnd);
+  const rate = BigInt(Math.round(rateVndPerUsd));
+  if (rate <= 0n) return '0.00';
+  const cents = (total * 100n + rate / 2n) / rate;
+  return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
+}
+
 /**
  * Bank transfer settled through a transaction hub (SePay-compatible).
  *
@@ -185,7 +205,6 @@ export class BankTransferProvider implements PaymentProvider {
   static newContentCode(): string {
     return `WM${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
   }
-
   createSession(input: { orderId: string; amountMinor: string; currency: string; returnUrl: string; expiresAt: Date }): PaymentSession {
     return {
       providerRef: BankTransferProvider.newContentCode(),

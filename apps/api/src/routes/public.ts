@@ -221,6 +221,23 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const momoRow = await db.query<{ value_json: { enabled?: boolean; partner_code?: string; access_key?: string; secret_key?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.momo'");
     const momoRaw = momoRow.rows[0]?.value_json;
     const momo_enabled = momoRaw?.enabled === true && typeof momoRaw.partner_code === 'string' && momoRaw.partner_code.trim() !== '' && typeof momoRaw.access_key === 'string' && momoRaw.access_key.trim() !== '' && typeof momoRaw.secret_key === 'string' && momoRaw.secret_key !== '';
+    const ppRow = await db.query<{ value_json: { enabled?: boolean; email?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.paypal'");
+    const ppRaw = ppRow.rows[0]?.value_json;
+    const paypal_enabled = ppRaw?.enabled === true && typeof ppRaw.email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ppRaw.email.trim());
+    const usdRow = await db.query<{ value_json: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; usd_rate?: number } }>("SELECT value_json FROM settings WHERE key = 'payment.usd_transfer'");
+    const usdRaw = usdRow.rows[0]?.value_json;
+    const usd_enabled = usdRaw?.enabled === true && typeof usdRaw.bank_name === 'string' && usdRaw.bank_name.trim() !== '' && typeof usdRaw.account_number === 'string' && usdRaw.account_number.trim() !== '' && typeof usdRaw.account_holder === 'string' && usdRaw.account_holder.trim() !== '' && typeof usdRaw.usd_rate === 'number' && usdRaw.usd_rate > 0;
+    // Side-rail ads: a side is exposed only when ads are enabled and the
+    // side carries an image URL — unconfigured slots stay invisible.
+    const adsRow = await db.query<{ value_json: { enabled?: boolean; left?: { image_url?: string; link_url?: string; alt?: string }; right?: { image_url?: string; link_url?: string; alt?: string } } }>("SELECT value_json FROM settings WHERE key = 'ads.side_rails'");
+    const adsRaw = adsRow.rows[0]?.value_json;
+    const adSide = (s?: { image_url?: string; link_url?: string; alt?: string }) => {
+      const image = typeof s?.image_url === 'string' ? s.image_url.trim() : '';
+      if (adsRaw?.enabled !== true || image === '') return null;
+      const link = typeof s?.link_url === 'string' ? s.link_url.trim() : '';
+      return { image_url: image, link_url: link === '' ? null : link, alt: typeof s?.alt === 'string' ? s.alt : '' };
+    };
+    const ads = { left: adSide(adsRaw?.left), right: adSide(adsRaw?.right) };
     return {
       data: {
         brand: { name: 'webmaket' },
@@ -230,7 +247,8 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         terms_version: terms.rows[0]?.value_json.current ?? null,
         contact,
         subdomain_fee,
-        payment: { bank_transfer: bank_transfer_enabled, vnpay: vnpay_enabled, momo: momo_enabled },
+        payment: { bank_transfer: bank_transfer_enabled, vnpay: vnpay_enabled, momo: momo_enabled, paypal: paypal_enabled, usd_transfer: usd_enabled },
+        ads,
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
       },
     };

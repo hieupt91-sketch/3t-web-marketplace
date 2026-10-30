@@ -10,12 +10,16 @@ import { useT } from '@/lib/i18n';
 
 interface Order { id: string; payment_status: string; total_minor: string; currency: string }
 interface TransferInstructions {
-  bank_name: string;
-  account_number: string;
-  account_holder: string;
   content_code: string;
   amount_minor: string;
   currency: string;
+  bank_name?: string;
+  account_number?: string;
+  account_holder?: string;
+  paypal_email?: string;
+  swift_code?: string;
+  amount_usd?: string;
+  usd_rate?: number;
 }
 interface Session {
   provider: string;
@@ -25,13 +29,17 @@ interface Session {
   expires_at: string;
   instructions?: TransferInstructions;
 }
-interface PublicConfig { payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean } }
+interface PublicConfig { payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean; paypal?: boolean; usd_transfer?: boolean } }
 
 const METHOD_KEYS: Record<string, { name: string; desc: string }> = {
   bank_transfer: { name: 'ui.checkout.method_bank', desc: 'ui.checkout.method_bank_desc' },
   vnpay: { name: 'ui.checkout.method_vnpay', desc: 'ui.checkout.method_vnpay_desc' },
   momo: { name: 'ui.checkout.method_momo', desc: 'ui.checkout.method_momo_desc' },
+  paypal: { name: 'ui.checkout.method_paypal', desc: 'ui.checkout.method_paypal_desc' },
+  usd_transfer: { name: 'ui.checkout.method_usd', desc: 'ui.checkout.method_usd_desc' },
 };
+
+const MANUAL_PROVIDERS = ['bank_transfer', 'paypal', 'usd_transfer'];
 
 function Pay() {
   const { t, dt, locale } = useT();
@@ -75,6 +83,8 @@ function Pay() {
         ...(p.bank_transfer ? ['bank_transfer'] : []),
         ...(p.vnpay ? ['vnpay'] : []),
         ...(p.momo ? ['momo'] : []),
+        ...(p.paypal ? ['paypal'] : []),
+        ...(p.usd_transfer ? ['usd_transfer'] : []),
       ];
       if (available.length > 1) {
         setMethods(available);
@@ -85,9 +95,10 @@ function Pay() {
     })();
   }, [id, loadOrder, startSession]);
 
-  // Bank transfer settles server-side (hub report or staff confirmation);
-  // poll quietly so the buyer lands on the result page once it lands.
-  const transferPending = session?.provider === 'bank_transfer' && order?.payment_status === 'awaiting_payment';
+  // Manual transfers settle server-side (hub report or staff
+  // confirmation); poll quietly so the buyer lands on the result page
+  // once the settlement lands.
+  const transferPending = session !== null && MANUAL_PROVIDERS.includes(session.provider) && order?.payment_status === 'awaiting_payment';
   useEffect(() => {
     if (!transferPending) return;
     const timer = setInterval(() => { void loadOrder(); }, 10_000);
@@ -175,6 +186,58 @@ function Pay() {
           </dl>
         </div>
         <Alert tone="info"><p>{t('ui.checkout.transfer_note')}</p></Alert>
+        {error ? <ErrorState error={error} /> : null}
+        <div className="row">
+          <button type="button" className="button" onClick={() => void loadOrder()}>{t('ui.checkout.check_status')}</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (session.provider === 'paypal' && session.instructions) {
+    const ins = session.instructions;
+    return (
+      <div className="stack">
+        <h1>{t('ui.checkout.paypal_title')}</h1>
+        <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.paypal_intro')}</p>
+        <div className="card stack">
+          <dl className="details">
+            <dt>{t('ui.checkout.paypal_email')}</dt><dd className="mono"><strong>{ins.paypal_email}</strong></dd>
+            {ins.account_holder ? <><dt>{t('ui.checkout.transfer_account_holder')}</dt><dd>{ins.account_holder}</dd></> : null}
+            <dt>{t('ui.checkout.total')}</dt><dd className="tabular"><strong>{formatMoney({ amount_minor: ins.amount_minor, currency: ins.currency }, locale)}</strong></dd>
+            <dt>{t('ui.checkout.transfer_content')}</dt><dd className="mono"><strong>{ins.content_code}</strong></dd>
+            <dt>{t('ui.checkout.transfer_expires')}</dt><dd>{dt(session.expires_at)}</dd>
+          </dl>
+        </div>
+        <Alert tone="info"><p>{t('ui.checkout.paypal_note')}</p></Alert>
+        {error ? <ErrorState error={error} /> : null}
+        <div className="row">
+          <button type="button" className="button" onClick={() => void loadOrder()}>{t('ui.checkout.check_status')}</button>
+        </div>
+      </div>
+    );
+  }
+
+  if (session.provider === 'usd_transfer' && session.instructions) {
+    const ins = session.instructions;
+    return (
+      <div className="stack">
+        <h1>{t('ui.checkout.usd_title')}</h1>
+        <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.usd_intro')}</p>
+        <div className="card stack">
+          <dl className="details">
+            <dt>{t('ui.checkout.transfer_bank')}</dt><dd>{ins.bank_name}</dd>
+            <dt>{t('ui.checkout.transfer_account_number')}</dt><dd className="mono"><strong>{ins.account_number}</strong></dd>
+            <dt>{t('ui.checkout.transfer_account_holder')}</dt><dd>{ins.account_holder}</dd>
+            {ins.swift_code ? <><dt>{t('ui.checkout.usd_swift')}</dt><dd className="mono">{ins.swift_code}</dd></> : null}
+            <dt>{t('ui.checkout.usd_amount')}</dt><dd className="tabular"><strong>${ins.amount_usd}</strong></dd>
+            <dt>{t('ui.checkout.total')}</dt><dd className="tabular">{formatMoney({ amount_minor: ins.amount_minor, currency: ins.currency }, locale)}</dd>
+            <dt>{t('ui.checkout.transfer_content')}</dt><dd className="mono"><strong>{ins.content_code}</strong></dd>
+            <dt>{t('ui.checkout.transfer_expires')}</dt><dd>{dt(session.expires_at)}</dd>
+          </dl>
+          {ins.usd_rate ? <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.usd_rate', { rate: ins.usd_rate.toLocaleString(locale) })}</p> : null}
+        </div>
+        <Alert tone="info"><p>{t('ui.checkout.usd_note')}</p></Alert>
         {error ? <ErrorState error={error} /> : null}
         <div className="row">
           <button type="button" className="button" onClick={() => void loadOrder()}>{t('ui.checkout.check_status')}</button>

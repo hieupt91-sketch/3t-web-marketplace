@@ -52,6 +52,23 @@ export default async function HowItWorks({ params }: Props) {
         </div>
         <p style={{ margin: 0 }}><Link href={`/${locale}/plans/compare`}>{t('ui.how.plans_link')}</Link></p>
       </section>
+      <section className="container stack" aria-labelledby="how-guide-title">
+        <h2 id="how-guide-title" style={{ margin: 0 }}>{t('ui.how.guide_title')}</h2>
+        <div className="grid-cards guide-steps">
+          {[
+            { img: '/guide/step-1-catalog.jpg', caption: t('ui.how.guide_step1') },
+            { img: '/guide/step-2-detail.jpg', caption: t('ui.how.guide_step2') },
+            { img: '/guide/step-3-pay.jpg', caption: t('ui.how.guide_step3') },
+            { img: '/guide/step-4-site.jpg', caption: t('ui.how.guide_step4') },
+          ].map((s, i) => (
+            <figure key={s.img} className="card">
+              {/* Real product screenshots: the exact screens the buyer walks through. */}
+              <img src={s.img} alt={s.caption} loading="lazy" />
+              <figcaption>{`${i + 1}. ${s.caption}`}</figcaption>
+            </figure>
+          ))}
+        </div>
+      </section>
       <ContentPageView slug="how-it-works" locale={locale} />
     </>
   );

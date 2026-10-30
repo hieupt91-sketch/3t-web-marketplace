@@ -189,6 +189,127 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
   );
 }
 
+/** Manual transfer methods beyond the VND bank account: PayPal and a USD
+ *  bank account for overseas buyers. Neither has an automatic settlement
+ *  feed into the platform — staff confirm arrivals in reconciliation —
+ *  so these settings only describe where the money goes and (for USD)
+ *  the owner's own exchange rate used to quote the amount. */
+export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<void> {
+  const { db } = app.deps;
+
+  async function load(key: string) {
+    const { rows } = await db.query<{ value_json: Record<string, unknown> }>('SELECT value_json FROM settings WHERE key = $1', [key]);
+    return rows[0]?.value_json ?? {};
+  }
+  async function save(key: string, value: Record<string, unknown>) {
+    await db.query(
+      `INSERT INTO settings (key, value_json) VALUES ($1, $2::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+      [key, JSON.stringify(value)],
+    );
+  }
+  const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+  app.get('/settings/payment-paypal', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const s = await load('payment.paypal');
+    return { data: { enabled: s.enabled === true, email: str(s.email), holder: str(s.holder) } };
+  });
+
+  app.post<{ Body: { enabled?: boolean; email?: string; holder?: string } }>(
+    '/settings/payment-paypal',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            email: { type: 'string', maxLength: 200 },
+            holder: { type: 'string', maxLength: 120 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const next = { enabled: request.body.enabled === true, email: str(request.body.email), holder: str(request.body.holder) };
+      if (next.enabled && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.email)) {
+        throw errors.validation([{ field: 'email', code: 'invalid' }]);
+      }
+      await save('payment.paypal', next);
+      await writeAudit(db, {
+        actorType: 'user', actorId: auth.userId, action: 'settings.payment_paypal_updated',
+        resourceType: 'settings', resourceId: null, traceId: request.id,
+        diff: { enabled: next.enabled, email_set: next.email !== '' },
+      });
+      return reply.status(200).send({ data: next });
+    },
+  );
+
+  app.get('/settings/payment-usd', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const s = await load('payment.usd_transfer');
+    return {
+      data: {
+        enabled: s.enabled === true,
+        bank_name: str(s.bank_name),
+        account_number: str(s.account_number),
+        account_holder: str(s.account_holder),
+        swift_code: str(s.swift_code),
+        usd_rate: typeof s.usd_rate === 'number' ? s.usd_rate : 0,
+      },
+    };
+  });
+
+  app.post<{ Body: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; swift_code?: string; usd_rate?: number } }>(
+    '/settings/payment-usd',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            bank_name: { type: 'string', maxLength: 120 },
+            account_number: { type: 'string', maxLength: 40 },
+            account_holder: { type: 'string', maxLength: 120 },
+            swift_code: { type: 'string', maxLength: 11 },
+            usd_rate: { type: 'number', minimum: 0, maximum: 100000000 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const next = {
+        enabled: request.body.enabled === true,
+        bank_name: str(request.body.bank_name),
+        account_number: str(request.body.account_number).replace(/\s+/g, ''),
+        account_holder: str(request.body.account_holder),
+        swift_code: str(request.body.swift_code).toUpperCase(),
+        usd_rate: typeof request.body.usd_rate === 'number' ? Math.round(request.body.usd_rate) : 0,
+      };
+      if (next.enabled) {
+        const problems: { field: string; code: string }[] = [];
+        if (!next.bank_name) problems.push({ field: 'bank_name', code: 'required' });
+        if (!next.account_number) problems.push({ field: 'account_number', code: 'required' });
+        if (!next.account_holder) problems.push({ field: 'account_holder', code: 'required' });
+        if (!(next.usd_rate > 0)) problems.push({ field: 'usd_rate', code: 'required' });
+        if (next.swift_code !== '' && !/^[A-Z]{6}[A-Z0-9]{2}([A-Z0-9]{3})?$/.test(next.swift_code)) problems.push({ field: 'swift_code', code: 'invalid' });
+        if (problems.length > 0) throw errors.validation(problems);
+      }
+      await save('payment.usd_transfer', next);
+      await writeAudit(db, {
+        actorType: 'user', actorId: auth.userId, action: 'settings.payment_usd_updated',
+        resourceType: 'settings', resourceId: null, traceId: request.id,
+        diff: { enabled: next.enabled, bank_name: next.bank_name, usd_rate: next.usd_rate },
+      });
+      return reply.status(200).send({ data: next });
+    },
+  );
+}
+
 /** Bank-transfer payment settings (owner proposal, 2026-10-30). The hub API
  *  key is a secret: it is accepted on POST (absent = keep, non-empty =
  *  replace) and never returned; GET reports only whether one is configured. */
@@ -411,6 +532,125 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
       return reply.status(200).send({
         data: { enabled: next.enabled, partner_code: next.partner_code, access_key: next.access_key, secret_configured: next.secret_key !== '', sandbox: next.sandbox, ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo` },
       });
+    },
+  );
+}
+
+export interface AdSideSettings {
+  image_url: string;
+  link_url: string;
+  alt: string;
+}
+
+export interface AdsSettings {
+  enabled: boolean;
+  left: AdSideSettings;
+  right: AdSideSettings;
+}
+
+const EMPTY_AD_SIDE: AdSideSettings = { image_url: '', link_url: '', alt: '' };
+
+/** A usable ad URL: absolute http(s) or a root-relative path on this
+ *  site. Anything else (javascript:, protocol-relative, bare text) is
+ *  rejected so the public rail can never become an injection vector. */
+export function isAdUrl(value: string): boolean {
+  if (value === '') return true;
+  if (value.startsWith('/')) return !value.startsWith('//') && !/[\s"'<>]/.test(value);
+  try {
+    const u = new URL(value);
+    return (u.protocol === 'https:' || u.protocol === 'http:') && u.hostname !== '';
+  } catch {
+    return false;
+  }
+}
+
+export function normalizeAdsSettings(raw: unknown): AdsSettings {
+  const obj = (typeof raw === 'object' && raw !== null ? raw : {}) as Record<string, unknown>;
+  const side = (v: unknown): AdSideSettings => {
+    const s = (typeof v === 'object' && v !== null ? v : {}) as Record<string, unknown>;
+    return {
+      image_url: clean(s.image_url).slice(0, 500),
+      link_url: clean(s.link_url).slice(0, 500),
+      alt: clean(s.alt).slice(0, 200),
+    };
+  };
+  return { enabled: obj.enabled === true, left: side(obj.left), right: side(obj.right) };
+}
+
+/** Side-rail advertising slots (owner request): the empty margins on
+ *  very wide screens can carry one banner per side. Managed here in
+ *  admin; the storefront renders a rail only when ads are enabled AND
+ *  that side has an image, so an unconfigured slot leaves no trace. */
+export async function adminAdsSettingsRoutes(app: FastifyInstance): Promise<void> {
+  const { db } = app.deps;
+
+  async function load(): Promise<AdsSettings> {
+    const { rows } = await db.query<{ value_json: unknown }>("SELECT value_json FROM settings WHERE key = 'ads.side_rails'");
+    return rows[0] ? normalizeAdsSettings(rows[0].value_json) : { enabled: false, left: { ...EMPTY_AD_SIDE }, right: { ...EMPTY_AD_SIDE } };
+  }
+
+  app.get('/settings/ads', async (request) => {
+    requirePermission(request, 'settings:manage');
+    return { data: await load() };
+  });
+
+  app.post<{ Body: { enabled?: boolean; left?: Partial<AdSideSettings>; right?: Partial<AdSideSettings> } }>(
+    '/settings/ads',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            left: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                image_url: { type: 'string', maxLength: 500 },
+                link_url: { type: 'string', maxLength: 500 },
+                alt: { type: 'string', maxLength: 200 },
+              },
+            },
+            right: {
+              type: 'object',
+              additionalProperties: false,
+              properties: {
+                image_url: { type: 'string', maxLength: 500 },
+                link_url: { type: 'string', maxLength: 500 },
+                alt: { type: 'string', maxLength: 200 },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const next = normalizeAdsSettings(request.body);
+      const problems: { field: string; code: string }[] = [];
+      for (const sideName of ['left', 'right'] as const) {
+        const side = next[sideName];
+        if (!isAdUrl(side.image_url)) problems.push({ field: `${sideName}.image_url`, code: 'invalid_url' });
+        if (!isAdUrl(side.link_url)) problems.push({ field: `${sideName}.link_url`, code: 'invalid_url' });
+        if (side.link_url !== '' && side.image_url === '') problems.push({ field: `${sideName}.image_url`, code: 'required_with_link' });
+      }
+      if (problems.length > 0) throw errors.validation(problems);
+      await db.query(
+        `INSERT INTO settings (key, value_json) VALUES ('ads.side_rails', $1::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+        [JSON.stringify(next)],
+      );
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.ads_updated',
+        resourceType: 'settings',
+        resourceId: null,
+        traceId: request.id,
+        diff: { enabled: next.enabled, left_set: next.left.image_url !== '', right_set: next.right.image_url !== '' },
+      });
+      return reply.status(200).send({ data: next });
     },
   );
 }

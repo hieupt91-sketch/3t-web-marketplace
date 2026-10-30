@@ -7,13 +7,14 @@ import { MESSAGES, negotiateLocale, translate, type Locale } from '@3t/i18n';
 import { AppError, errors } from './errors.ts';
 import type { Mailer } from './mail.ts';
 import { publicRoutes } from './routes/public.ts';
+import { adminStatsRoutes, publicAnalyticsRoutes } from './routes/analytics.ts';
 import { publicContentRoutes } from './routes/public-content.ts';
 import { authRoutes } from './routes/auth.ts';
 import { meRoutes } from './routes/me.ts';
 import { adminImportRoutes } from './routes/admin-imports.ts';
 import { adminCatalogRoutes } from './routes/admin-catalog.ts';
 import { adminContentRoutes } from './routes/admin-content.ts';
-import { adminGatewaySettingsRoutes, adminPaymentSettingsRoutes, adminSettingsRoutes } from './routes/admin-settings.ts';
+import { adminAdsSettingsRoutes, adminGatewaySettingsRoutes, adminManualPaymentRoutes, adminPaymentSettingsRoutes, adminSettingsRoutes } from './routes/admin-settings.ts';
 import { adminTemplateRoutes } from './routes/admin-templates.ts';
 import { jobRoutes } from './routes/jobs.ts';
 import { commerceRoutes } from './routes/commerce.ts';
@@ -267,6 +268,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
   await app.register(
     async (api) => {
       await api.register(publicRoutes);
+      await api.register(publicAnalyticsRoutes);
       await api.register(publicContentRoutes);
       await api.register(authRoutes);
       await api.register(meRoutes);
@@ -275,8 +277,11 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(adminTemplateRoutes, { prefix: '/admin' });
       await api.register(adminContentRoutes, { prefix: '/admin' });
       await api.register(adminSettingsRoutes, { prefix: '/admin' });
+      await api.register(adminStatsRoutes, { prefix: '/admin' });
       await api.register(adminPaymentSettingsRoutes, { prefix: '/admin' });
       await api.register(adminGatewaySettingsRoutes, { prefix: '/admin' });
+      await api.register(adminAdsSettingsRoutes, { prefix: '/admin' });
+      await api.register(adminManualPaymentRoutes, { prefix: '/admin' });
       await api.register(jobRoutes);
       await api.register(commerceRoutes);
       await api.register(adminCommerceRoutes, { prefix: '/admin' });

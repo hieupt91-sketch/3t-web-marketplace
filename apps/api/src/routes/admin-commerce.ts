@@ -34,21 +34,22 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
       `SELECT order_id, provider_ref, amount_minor::text, currency, status FROM payment_attempts
        WHERE order_id IN (SELECT id FROM orders WHERE status = 'needs_reconciliation') ORDER BY created_at DESC`,
     );
-    // Bank transfers still waiting for money: staff match these against the
-    // bank statement (content code + amount) until the hub reports them.
-    const pendingTransfers = await db.query<{ id: string; order_id: string; provider_ref: string | null; amount_minor: string; currency: string; created_at: Date; buyer_email: string; order_status: string }>(
-      `SELECT pa.id, pa.order_id, pa.provider_ref, pa.amount_minor::text, pa.currency, pa.created_at, u.email_normalized AS buyer_email, o.status AS order_status
+    // Manual transfers still waiting for money (bank hub fallback,
+    // PayPal, USD wire): staff match these against the statement
+    // (content code + amount) until they confirm settlement by hand.
+    const pendingTransfers = await db.query<{ id: string; order_id: string; provider: string; provider_ref: string | null; amount_minor: string; currency: string; created_at: Date; buyer_email: string; order_status: string }>(
+      `SELECT pa.id, pa.order_id, pa.provider, pa.provider_ref, pa.amount_minor::text, pa.currency, pa.created_at, u.email_normalized AS buyer_email, o.status AS order_status
        FROM payment_attempts pa
        JOIN orders o ON o.id = pa.order_id
        JOIN users u ON u.id = o.buyer_id
-       WHERE pa.provider = 'bank_transfer' AND pa.status = 'pending' AND o.status = 'awaiting_payment'
+       WHERE pa.provider IN ('bank_transfer', 'paypal', 'usd_transfer') AND pa.status = 'pending' AND o.status = 'awaiting_payment'
        ORDER BY pa.created_at ASC LIMIT 100`,
     );
     return {
       data: {
         orders: orders.rows.map((o) => ({ id: o.id, buyer_id: o.buyer_id, total_minor: o.total_minor, currency: o.currency, created_at: o.created_at.toISOString(), attempts: attempts.rows.filter((a) => a.order_id === o.id) })),
         unmatched_events: events.rows.map((e) => ({ id: e.id, provider: e.provider, provider_event_id: e.provider_event_id, order_id: e.order_id, processing_status: e.processing_status, received_at: e.received_at.toISOString() })),
-        pending_transfers: pendingTransfers.rows.map((p) => ({ attempt_id: p.id, order_id: p.order_id, content_code: p.provider_ref, amount_minor: p.amount_minor, currency: p.currency, buyer_email: p.buyer_email, created_at: p.created_at.toISOString() })),
+        pending_transfers: pendingTransfers.rows.map((p) => ({ attempt_id: p.id, order_id: p.order_id, provider: p.provider, content_code: p.provider_ref, amount_minor: p.amount_minor, currency: p.currency, buyer_email: p.buyer_email, created_at: p.created_at.toISOString() })),
       },
     };
   });
@@ -69,10 +70,10 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
       );
       const attempt = rows[0];
       if (!attempt) throw errors.notFound();
-      if (attempt.provider !== 'bank_transfer' || !attempt.provider_ref) throw errors.conflict('payment.not_confirmable');
+      if (!['bank_transfer', 'paypal', 'usd_transfer'].includes(attempt.provider) || !attempt.provider_ref) throw errors.conflict('payment.not_confirmable');
       if (attempt.status !== 'pending') throw errors.conflict('payment.not_pending');
       const raw = JSON.stringify({ manual: true, attempt_id: attempt.id, confirmed_by: auth.userId });
-      const outcome = await processPaymentEvent(db, 'bank_transfer', raw, {
+      const outcome = await processPaymentEvent(db, attempt.provider, raw, {
         providerEventId: `manual_${randomUUID()}`,
         providerRef: attempt.provider_ref,
         status: 'settled',

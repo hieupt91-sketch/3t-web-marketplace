@@ -76,12 +76,15 @@ function PaymentSettingsInner() {
 
   return (
     <div className="stack">
-      <h1>{t('ui.payment_settings.title')}</h1>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h1 style={{ margin: 0 }}>{t('ui.payment_settings.title')}</h1>
+        <span className={`status-pill${settings.enabled ? ' status-pill--on' : ''}`}>{settings.enabled ? t('ui.payment_settings.status_on') : t('ui.payment_settings.status_off')}</span>
+      </div>
       <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.hint')}</p>
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.invalid')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
-      <form className="stack card" onSubmit={submit}>
+      <form className="stack card" id="bank" style={{ scrollMarginTop: 90 }} onSubmit={submit}>
         <label className="row">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
           <span>{t('ui.payment_settings.enabled')}</span>
@@ -171,8 +174,11 @@ function VnPayForm() {
   if (error && !settings) return <ErrorState error={error} />;
   if (!settings) return <Loading />;
   return (
-    <form className="stack card" onSubmit={submit}>
-      <h2 style={{ margin: 0 }}>{t('ui.payment_settings.vnpay_title')}</h2>
+    <form className="stack card" id="vnpay" style={{ scrollMarginTop: 90 }} onSubmit={submit}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h2 style={{ margin: 0 }}>{t('ui.payment_settings.vnpay_title')}</h2>
+        <span className={`status-pill${settings.enabled ? ' status-pill--on' : ''}`}>{settings.enabled ? t('ui.payment_settings.status_on') : t('ui.payment_settings.status_off')}</span>
+      </div>
       <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.vnpay_hint')}</p>
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
@@ -260,8 +266,11 @@ function MoMoForm() {
   if (error && !settings) return <ErrorState error={error} />;
   if (!settings) return <Loading />;
   return (
-    <form className="stack card" onSubmit={submit}>
-      <h2 style={{ margin: 0 }}>{t('ui.payment_settings.momo_title')}</h2>
+    <form className="stack card" id="momo" style={{ scrollMarginTop: 90 }} onSubmit={submit}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h2 style={{ margin: 0 }}>{t('ui.payment_settings.momo_title')}</h2>
+        <span className={`status-pill${settings.enabled ? ' status-pill--on' : ''}`}>{settings.enabled ? t('ui.payment_settings.status_on') : t('ui.payment_settings.status_off')}</span>
+      </div>
       <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.momo_hint')}</p>
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
@@ -299,13 +308,201 @@ function MoMoForm() {
   );
 }
 
+interface PayPalSettings {
+  enabled: boolean;
+  email: string;
+  holder: string;
+}
+
+function PayPalForm() {
+  const { t } = useT();
+  const [settings, setSettings] = useState<PayPalSettings | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [email, setEmail] = useState('');
+  const [holder, setHolder] = useState('');
+  const [error, setError] = useState<ApiError | null>(null);
+  const [formError, setFormError] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api<PayPalSettings>('/admin/settings/payment-paypal').then((res) => {
+      if (res.ok) {
+        setSettings(res.data);
+        setEnabled(res.data.enabled);
+        setEmail(res.data.email);
+        setHolder(res.data.holder);
+      } else setError(res.error);
+    });
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setFormError(false); setSaved(false); setError(null);
+    if (enabled && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setFormError(true); return; }
+    setBusy(true);
+    const res = await api<PayPalSettings>('/admin/settings/payment-paypal', { method: 'POST', body: { enabled, email, holder } });
+    setBusy(false);
+    if (!res.ok) setError(res.error);
+    else { setSettings(res.data); setSaved(true); }
+  }
+
+  if (error && !settings) return <ErrorState error={error} />;
+  if (!settings) return <Loading />;
+  return (
+    <form className="stack card" id="paypal" style={{ scrollMarginTop: 90 }} onSubmit={submit}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h2 style={{ margin: 0 }}>{t('ui.payment_settings.paypal_title')}</h2>
+        <span className={`status-pill${settings.enabled ? ' status-pill--on' : ''}`}>{settings.enabled ? t('ui.payment_settings.status_on') : t('ui.payment_settings.status_off')}</span>
+      </div>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.paypal_hint')}</p>
+      {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
+      {formError ? <Alert tone="error"><p>{t('ui.payment_settings.invalid')}</p></Alert> : null}
+      {error ? <ErrorState error={error} /> : null}
+      <label className="row">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.paypal_enabled')}</span>
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.paypal_email')}</span>
+        <input className="input" type="email" value={email} onChange={(e) => setEmail(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.paypal_holder')}</span>
+        <input className="input" value={holder} onChange={(e) => setHolder(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <div className="row">
+        <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
+      </div>
+    </form>
+  );
+}
+
+interface UsdSettings {
+  enabled: boolean;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  swift_code: string;
+  usd_rate: number;
+}
+
+function UsdForm() {
+  const { t } = useT();
+  const [settings, setSettings] = useState<UsdSettings | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [bankName, setBankName] = useState('');
+  const [accountNumber, setAccountNumber] = useState('');
+  const [accountHolder, setAccountHolder] = useState('');
+  const [swiftCode, setSwiftCode] = useState('');
+  const [rate, setRate] = useState('');
+  const [error, setError] = useState<ApiError | null>(null);
+  const [formError, setFormError] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api<UsdSettings>('/admin/settings/payment-usd').then((res) => {
+      if (res.ok) {
+        setSettings(res.data);
+        setEnabled(res.data.enabled);
+        setBankName(res.data.bank_name);
+        setAccountNumber(res.data.account_number);
+        setAccountHolder(res.data.account_holder);
+        setSwiftCode(res.data.swift_code);
+        setRate(res.data.usd_rate > 0 ? String(res.data.usd_rate) : '');
+      } else setError(res.error);
+    });
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setFormError(false); setSaved(false); setError(null);
+    const rateNum = Number(rate.replace(/[^\d]/g, ''));
+    if (enabled && (!bankName.trim() || !accountNumber.trim() || !accountHolder.trim() || !(rateNum > 0))) { setFormError(true); return; }
+    setBusy(true);
+    const res = await api<UsdSettings>('/admin/settings/payment-usd', {
+      method: 'POST',
+      body: { enabled, bank_name: bankName, account_number: accountNumber, account_holder: accountHolder, swift_code: swiftCode, usd_rate: rateNum },
+    });
+    setBusy(false);
+    if (!res.ok) setError(res.error);
+    else { setSettings(res.data); setSaved(true); }
+  }
+
+  if (error && !settings) return <ErrorState error={error} />;
+  if (!settings) return <Loading />;
+  return (
+    <form className="stack card" id="usd" style={{ scrollMarginTop: 90 }} onSubmit={submit}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h2 style={{ margin: 0 }}>{t('ui.payment_settings.usd_title')}</h2>
+        <span className={`status-pill${settings.enabled ? ' status-pill--on' : ''}`}>{settings.enabled ? t('ui.payment_settings.status_on') : t('ui.payment_settings.status_off')}</span>
+      </div>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.usd_hint')}</p>
+      {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
+      {formError ? <Alert tone="error"><p>{t('ui.payment_settings.usd_invalid')}</p></Alert> : null}
+      {error ? <ErrorState error={error} /> : null}
+      <label className="row">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.usd_enabled')}</span>
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.bank_name')}</span>
+        <input className="input" value={bankName} onChange={(e) => setBankName(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.account_number')}</span>
+        <input className="input" value={accountNumber} onChange={(e) => setAccountNumber(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.account_holder')}</span>
+        <input className="input" value={accountHolder} onChange={(e) => setAccountHolder(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.swift_code')}</span>
+        <input className="input" value={swiftCode} onChange={(e) => setSwiftCode(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.usd_rate')}</span>
+        <input className="input" value={rate} onChange={(e) => setRate(e.target.value)} disabled={busy} autoComplete="off" inputMode="numeric" placeholder="26000" />
+      </label>
+      <div className="row">
+        <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
+      </div>
+    </form>
+  );
+}
+
+function MethodAnchorNav() {
+  const { t } = useT();
+  const items = [
+    { id: 'bank', key: 'ui.checkout.method_bank' },
+    { id: 'vnpay', key: 'ui.checkout.method_vnpay' },
+    { id: 'momo', key: 'ui.checkout.method_momo' },
+    { id: 'paypal', key: 'ui.checkout.method_paypal' },
+    { id: 'usd', key: 'ui.checkout.method_usd' },
+  ];
+  return (
+    <nav className="cat-nav" aria-label={t('ui.payment_settings.title')}>
+      {items.map((i) => (
+        <a key={i.id} className="cat-chip" href={`#${i.id}`}>{t(i.key)}</a>
+      ))}
+    </nav>
+  );
+}
+
 export default function PaymentSettingsPage() {
   return (
     <RequirePermission permission="settings:manage">
       <div className="stack">
+        <MethodAnchorNav />
         <PaymentSettingsInner />
         <VnPayForm />
         <MoMoForm />
+        <PayPalForm />
+        <UsdForm />
       </div>
     </RequirePermission>
   );

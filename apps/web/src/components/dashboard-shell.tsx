@@ -22,7 +22,12 @@ interface NavItem {
   permission?: string;
 }
 
-const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
+interface NavGroup {
+  labelKey: string;
+  items: NavItem[];
+}
+
+const NAV: Record<'account' | 'partner', NavItem[]> = {
   account: [
     { href: '/account', labelKey: 'ui.account.nav.overview' },
     { href: '/account/purchases', labelKey: 'ui.account.nav.purchases' },
@@ -32,29 +37,6 @@ const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
     { href: '/account/support', labelKey: 'ui.account.nav.support' },
     { href: '/account/settings', labelKey: 'ui.account.nav.settings' },
     { href: '/account/security', labelKey: 'ui.account.nav.security' },
-  ],
-  admin: [
-    { href: '/admin', labelKey: 'ui.admin.nav.overview', permission: 'report:read' },
-    { href: '/admin/templates', labelKey: 'ui.admin.nav.templates', permission: 'template:read' },
-    { href: '/admin/imports', labelKey: 'ui.admin.nav.imports', permission: 'template:read' },
-    { href: '/admin/imports/new', labelKey: 'ui.admin.nav.import_new', permission: 'template:import' },
-    { href: '/admin/pricing', labelKey: 'ui.admin.nav.pricing', permission: 'pricing:write' },
-    { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
-    { href: '/admin/settings/contact', labelKey: 'ui.admin.nav.contact_settings', permission: 'settings:manage' },
-    { href: '/admin/settings/subdomain-fee', labelKey: 'ui.admin.nav.subdomain_fee_settings', permission: 'settings:manage' },
-    { href: '/admin/settings/payments', labelKey: 'ui.admin.nav.payment_settings', permission: 'settings:manage' },
-    { href: '/admin/payments/reconciliation', labelKey: 'ui.admin.nav.reconciliation', permission: 'payment:read' },
-    { href: '/admin/payments/refunds', labelKey: 'ui.admin.nav.refunds', permission: 'payment:read' },
-    { href: '/admin/support', labelKey: 'ui.admin.nav.support', permission: 'support:read' },
-    { href: '/admin/sites', labelKey: 'ui.admin.nav.sites', permission: 'site:operate' },
-    { href: '/admin/domains', labelKey: 'ui.admin.nav.domains', permission: 'site:operate' },
-    { href: '/admin/demos', labelKey: 'ui.admin.nav.demos', permission: 'ops:read' },
-    { href: '/admin/backups', labelKey: 'ui.admin.nav.backups', permission: 'site:operate' },
-    { href: '/admin/jobs', labelKey: 'ui.admin.nav.jobs', permission: 'ops:read' },
-    { href: '/admin/partners', labelKey: 'ui.admin.partners', permission: 'partner:read' },
-    { href: '/admin/staff', labelKey: 'ui.admin.staff', permission: 'staff:manage' },
-    { href: '/admin/translations', labelKey: 'ui.admin.translations', permission: 'template:read' },
-    { href: '/admin/payouts', labelKey: 'ui.admin.payouts', permission: 'payout:read' },
   ],
   partner: [
     { href: '/partner', labelKey: 'ui.partner.title' },
@@ -70,6 +52,66 @@ const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
     { href: '/partner/settings', labelKey: 'ui.partner.settings' },
   ],
 };
+
+/** The admin menu is grouped by job, not dumped in one flat list:
+ *  overview → selling → payments → operations → system → settings.
+ *  A group renders only when the staffer can see at least one item. */
+const ADMIN_NAV: NavGroup[] = [
+  {
+    labelKey: 'ui.admin.nav.group_overview',
+    items: [
+      { href: '/admin', labelKey: 'ui.admin.nav.overview', permission: 'report:read' },
+      { href: '/admin/stats', labelKey: 'ui.admin.nav.stats', permission: 'report:read' },
+    ],
+  },
+  {
+    labelKey: 'ui.admin.nav.group_business',
+    items: [
+      { href: '/admin/templates', labelKey: 'ui.admin.nav.templates', permission: 'template:read' },
+      { href: '/admin/imports', labelKey: 'ui.admin.nav.imports', permission: 'template:read' },
+      { href: '/admin/imports/new', labelKey: 'ui.admin.nav.import_new', permission: 'template:import' },
+      { href: '/admin/pricing', labelKey: 'ui.admin.nav.pricing', permission: 'pricing:write' },
+      { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
+      { href: '/admin/translations', labelKey: 'ui.admin.translations', permission: 'template:read' },
+    ],
+  },
+  {
+    labelKey: 'ui.admin.nav.group_payments',
+    items: [
+      { href: '/admin/payments/reconciliation', labelKey: 'ui.admin.nav.reconciliation', permission: 'payment:read' },
+      { href: '/admin/payments/refunds', labelKey: 'ui.admin.nav.refunds', permission: 'payment:read' },
+      { href: '/admin/payouts', labelKey: 'ui.admin.payouts', permission: 'payout:read' },
+    ],
+  },
+  {
+    labelKey: 'ui.admin.nav.group_operations',
+    items: [
+      { href: '/admin/sites', labelKey: 'ui.admin.nav.sites', permission: 'site:operate' },
+      { href: '/admin/domains', labelKey: 'ui.admin.nav.domains', permission: 'site:operate' },
+      { href: '/admin/demos', labelKey: 'ui.admin.nav.demos', permission: 'ops:read' },
+      { href: '/admin/jobs', labelKey: 'ui.admin.nav.jobs', permission: 'ops:read' },
+      { href: '/admin/backups', labelKey: 'ui.admin.nav.backups', permission: 'site:operate' },
+      { href: '/admin/support', labelKey: 'ui.admin.nav.support', permission: 'support:read' },
+    ],
+  },
+  {
+    labelKey: 'ui.admin.nav.group_system',
+    items: [
+      { href: '/admin/partners', labelKey: 'ui.admin.partners', permission: 'partner:read' },
+      { href: '/admin/staff', labelKey: 'ui.admin.staff', permission: 'staff:manage' },
+    ],
+  },
+  {
+    labelKey: 'ui.admin.nav.group_settings',
+    items: [
+      { href: '/admin/settings', labelKey: 'ui.admin.nav.settings_hub', permission: 'settings:manage' },
+      { href: '/admin/settings/contact', labelKey: 'ui.admin.nav.contact_settings', permission: 'settings:manage' },
+      { href: '/admin/settings/subdomain-fee', labelKey: 'ui.admin.nav.subdomain_fee_settings', permission: 'settings:manage' },
+      { href: '/admin/settings/payments', labelKey: 'ui.admin.nav.payment_settings', permission: 'settings:manage' },
+      { href: '/admin/settings/ads', labelKey: 'ui.admin.nav.ads_settings', permission: 'settings:manage' },
+    ],
+  },
+];
 
 /**
  * Authenticated area shell. Hiding nav items is a convenience only — every API call is
@@ -92,20 +134,33 @@ export function DashboardShell({ area, children }: { area: 'account' | 'admin' |
   if (state.status === 'loading' || state.status === 'anonymous') body = <Loading />;
   else if (state.status === 'error') body = <ErrorState error={state.error} />;
   else {
-    const items = NAV[area].filter((item) => !item.permission || state.me.permissions.includes(item.permission));
-    const allowed = area === 'account' || items.length > 0;
+    const can = (item: NavItem) => !item.permission || state.me.permissions.includes(item.permission);
+    const flatItems = area === 'admin' ? [] : NAV[area].filter(can);
+    const groups = area === 'admin'
+      ? ADMIN_NAV.map((g) => ({ ...g, items: g.items.filter(can) })).filter((g) => g.items.length > 0)
+      : [];
+    const visibleCount = area === 'admin' ? groups.reduce((a, g) => a + g.items.length, 0) : flatItems.length;
+    const allowed = area === 'account' || visibleCount > 0;
+    const link = (item: NavItem) => (
+      <li key={item.href}>
+        <Link href={item.href} aria-current={pathname === item.href ? 'page' : undefined}>
+          {t(item.labelKey)}
+        </Link>
+      </li>
+    );
     body = (
       <div className="dashboard">
         <nav className="dashboard__nav" aria-label={t(area === 'admin' ? 'ui.admin.nav.label' : 'ui.account.nav.label')}>
-          <ul>
-            {items.map((item) => (
-              <li key={item.href}>
-                <Link href={item.href} aria-current={pathname === item.href ? 'page' : undefined}>
-                  {t(item.labelKey)}
-                </Link>
-              </li>
-            ))}
-          </ul>
+          {area === 'admin' ? (
+            groups.map((g) => (
+              <div key={g.labelKey} className="dashboard__nav-group">
+                <p className="dashboard__nav-heading">{t(g.labelKey)}</p>
+                <ul>{g.items.map(link)}</ul>
+              </div>
+            ))
+          ) : (
+            <ul>{flatItems.map(link)}</ul>
+          )}
         </nav>
         <main id="main" className="dashboard__main" tabIndex={-1}>
           {allowed ? (

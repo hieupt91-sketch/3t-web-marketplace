@@ -1,10 +1,93 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { useT } from '@/lib/i18n';
 import { useMe } from '@/lib/use-me';
 import { useSaved } from '@/lib/saved';
+import { api } from '@/lib/api';
+import type { TemplateSummary } from '@/lib/api-server';
 import { LanguageSwitch } from './language-switch';
+
+const CATEGORY_ORDER = ['food', 'beauty', 'realestate', 'business', 'store', 'landing', 'portfolio', 'blog', 'website'];
+
+/**
+ * "Mẫu website" menu with a hover/tap category dropdown: every template
+ * category with its live count, each linking into the filtered catalog.
+ * Opens on hover/focus for pointer users; the chevron toggles it for
+ * touch. Counts come from the public catalog (best-effort: the menu
+ * still lists categories when the count fetch fails).
+ */
+function CategoryMenu({ base }: { base: string }) {
+  const { t } = useT();
+  const [open, setOpen] = useState(false);
+  const [counts, setCounts] = useState<Map<string, number> | null>(null);
+  const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const res = await api<TemplateSummary[]>('/templates?limit=100');
+      if (cancelled || !res.ok) return;
+      const map = new Map<string, number>();
+      for (const tpl of res.data) {
+        const code = tpl.category ?? 'website';
+        map.set(code, (map.get(code) ?? 0) + 1);
+      }
+      setCounts(map);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const codes = counts
+    ? [...CATEGORY_ORDER.filter((c) => counts.has(c)), ...[...counts.keys()].filter((c) => !CATEGORY_ORDER.includes(c)).sort()]
+    : [];
+  const scheduleClose = () => {
+    closeTimer.current = setTimeout(() => setOpen(false), 250);
+  };
+  const openNow = () => {
+    if (closeTimer.current) clearTimeout(closeTimer.current);
+    setOpen(true);
+  };
+
+  return (
+    <span
+      className={`nav-dropdown${open ? ' nav-dropdown--open' : ''}`}
+      onMouseEnter={openNow}
+      onMouseLeave={scheduleClose}
+    >
+      <Link href={`${base}/templates`}>{t('ui.nav.templates')}</Link>
+      <button
+        type="button"
+        className="nav-dropdown__toggle"
+        aria-expanded={open}
+        aria-label={t('ui.catalog.filter_category')}
+        onClick={() => setOpen((v) => !v)}
+      >
+        <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
+      </button>
+      <span className="nav-dropdown__panel" role="menu">
+        {codes.map((code) => {
+          const label = t(`ui.category.${code}`);
+          return (
+            <Link key={code} href={`${base}/templates?category=${code}`} className="nav-dropdown__item" onClick={() => setOpen(false)}>
+              <span>{label === `ui.category.${code}` ? code : label}</span>
+              <span className="nav-dropdown__count">{counts?.get(code) ?? ''}</span>
+            </Link>
+          );
+        })}
+        <Link href={`${base}/templates`} className="nav-dropdown__item nav-dropdown__item--all" onClick={() => setOpen(false)}>
+          <span>{t('ui.home.browse_all')}</span>
+          <span className="nav-dropdown__count">{counts ? [...counts.values()].reduce((a, b) => a + b, 0) : ''}</span>
+        </Link>
+      </span>
+    </span>
+  );
+}
 
 function BookmarkIcon() {
   return (
@@ -37,8 +120,16 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
           <img src="/logo.svg" alt="" width={30} height={30} />
           <span className="brand__name">WEBMAKET</span>
         </Link>
+        <form className="header-search" action={`${base}/templates`} method="get" role="search">
+          <svg viewBox="0 0 24 24" aria-hidden="true" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <circle cx="11" cy="11" r="7" />
+            <path d="m21 21-4.3-4.3" />
+          </svg>
+          <label htmlFor="header-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
+          <input id="header-search" type="search" name="q" placeholder={t('ui.catalog.search_placeholder')} />
+        </form>
         <nav className="site-nav" aria-label={t('ui.nav.main')}>
-          <Link href={`${base}/templates`}>{t('ui.nav.templates')}</Link>
+          <CategoryMenu base={base} />
           <Link href={`${base}/plans/compare`}>{t('ui.nav.plans')}</Link>
           <Link href={`${base}/how-it-works`}>{t('ui.nav.how_it_works')}</Link>
           {me.status === 'signed_in' ? (

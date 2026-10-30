@@ -13,8 +13,10 @@ import {
   getSetting,
   hashToken,
   loadActivePlans,
+  manualTransferRef,
   randomToken,
   tx,
+  usdAmountFor,
   writeAudit,
   type Db,
   type NormalizedEvent,
@@ -110,6 +112,59 @@ export async function loadMoMoSettings(db: Db): Promise<MoMoSettings> {
 
 export function moMoAvailable(s: MoMoSettings): boolean {
   return s.enabled && s.partner_code.trim() !== '' && s.access_key.trim() !== '' && s.secret_key !== '';
+}
+
+/** Owner-configured PayPal receiving account (settings key 'payment.paypal').
+ *  Settlement is confirmed by staff in reconciliation once the money lands —
+ *  PayPal has no hub reporting into the platform, so this method is manual
+ *  by design; the buyer writes the per-order reference in the PayPal note. */
+export interface PayPalSettings {
+  enabled: boolean;
+  email: string;
+  holder: string;
+}
+
+export async function loadPayPalSettings(db: Db): Promise<PayPalSettings> {
+  const raw = (await getSetting(db, 'payment.paypal').catch(() => null)) as Partial<PayPalSettings> | null;
+  return {
+    enabled: raw?.enabled === true,
+    email: typeof raw?.email === 'string' ? raw.email : '',
+    holder: typeof raw?.holder === 'string' ? raw.holder : '',
+  };
+}
+
+export function payPalAvailable(s: PayPalSettings): boolean {
+  return s.enabled && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(s.email.trim());
+}
+
+/** Owner-configured USD bank account (settings key 'payment.usd_transfer').
+ *  The buyer wires USD from abroad; the quote uses the owner's own rate
+ *  (VND per 1 USD) frozen into the attempt's instructions, and staff confirm
+ *  settlement in reconciliation. SWIFT is optional (some accounts receive
+ *  via an intermediary without one), the rate is not: no rate, no quote. */
+export interface UsdTransferSettings {
+  enabled: boolean;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  swift_code: string;
+  usd_rate: number;
+}
+
+export async function loadUsdTransferSettings(db: Db): Promise<UsdTransferSettings> {
+  const raw = (await getSetting(db, 'payment.usd_transfer').catch(() => null)) as Partial<UsdTransferSettings> | null;
+  return {
+    enabled: raw?.enabled === true,
+    bank_name: typeof raw?.bank_name === 'string' ? raw.bank_name : '',
+    account_number: typeof raw?.account_number === 'string' ? raw.account_number : '',
+    account_holder: typeof raw?.account_holder === 'string' ? raw.account_holder : '',
+    swift_code: typeof raw?.swift_code === 'string' ? raw.swift_code : '',
+    usd_rate: typeof raw?.usd_rate === 'number' && Number.isFinite(raw.usd_rate) ? raw.usd_rate : 0,
+  };
+}
+
+export function usdTransferAvailable(s: UsdTransferSettings): boolean {
+  return s.enabled && s.bank_name.trim() !== '' && s.account_number.trim() !== '' && s.account_holder.trim() !== '' && s.usd_rate > 0;
 }
 
 /**
@@ -512,9 +567,13 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const vnpayAvailable = vnPayAvailable(vnpaySettings);
     const momoSettings = await loadMoMoSettings(db);
     const momoAvailable = moMoAvailable(momoSettings);
-    const anyRealMethod = bankAvailable || vnpayAvailable || momoAvailable;
+    const paypalSettings = await loadPayPalSettings(db);
+    const paypalAvailable = payPalAvailable(paypalSettings);
+    const usdSettings = await loadUsdTransferSettings(db);
+    const usdAvailable = usdTransferAvailable(usdSettings);
+    const anyRealMethod = bankAvailable || vnpayAvailable || momoAvailable || paypalAvailable || usdAvailable;
     const requested = typeof request.body?.provider === 'string' ? request.body.provider : null;
-    const chosen = requested ?? (bankAvailable ? 'bank_transfer' : vnpayAvailable ? 'vnpay' : momoAvailable ? 'momo' : payment.name);
+    const chosen = requested ?? (bankAvailable ? 'bank_transfer' : vnpayAvailable ? 'vnpay' : momoAvailable ? 'momo' : paypalAvailable ? 'paypal' : usdAvailable ? 'usd_transfer' : payment.name);
     const expiresAt = new Date(Date.now() + config.paymentWindowMinutes * 60_000);
     if (chosen === 'bank_transfer') {
       if (!bankAvailable) throw errors.conflict('payment.method_unavailable');
@@ -584,6 +643,61 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       );
       return reply.status(201).send({ data: { provider: 'momo', sandbox: momoSettings.sandbox, provider_ref: orderRef, pay_url: payUrl, expires_at: expiresAt.toISOString() } });
     }
+    if (chosen === 'paypal') {
+      if (!paypalAvailable) throw errors.conflict('payment.method_unavailable');
+      // Manual method: freeze the receiving account + the per-order
+      // reference (which doubles as the attempt's provider_ref) into the
+      // instructions; staff settle it from reconciliation.
+      for (let attemptNo = 0; attemptNo < 3; attemptNo++) {
+        const ref = manualTransferRef('PP');
+        const instructions = {
+          paypal_email: paypalSettings.email,
+          account_holder: paypalSettings.holder,
+          content_code: ref,
+          amount_minor: o.total_minor,
+          currency: o.currency,
+        };
+        try {
+          await db.query(
+            "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json) VALUES ($1, 'paypal', $2, $3, $4, 'pending', $5::jsonb)",
+            [o.id, ref, o.total_minor, o.currency, JSON.stringify(instructions)],
+          );
+        } catch (err) {
+          if ((err as { code?: string }).code === '23505' && attemptNo < 2) continue;
+          throw err;
+        }
+        return reply.status(201).send({ data: { provider: 'paypal', sandbox: false, provider_ref: ref, pay_url: `${config.portalOrigin}/checkout/orders/${o.id}/pay`, expires_at: expiresAt.toISOString(), instructions } });
+      }
+      throw errors.conflict('payment.method_unavailable');
+    }
+    if (chosen === 'usd_transfer') {
+      if (!usdAvailable) throw errors.conflict('payment.method_unavailable');
+      for (let attemptNo = 0; attemptNo < 3; attemptNo++) {
+        const ref = manualTransferRef('US');
+        const instructions = {
+          bank_name: usdSettings.bank_name,
+          account_number: usdSettings.account_number,
+          account_holder: usdSettings.account_holder,
+          swift_code: usdSettings.swift_code,
+          content_code: ref,
+          amount_minor: o.total_minor,
+          currency: o.currency,
+          usd_rate: usdSettings.usd_rate,
+          amount_usd: usdAmountFor(o.total_minor, usdSettings.usd_rate),
+        };
+        try {
+          await db.query(
+            "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json) VALUES ($1, 'usd_transfer', $2, $3, $4, 'pending', $5::jsonb)",
+            [o.id, ref, o.total_minor, o.currency, JSON.stringify(instructions)],
+          );
+        } catch (err) {
+          if ((err as { code?: string }).code === '23505' && attemptNo < 2) continue;
+          throw err;
+        }
+        return reply.status(201).send({ data: { provider: 'usd_transfer', sandbox: false, provider_ref: ref, pay_url: `${config.portalOrigin}/checkout/orders/${o.id}/pay`, expires_at: expiresAt.toISOString(), instructions } });
+      }
+      throw errors.conflict('payment.method_unavailable');
+    }
     if (chosen !== payment.name) throw errors.conflict('payment.method_unavailable');
     if (config.env === 'production' && anyRealMethod) throw errors.conflict('payment.method_unavailable');
     // Production: the sandbox is for staff test purchases only. A plain
@@ -620,7 +734,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       'SELECT id, provider, provider_ref, amount_minor::text, currency, status, created_at, instructions_json FROM payment_attempts WHERE order_id = $1 ORDER BY created_at DESC',
       [request.params.id],
     );
-    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
+    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' || r.provider === 'paypal' || r.provider === 'usd_transfer' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
   });
 
   // Buyer requests a refund (B05). Amount must not exceed the not-yet-refunded remainder;

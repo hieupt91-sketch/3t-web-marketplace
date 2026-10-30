@@ -103,19 +103,6 @@ export default async function Home({ params }: Params) {
       </section>
       <div className="container stack">
         <TemplateFinder />
-        {catalog.ok && catalog.data.length > 0 ? (
-          <nav className="cat-nav" aria-label={t('ui.home.purpose_title')}>
-            {categoryCodes.map((code) => {
-              const label = t(`ui.category.${code}`);
-              return (
-                <a className="cat-chip" key={code} href={`#cat-${code}`}>
-                  {label === `ui.category.${code}` ? code : label}
-                  <span className="cat-chip__count">{byCategory.get(code)!.length}</span>
-                </a>
-              );
-            })}
-          </nav>
-        ) : null}
         {!catalog.ok ? (
           <section className="stack">
             <div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div>
