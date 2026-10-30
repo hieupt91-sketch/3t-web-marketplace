@@ -49,6 +49,7 @@ export default async function Home({ params }: Params) {
               <Link className="button" href={`/${locale}/templates`}>{t('ui.home.browse_all')}</Link>
               <Link className="button button--secondary" href={`/${locale}/how-it-works`}>{t('ui.home.how_it_works')}</Link>
             </div>
+            <p style={{ margin: 0 }}><Link href={`/${locale}/plans/compare`}>{t('ui.home.compare_plans')}</Link></p>
             <ul className="trust-row">
               <li><span className="trust-icon"><TrustIcon kind="eye" /></span>{t('ui.home.trust_demo')}</li>
               <li><span className="trust-icon"><TrustIcon kind="bolt" /></span>{t('ui.home.trust_instant')}</li>

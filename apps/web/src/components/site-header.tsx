@@ -19,6 +19,8 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
         </Link>
         <nav className="site-nav" aria-label={t('ui.nav.main')}>
           <Link href={`${base}/templates`}>{t('ui.nav.templates')}</Link>
+          <Link href={`${base}/plans/compare`}>{t('ui.nav.plans')}</Link>
+          <Link href={`${base}/how-it-works`}>{t('ui.nav.how_it_works')}</Link>
           {me.status === 'signed_in' ? (
             <>
               {isStaff ? <Link href="/admin">{t('ui.nav.admin')}</Link> : null}
@@ -40,6 +42,7 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
 export function SiteFooter() {
   const { t, locale } = useT();
   const links: [string, string][] = [
+    [`/${locale}/plans/compare`, 'ui.footer.plans'],
     [`/${locale}/how-it-works`, 'ui.footer.how_it_works'],
     [`/${locale}/help`, 'ui.footer.help'],
     [`/${locale}/partners`, 'ui.footer.partners'],

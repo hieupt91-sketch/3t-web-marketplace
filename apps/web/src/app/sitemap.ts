@@ -35,7 +35,8 @@ function pairEntry(path: string, locales: Locale[], base: string, extra?: Partia
 
 /**
  * Sitemap of everything public and indexable: home, catalog, template detail pages, the help
- * index and its articles, the CMS pages (how-it-works, partners), the contact page and the
+ * index and its articles, the CMS pages (how-it-works, partners), the service-plan comparison,
+ * the contact page and the
  * policy documents. A URL is listed for a locale only when that locale has a published
  * translation — never a fallback URL passed off as translated (docs/07 §7).
  */
@@ -49,6 +50,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     );
   }
   entries.push(...pairEntry('/help', LOCALES, BASE, { changeFrequency: 'weekly', priority: 0.7 }));
+  entries.push(...pairEntry('/plans/compare', LOCALES, BASE, { changeFrequency: 'weekly', priority: 0.7 }));
   entries.push(...pairEntry('/contact', LOCALES, BASE, { priority: 0.5 }));
 
   // CMS pages — only in locales with a published translation.
