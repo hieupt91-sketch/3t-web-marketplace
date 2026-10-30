@@ -1,10 +1,12 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
-import type { FastifyInstance, FastifyRequest } from 'fastify';
+import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PoolClient } from '@3t/core';
 import {
   BankTransferProvider,
+  MoMoProvider,
+  VnPayProvider,
   buildCleanSiteTree,
   buildSelfhostBundle,
   emitEvent,
@@ -62,6 +64,52 @@ export async function loadBankTransferSettings(db: Db): Promise<BankTransferSett
 /** Bank transfer can be offered only when the owner enabled it AND filled the account in. */
 export function bankTransferAvailable(s: BankTransferSettings): boolean {
   return s.enabled && s.bank_name.trim() !== '' && s.account_number.trim() !== '' && s.account_holder.trim() !== '';
+}
+
+/** Owner-configured VNPay merchant (settings key 'payment.vnpay'). */
+export interface VnPaySettings {
+  enabled: boolean;
+  tmn_code: string;
+  secret_key: string;
+  sandbox: boolean;
+}
+
+export async function loadVnPaySettings(db: Db): Promise<VnPaySettings> {
+  const raw = (await getSetting(db, 'payment.vnpay').catch(() => null)) as Partial<VnPaySettings> | null;
+  return {
+    enabled: raw?.enabled === true,
+    tmn_code: typeof raw?.tmn_code === 'string' ? raw.tmn_code : '',
+    secret_key: typeof raw?.secret_key === 'string' ? raw.secret_key : '',
+    sandbox: raw?.sandbox !== false,
+  };
+}
+
+export function vnPayAvailable(s: VnPaySettings): boolean {
+  return s.enabled && s.tmn_code.trim() !== '' && s.secret_key !== '';
+}
+
+/** Owner-configured MoMo merchant (settings key 'payment.momo'). */
+export interface MoMoSettings {
+  enabled: boolean;
+  partner_code: string;
+  access_key: string;
+  secret_key: string;
+  sandbox: boolean;
+}
+
+export async function loadMoMoSettings(db: Db): Promise<MoMoSettings> {
+  const raw = (await getSetting(db, 'payment.momo').catch(() => null)) as Partial<MoMoSettings> | null;
+  return {
+    enabled: raw?.enabled === true,
+    partner_code: typeof raw?.partner_code === 'string' ? raw.partner_code : '',
+    access_key: typeof raw?.access_key === 'string' ? raw.access_key : '',
+    secret_key: typeof raw?.secret_key === 'string' ? raw.secret_key : '',
+    sandbox: raw?.sandbox !== false,
+  };
+}
+
+export function moMoAvailable(s: MoMoSettings): boolean {
+  return s.enabled && s.partner_code.trim() !== '' && s.access_key.trim() !== '' && s.secret_key !== '';
 }
 
 /**
@@ -460,8 +508,13 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     if (o.status !== 'awaiting_payment') throw errors.conflict('order.not_payable');
     const bankSettings = await loadBankTransferSettings(db);
     const bankAvailable = bankTransferAvailable(bankSettings);
+    const vnpaySettings = await loadVnPaySettings(db);
+    const vnpayAvailable = vnPayAvailable(vnpaySettings);
+    const momoSettings = await loadMoMoSettings(db);
+    const momoAvailable = moMoAvailable(momoSettings);
+    const anyRealMethod = bankAvailable || vnpayAvailable || momoAvailable;
     const requested = typeof request.body?.provider === 'string' ? request.body.provider : null;
-    const chosen = requested ?? (bankAvailable ? 'bank_transfer' : payment.name);
+    const chosen = requested ?? (bankAvailable ? 'bank_transfer' : vnpayAvailable ? 'vnpay' : momoAvailable ? 'momo' : payment.name);
     const expiresAt = new Date(Date.now() + config.paymentWindowMinutes * 60_000);
     if (chosen === 'bank_transfer') {
       if (!bankAvailable) throw errors.conflict('payment.method_unavailable');
@@ -491,8 +544,48 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       }
       throw errors.conflict('payment.method_unavailable');
     }
+    if (chosen === 'vnpay') {
+      if (!vnpayAvailable) throw errors.conflict('payment.method_unavailable');
+      const provider = new VnPayProvider({ tmnCode: vnpaySettings.tmn_code, secret: vnpaySettings.secret_key, sandbox: vnpaySettings.sandbox });
+      const session = provider.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt, ipAddr: request.ip });
+      await db.query(
+        "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, 'vnpay', $2, $3, $4, 'pending')",
+        [o.id, session.providerRef, o.total_minor, o.currency],
+      );
+      return reply.status(201).send({ data: { provider: 'vnpay', sandbox: vnpaySettings.sandbox, provider_ref: session.providerRef, pay_url: session.payUrl, expires_at: session.expiresAt.toISOString() } });
+    }
+    if (chosen === 'momo') {
+      if (!momoAvailable) throw errors.conflict('payment.method_unavailable');
+      const provider = new MoMoProvider({ partnerCode: momoSettings.partner_code, accessKey: momoSettings.access_key, secretKey: momoSettings.secret_key, sandbox: momoSettings.sandbox });
+      const orderRef = MoMoProvider.newOrderRef();
+      const body = provider.buildCreateBody({
+        orderRef,
+        amountMinor: o.total_minor,
+        redirectUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`,
+        ipnUrl: `${config.portalOrigin}/api/v1/payments/webhooks/momo`,
+      });
+      let payUrl: string | null = null;
+      try {
+        const res = await fetch(provider.createEndpoint, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify(body),
+          signal: AbortSignal.timeout(10_000),
+        });
+        const json = (await res.json()) as { resultCode?: number; payUrl?: string };
+        if (json.resultCode === 0 && typeof json.payUrl === 'string') payUrl = json.payUrl;
+      } catch {
+        payUrl = null;
+      }
+      if (!payUrl) throw errors.conflict('payment.method_unavailable', true);
+      await db.query(
+        "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, 'momo', $2, $3, $4, 'pending')",
+        [o.id, orderRef, o.total_minor, o.currency],
+      );
+      return reply.status(201).send({ data: { provider: 'momo', sandbox: momoSettings.sandbox, provider_ref: orderRef, pay_url: payUrl, expires_at: expiresAt.toISOString() } });
+    }
     if (chosen !== payment.name) throw errors.conflict('payment.method_unavailable');
-    if (config.env === 'production' && bankAvailable) throw errors.conflict('payment.method_unavailable');
+    if (config.env === 'production' && anyRealMethod) throw errors.conflict('payment.method_unavailable');
     const session = payment.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt });
     await db.query(
       "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, $2, $3, $4, $5, 'pending')",
@@ -649,6 +742,33 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   // Real webhook endpoint: verify, dedupe, process. Returns 2xx after a durable record.
   // Note: the mock re-serialises the parsed JSON deterministically; a real provider needs the
   // exact raw bytes (a raw-body capture) wired in at the integration milestone.
+
+  // VNPay IPN (GET or POST): always HTTP 200 with VNPay's own RspCode body.
+  async function handleVnPayIpn(params: Record<string, string>, reply: FastifyReply) {
+    const settings = await loadVnPaySettings(db);
+    if (!vnPayAvailable(settings)) {
+      return reply.status(200).send({ RspCode: '01', Message: 'Order not found' });
+    }
+    const provider = new VnPayProvider({ tmnCode: settings.tmn_code, secret: settings.secret_key, sandbox: settings.sandbox });
+    let event: NormalizedEvent;
+    try {
+      event = provider.verifyWebhook(new URLSearchParams(params).toString());
+    } catch {
+      return reply.status(200).send({ RspCode: '97', Message: 'Invalid signature' });
+    }
+    const outcome = await processPaymentEvent(db, 'vnpay', JSON.stringify(params), event);
+    if (outcome === 'processed') return reply.status(200).send({ RspCode: '00', Message: 'Confirm Success' });
+    if (outcome === 'duplicate') return reply.status(200).send({ RspCode: '02', Message: 'Order already confirmed' });
+    if (outcome === 'needs_reconciliation') return reply.status(200).send({ RspCode: '04', Message: 'Invalid amount' });
+    return reply.status(200).send({ RspCode: '01', Message: 'Order not found' });
+  }
+
+  app.get('/payments/webhooks/vnpay', async (request, reply) => {
+    const params: Record<string, string> = {};
+    for (const [k, v] of Object.entries(request.query as Record<string, unknown>)) params[k] = String(v);
+    return handleVnPayIpn(params, reply);
+  });
+
   app.post('/payments/webhooks/:provider', async (request: FastifyRequest, reply) => {
     const providerName = (request.params as { provider: string }).provider;
     const raw = typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
@@ -665,6 +785,26 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       }
       const outcome = await processPaymentEvent(db, 'bank_transfer', raw, event);
       return reply.status(200).send({ received: true, outcome });
+    }
+    if (providerName === 'vnpay') {
+      const params: Record<string, string> = {};
+      const src = (request.body && typeof request.body === 'object' ? request.body : {}) as Record<string, unknown>;
+      for (const [k, v] of Object.entries(src)) params[k] = String(v);
+      return handleVnPayIpn(params, reply);
+    }
+    // MoMo IPN: signature-verified, then MoMo expects a bare 204 back.
+    if (providerName === 'momo') {
+      const settings = await loadMoMoSettings(db);
+      if (!moMoAvailable(settings)) throw errors.notFound();
+      const provider = new MoMoProvider({ partnerCode: settings.partner_code, accessKey: settings.access_key, secretKey: settings.secret_key, sandbox: settings.sandbox });
+      let event: NormalizedEvent;
+      try {
+        event = provider.verifyIpn(raw);
+      } catch {
+        throw errors.badRequest('payment.webhook_invalid');
+      }
+      await processPaymentEvent(db, 'momo', raw, event);
+      return reply.status(204).send();
     }
     if (providerName !== payment.name) throw errors.notFound();
     let event: NormalizedEvent;

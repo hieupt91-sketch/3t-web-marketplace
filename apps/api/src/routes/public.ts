@@ -215,6 +215,12 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       && typeof payRaw.bank_name === 'string' && payRaw.bank_name.trim() !== ''
       && typeof payRaw.account_number === 'string' && payRaw.account_number.trim() !== ''
       && typeof payRaw.account_holder === 'string' && payRaw.account_holder.trim() !== '';
+    const vnpRow = await db.query<{ value_json: { enabled?: boolean; tmn_code?: string; secret_key?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.vnpay'");
+    const vnpRaw = vnpRow.rows[0]?.value_json;
+    const vnpay_enabled = vnpRaw?.enabled === true && typeof vnpRaw.tmn_code === 'string' && vnpRaw.tmn_code.trim() !== '' && typeof vnpRaw.secret_key === 'string' && vnpRaw.secret_key !== '';
+    const momoRow = await db.query<{ value_json: { enabled?: boolean; partner_code?: string; access_key?: string; secret_key?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.momo'");
+    const momoRaw = momoRow.rows[0]?.value_json;
+    const momo_enabled = momoRaw?.enabled === true && typeof momoRaw.partner_code === 'string' && momoRaw.partner_code.trim() !== '' && typeof momoRaw.access_key === 'string' && momoRaw.access_key.trim() !== '' && typeof momoRaw.secret_key === 'string' && momoRaw.secret_key !== '';
     return {
       data: {
         brand: { name: 'webmaket' },
@@ -224,7 +230,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         terms_version: terms.rows[0]?.value_json.current ?? null,
         contact,
         subdomain_fee,
-        payment: { bank_transfer: bank_transfer_enabled },
+        payment: { bank_transfer: bank_transfer_enabled, vnpay: vnpay_enabled, momo: momo_enabled },
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
       },
     };

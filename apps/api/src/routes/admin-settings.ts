@@ -275,3 +275,142 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
     },
   );
 }
+
+/** Gateway merchant settings (VNPay + MoMo). Secret keys are write-only:
+ *  a POST replaces the stored key only when a non-empty value is sent, and
+ *  GET never returns one — only whether it is configured. Sandbox defaults
+ *  on so the owner can verify with the gateway's test merchant first. */
+export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<void> {
+  const { db, config } = app.deps;
+  const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+
+  async function load(key: string) {
+    const { rows } = await db.query<{ value_json: Record<string, unknown> }>('SELECT value_json FROM settings WHERE key = $1', [key]);
+    return rows[0]?.value_json ?? {};
+  }
+  async function save(key: string, value: Record<string, unknown>) {
+    await db.query(
+      `INSERT INTO settings (key, value_json) VALUES ($1, $2::jsonb)
+       ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+      [key, JSON.stringify(value)],
+    );
+  }
+
+  app.get('/settings/payment-vnpay', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const raw = await load('payment.vnpay');
+    return {
+      data: {
+        enabled: raw.enabled === true,
+        tmn_code: clean(raw.tmn_code),
+        secret_configured: clean(raw.secret_key) !== '',
+        sandbox: raw.sandbox !== false,
+        ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/vnpay`,
+      },
+    };
+  });
+
+  app.post<{ Body: { enabled?: boolean; tmn_code?: string; secret_key?: string; sandbox?: boolean } }>(
+    '/settings/payment-vnpay',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            tmn_code: { type: 'string', maxLength: 30 },
+            secret_key: { type: 'string', maxLength: 200 },
+            sandbox: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const current = await load('payment.vnpay');
+      const next = {
+        enabled: request.body.enabled === true,
+        tmn_code: clean(request.body.tmn_code),
+        secret_key: clean(request.body.secret_key) !== '' ? clean(request.body.secret_key) : clean(current.secret_key),
+        sandbox: request.body.sandbox !== false,
+      };
+      if (next.enabled) {
+        const problems: { field: string; code: string }[] = [];
+        if (!/^[A-Za-z0-9]{4,30}$/.test(next.tmn_code)) problems.push({ field: 'tmn_code', code: 'invalid' });
+        if (!next.secret_key) problems.push({ field: 'secret_key', code: 'required' });
+        if (problems.length > 0) throw errors.validation(problems);
+      }
+      await save('payment.vnpay', next);
+      await writeAudit(db, {
+        actorType: 'user', actorId: auth.userId, action: 'settings.payment_vnpay_updated',
+        resourceType: 'settings', resourceId: null, traceId: request.id,
+        diff: { enabled: next.enabled, tmn_code: next.tmn_code, sandbox: next.sandbox, secret_changed: next.secret_key !== clean(current.secret_key) },
+      });
+      return reply.status(200).send({
+        data: { enabled: next.enabled, tmn_code: next.tmn_code, secret_configured: next.secret_key !== '', sandbox: next.sandbox, ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/vnpay` },
+      });
+    },
+  );
+
+  app.get('/settings/payment-momo', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const raw = await load('payment.momo');
+    return {
+      data: {
+        enabled: raw.enabled === true,
+        partner_code: clean(raw.partner_code),
+        access_key: clean(raw.access_key),
+        secret_configured: clean(raw.secret_key) !== '',
+        sandbox: raw.sandbox !== false,
+        ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo`,
+      },
+    };
+  });
+
+  app.post<{ Body: { enabled?: boolean; partner_code?: string; access_key?: string; secret_key?: string; sandbox?: boolean } }>(
+    '/settings/payment-momo',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            partner_code: { type: 'string', maxLength: 60 },
+            access_key: { type: 'string', maxLength: 120 },
+            secret_key: { type: 'string', maxLength: 200 },
+            sandbox: { type: 'boolean' },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const current = await load('payment.momo');
+      const next = {
+        enabled: request.body.enabled === true,
+        partner_code: clean(request.body.partner_code),
+        access_key: clean(request.body.access_key),
+        secret_key: clean(request.body.secret_key) !== '' ? clean(request.body.secret_key) : clean(current.secret_key),
+        sandbox: request.body.sandbox !== false,
+      };
+      if (next.enabled) {
+        const problems: { field: string; code: string }[] = [];
+        if (!next.partner_code) problems.push({ field: 'partner_code', code: 'required' });
+        if (!next.access_key) problems.push({ field: 'access_key', code: 'required' });
+        if (!next.secret_key) problems.push({ field: 'secret_key', code: 'required' });
+        if (problems.length > 0) throw errors.validation(problems);
+      }
+      await save('payment.momo', next);
+      await writeAudit(db, {
+        actorType: 'user', actorId: auth.userId, action: 'settings.payment_momo_updated',
+        resourceType: 'settings', resourceId: null, traceId: request.id,
+        diff: { enabled: next.enabled, partner_code: next.partner_code, sandbox: next.sandbox, secret_changed: next.secret_key !== clean(current.secret_key) },
+      });
+      return reply.status(200).send({
+        data: { enabled: next.enabled, partner_code: next.partner_code, access_key: next.access_key, secret_configured: next.secret_key !== '', sandbox: next.sandbox, ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo` },
+      });
+    },
+  );
+}

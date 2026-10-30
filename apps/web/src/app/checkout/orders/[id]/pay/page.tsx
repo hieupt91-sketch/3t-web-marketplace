@@ -21,9 +21,17 @@ interface Session {
   provider: string;
   sandbox: boolean;
   provider_ref: string;
+  pay_url: string;
   expires_at: string;
   instructions?: TransferInstructions;
 }
+interface PublicConfig { payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean } }
+
+const METHOD_KEYS: Record<string, { name: string; desc: string }> = {
+  bank_transfer: { name: 'ui.checkout.method_bank', desc: 'ui.checkout.method_bank_desc' },
+  vnpay: { name: 'ui.checkout.method_vnpay', desc: 'ui.checkout.method_vnpay_desc' },
+  momo: { name: 'ui.checkout.method_momo', desc: 'ui.checkout.method_momo_desc' },
+};
 
 function Pay() {
   const { t, dt, locale } = useT();
@@ -31,6 +39,8 @@ function Pay() {
   const { id } = useParams<{ id: string }>();
   const [order, setOrder] = useState<Order | null>(null);
   const [session, setSession] = useState<Session | null>(null);
+  const [methods, setMethods] = useState<string[] | null>(null);
+  const [chosenMethod, setChosenMethod] = useState<string>('');
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState(false);
   const sessionStarted = useRef(false);
@@ -43,17 +53,37 @@ function Pay() {
     return res.data;
   }, [id, router]);
 
+  const startSession = useCallback(async (provider?: string) => {
+    const res = await api<Session>(`/orders/${id}/payment-sessions`, { method: 'POST', body: provider ? { provider } : {} });
+    if (!res.ok) { setError(res.error); return; }
+    setSession(res.data);
+    // Gateways take the buyer to their own pay page; settlement still
+    // arrives server-to-server and the result page picks it up.
+    if ((res.data.provider === 'vnpay' || res.data.provider === 'momo') && res.data.pay_url) {
+      window.location.assign(res.data.pay_url);
+    }
+  }, [id]);
+
   useEffect(() => {
     void (async () => {
       const o = await loadOrder();
-      if (o && o.payment_status === 'awaiting_payment' && !sessionStarted.current) {
-        sessionStarted.current = true;
-        const res = await api<Session>(`/orders/${id}/payment-sessions`, { method: 'POST', body: {} });
-        if (res.ok) setSession(res.data);
-        else setError(res.error);
+      if (!o || o.payment_status !== 'awaiting_payment' || sessionStarted.current) return;
+      sessionStarted.current = true;
+      const cfg = await api<PublicConfig>('/config/public');
+      const p = cfg.ok ? cfg.data.payment ?? {} : {};
+      const available = [
+        ...(p.bank_transfer ? ['bank_transfer'] : []),
+        ...(p.vnpay ? ['vnpay'] : []),
+        ...(p.momo ? ['momo'] : []),
+      ];
+      if (available.length > 1) {
+        setMethods(available);
+        setChosenMethod(available[0]!);
+      } else {
+        await startSession(available[0]);
       }
     })();
-  }, [id, loadOrder]);
+  }, [id, loadOrder, startSession]);
 
   // Bank transfer settles server-side (hub report or staff confirmation);
   // poll quietly so the buyer lands on the result page once it lands.
@@ -84,7 +114,51 @@ function Pay() {
     return <Alert tone="info"><p>{t('ui.checkout.not_payable')}</p><p><a className="button" href={`/checkout/orders/${id}/result`}>{t('ui.checkout.see_result')}</a></p></Alert>;
   }
 
-  if (session?.provider === 'bank_transfer' && session.instructions) {
+  if (!session && methods) {
+    return (
+      <div className="stack">
+        <h1>{t('ui.checkout.method_title')}</h1>
+        <div className="card stack">
+          <dl className="details">
+            <dt>{t('ui.checkout.order_id')}</dt><dd className="mono">{order.id}</dd>
+            <dt>{t('ui.checkout.total')}</dt><dd className="tabular"><strong>{formatMoney({ amount_minor: order.total_minor, currency: order.currency }, locale)}</strong></dd>
+          </dl>
+          <fieldset>
+            <div className="stack">
+              {methods.map((m) => (
+                <label key={m} className="row">
+                  <input type="radio" name="pay-method" checked={chosenMethod === m} onChange={() => setChosenMethod(m)} />
+                  <span><strong>{t(METHOD_KEYS[m]!.name)}</strong> — {t(METHOD_KEYS[m]!.desc)}</span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+          {error ? <ErrorState error={error} /> : null}
+          <div className="row">
+            <button type="button" className="button" disabled={busy || !chosenMethod} onClick={() => { setBusy(true); void startSession(chosenMethod).then(() => setBusy(false)); }}>
+              {t('ui.checkout.method_continue')}
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!session) return <Loading />;
+
+  if (session.provider === 'vnpay' || session.provider === 'momo') {
+    return (
+      <div className="stack">
+        <h1>{t('ui.checkout.redirecting_title')}</h1>
+        <Alert tone="info">
+          <p>{t('ui.checkout.redirecting_note')}</p>
+          <p><a className="button" href={session.pay_url}>{t('ui.checkout.redirect_manual')}</a></p>
+        </Alert>
+      </div>
+    );
+  }
+
+  if (session.provider === 'bank_transfer' && session.instructions) {
     const ins = session.instructions;
     return (
       <div className="stack">

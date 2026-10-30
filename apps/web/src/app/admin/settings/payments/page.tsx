@@ -120,10 +120,193 @@ function PaymentSettingsInner() {
   );
 }
 
+interface VnPaySettings {
+  enabled: boolean;
+  tmn_code: string;
+  secret_configured: boolean;
+  sandbox: boolean;
+  ipn_url: string;
+}
+
+function VnPayForm() {
+  const { t } = useT();
+  const [settings, setSettings] = useState<VnPaySettings | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [tmnCode, setTmnCode] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+  const [sandbox, setSandbox] = useState(true);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [formError, setFormError] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api<VnPaySettings>('/admin/settings/payment-vnpay').then((res) => {
+      if (res.ok) {
+        setSettings(res.data);
+        setEnabled(res.data.enabled);
+        setTmnCode(res.data.tmn_code);
+        setSandbox(res.data.sandbox);
+      } else setError(res.error);
+    });
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setFormError(false); setSaved(false); setError(null);
+    if (enabled && (!/^[A-Za-z0-9]{4,30}$/.test(tmnCode.trim()) || (!settings?.secret_configured && secretKey.trim() === ''))) {
+      setFormError(true);
+      return;
+    }
+    setBusy(true);
+    const body: Record<string, unknown> = { enabled, tmn_code: tmnCode, sandbox };
+    if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
+    const res = await api<VnPaySettings>('/admin/settings/payment-vnpay', { method: 'POST', body });
+    setBusy(false);
+    if (!res.ok) setError(res.error);
+    else { setSettings(res.data); setSecretKey(''); setSaved(true); }
+  }
+
+  if (error && !settings) return <ErrorState error={error} />;
+  if (!settings) return <Loading />;
+  return (
+    <form className="stack card" onSubmit={submit}>
+      <h2 style={{ margin: 0 }}>{t('ui.payment_settings.vnpay_title')}</h2>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.vnpay_hint')}</p>
+      {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
+      {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
+      {error ? <ErrorState error={error} /> : null}
+      <label className="row">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.vnpay_enabled')}</span>
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.tmn_code')}</span>
+        <input className="input" value={tmnCode} onChange={(e) => setTmnCode(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <dl className="details">
+        <dt>{t('ui.payment_settings.ipn_url')}</dt>
+        <dd className="mono">{settings.ipn_url}</dd>
+        <dt>{t('ui.payment_settings.secret_status')}</dt>
+        <dd>{settings.secret_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
+      </dl>
+      <label className="field">
+        <span>{t('ui.payment_settings.secret_key')}</span>
+        <input className="input" type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} disabled={busy} autoComplete="new-password" placeholder={t('ui.payment_settings.hub_api_key_hint')} />
+      </label>
+      <label className="row">
+        <input type="checkbox" checked={sandbox} onChange={(e) => setSandbox(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.sandbox')}</span>
+      </label>
+      <div className="row">
+        <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
+      </div>
+    </form>
+  );
+}
+
+interface MoMoSettings {
+  enabled: boolean;
+  partner_code: string;
+  access_key: string;
+  secret_configured: boolean;
+  sandbox: boolean;
+  ipn_url: string;
+}
+
+function MoMoForm() {
+  const { t } = useT();
+  const [settings, setSettings] = useState<MoMoSettings | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [partnerCode, setPartnerCode] = useState('');
+  const [accessKey, setAccessKey] = useState('');
+  const [secretKey, setSecretKey] = useState('');
+  const [sandbox, setSandbox] = useState(true);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [formError, setFormError] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api<MoMoSettings>('/admin/settings/payment-momo').then((res) => {
+      if (res.ok) {
+        setSettings(res.data);
+        setEnabled(res.data.enabled);
+        setPartnerCode(res.data.partner_code);
+        setAccessKey(res.data.access_key);
+        setSandbox(res.data.sandbox);
+      } else setError(res.error);
+    });
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setFormError(false); setSaved(false); setError(null);
+    if (enabled && (!partnerCode.trim() || !accessKey.trim() || (!settings?.secret_configured && secretKey.trim() === ''))) {
+      setFormError(true);
+      return;
+    }
+    setBusy(true);
+    const body: Record<string, unknown> = { enabled, partner_code: partnerCode, access_key: accessKey, sandbox };
+    if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
+    const res = await api<MoMoSettings>('/admin/settings/payment-momo', { method: 'POST', body });
+    setBusy(false);
+    if (!res.ok) setError(res.error);
+    else { setSettings(res.data); setSecretKey(''); setSaved(true); }
+  }
+
+  if (error && !settings) return <ErrorState error={error} />;
+  if (!settings) return <Loading />;
+  return (
+    <form className="stack card" onSubmit={submit}>
+      <h2 style={{ margin: 0 }}>{t('ui.payment_settings.momo_title')}</h2>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.momo_hint')}</p>
+      {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
+      {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
+      {error ? <ErrorState error={error} /> : null}
+      <label className="row">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.momo_enabled')}</span>
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.partner_code')}</span>
+        <input className="input" value={partnerCode} onChange={(e) => setPartnerCode(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.access_key')}</span>
+        <input className="input" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <dl className="details">
+        <dt>{t('ui.payment_settings.ipn_url')}</dt>
+        <dd className="mono">{settings.ipn_url}</dd>
+        <dt>{t('ui.payment_settings.secret_status')}</dt>
+        <dd>{settings.secret_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
+      </dl>
+      <label className="field">
+        <span>{t('ui.payment_settings.secret_key')}</span>
+        <input className="input" type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} disabled={busy} autoComplete="new-password" placeholder={t('ui.payment_settings.hub_api_key_hint')} />
+      </label>
+      <label className="row">
+        <input type="checkbox" checked={sandbox} onChange={(e) => setSandbox(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.sandbox')}</span>
+      </label>
+      <div className="row">
+        <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
+      </div>
+    </form>
+  );
+}
+
 export default function PaymentSettingsPage() {
   return (
     <RequirePermission permission="settings:manage">
-      <PaymentSettingsInner />
+      <div className="stack">
+        <PaymentSettingsInner />
+        <VnPayForm />
+        <MoMoForm />
+      </div>
     </RequirePermission>
   );
 }
