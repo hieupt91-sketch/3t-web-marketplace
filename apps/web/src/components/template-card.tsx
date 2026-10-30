@@ -5,8 +5,10 @@ import Link from 'next/link';
 import { formatMoney, translate, type Locale } from '@3t/i18n';
 import type { TemplateSummary } from '@/lib/api-server';
 import { coverGradient } from '@/lib/cover-gradient';
+import { SaveButton } from '@/components/save-button';
+import { CompareToggle } from '@/components/compare-toggle';
 
-export function TemplateCard({ template, locale }: { template: TemplateSummary; locale: Locale }) {
+export function TemplateCard({ template, locale, comparable = false }: { template: TemplateSummary; locale: Locale; comparable?: boolean }) {
   const t = (key: string, params?: Record<string, string>) => translate(locale, key, params);
   // If the photo fails to load (republished without a hero photo), fall back
   // to the gradient cover instead of showing a broken image.
@@ -39,6 +41,10 @@ export function TemplateCard({ template, locale }: { template: TemplateSummary; 
         {t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}
       </p>
       {template.translation_status === 'fallback' ? <p className="badge badge--warning" lang="vi">{t('ui.catalog.fallback_vi')}</p> : null}
+      <p className="row" style={{ margin: 0 }}>
+        <SaveButton templateId={template.id} locale={locale} />
+        {comparable ? <CompareToggle slug={template.slug} locale={locale} /> : null}
+      </p>
       <div className="row">
         {template.demo.available ? <Link className="button button--secondary" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link> : null}
         <Link className="button" href={`/${locale}/templates/${template.slug}`}>{t('ui.catalog.view_detail')}</Link>

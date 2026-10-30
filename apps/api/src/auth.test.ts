@@ -139,6 +139,18 @@ describe('CSRF origin checks', () => {
     const sameSite = await ctx.app.inject({ method: 'POST', url: '/api/v1/auth/logout', headers: { 'sec-fetch-site': 'same-origin' } });
     expect(sameSite.statusCode).toBe(204);
   });
+
+  it('rejects the portal host on the other scheme (origin match is scheme-strict)', async () => {
+    // Regression 2026-10-30: pages served over plain HTTP send an Origin that
+    // differs from the portal origin only in scheme, and every mutation from
+    // such a page failed in production. The API must keep rejecting it — the
+    // fix is the web middleware upgrading page loads to HTTPS, never blessing
+    // the insecure-scheme origin here.
+    const otherScheme = ORIGIN.replace(/^https?:\/\//, ORIGIN.startsWith('https://') ? 'http://' : 'https://');
+    const res = await post('/api/v1/auth/login', { email: 'a@b.cd', password: 'x' }, { origin: otherScheme });
+    expect(res.statusCode).toBe(403);
+    expect(res.json().error.code).toBe('security.origin_mismatch');
+  });
 });
 
 describe('profile optimistic locking (AT-51)', () => {

@@ -27,6 +27,7 @@ const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
     { href: '/account', labelKey: 'ui.account.nav.overview' },
     { href: '/account/purchases', labelKey: 'ui.account.nav.purchases' },
     { href: '/account/orders', labelKey: 'ui.account.nav.orders' },
+    { href: '/account/saved', labelKey: 'ui.account.nav.saved' },
     { href: '/account/sites', labelKey: 'ui.account.nav.sites' },
     { href: '/account/support', labelKey: 'ui.account.nav.support' },
     { href: '/account/settings', labelKey: 'ui.account.nav.settings' },

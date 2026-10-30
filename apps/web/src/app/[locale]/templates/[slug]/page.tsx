@@ -4,6 +4,7 @@ import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
 import { PriceBreakdown } from '@/components/price-breakdown';
+import { SaveButton } from '@/components/save-button';
 import { HostingAdvisor } from '@/components/hosting-advisor';
 import { JsonLd } from '@/components/json-ld';
 import { absoluteUrl, breadcrumbJsonLd, languageAlternates, productJsonLd, SITE_NAME, siteBaseUrl } from '@/lib/seo';
@@ -117,6 +118,7 @@ export default async function TemplateDetail({ params }: Props) {
             <div className="row">
               <Link className="button" href={`/checkout/configure?template=${template.slug}`}>{t('ui.detail.choose_plan')}</Link>
               {template.plans.length > 1 ? <Link className="button button--secondary" href={`/${locale}/plans/compare?template=${template.slug}`}>{t('ui.detail.compare')}</Link> : null}
+              <SaveButton templateId={template.id} locale={locale} />
             </div>
           </>
         )}

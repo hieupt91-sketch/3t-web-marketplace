@@ -10,6 +10,7 @@ export interface TemplateSummary {
   translation_status: 'published' | 'fallback';
   title: string;
   summary: string | null;
+  category: string | null;
   preview_image: string | null;
   adapter: string | null;
   size_bytes: string | null;

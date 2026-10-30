@@ -3,8 +3,7 @@ import type { ReactNode } from 'react';
 import { translate } from '@3t/i18n';
 import { LocaleProvider } from '@/lib/i18n';
 import { requestLocale } from '@/lib/locale-server';
-import { ContactWidget } from '@/components/contact-widget';
-import { QuickAssistant } from '@/components/quick-assistant';
+import { SupportWidget } from '@/components/support-widget';
 import { JsonLd } from '@/components/json-ld';
 import { SITE_NAME, organizationJsonLd, siteBaseUrl, websiteJsonLd } from '@/lib/seo';
 import '@/styles/globals.css';
@@ -47,8 +46,7 @@ export default async function RootLayout({ children }: { children: ReactNode }) 
           {translate(locale, 'ui.skip_to_content')}
         </a>
         <LocaleProvider locale={locale}>{children}</LocaleProvider>
-        <ContactWidget locale={locale} />
-        <QuickAssistant locale={locale} />
+        <SupportWidget locale={locale} />
       </body>
     </html>
   );

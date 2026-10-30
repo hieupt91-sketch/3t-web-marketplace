@@ -1,7 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool, enqueueJob, loadConfig } from '@3t/core';
 import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
-import { SITE_JOB_TYPES, runSiteJob } from './site-jobs.ts';
+import { SITE_JOB_TYPES, runSiteJob, sweepExpiredReservations } from './site-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
 
 const config = loadConfig();
@@ -48,12 +48,23 @@ try {
 } catch (error) {
   logLine('boot_sweep_failed', { error: (error as Error).message });
 }
+let lastReservationSweep = 0;
 while (!stopping) {
   const job = await claimJob(db, workerId, [IMPORT_JOB_TYPE, ...SITE_JOB_TYPES], LEASE_SECONDS).catch((error: Error) => {
     logLine('claim_failed', { error: error.message });
     return null;
   });
   if (!job) {
+    // DEP-06: release expired subdomain holds about once a minute while
+    // idle (boot sweep included via the zero initial timestamp).
+    if (Date.now() - lastReservationSweep > 60_000) {
+      lastReservationSweep = Date.now();
+      await sweepExpiredReservations(db)
+        .then((expired) => {
+          if (expired > 0) logLine('reservation_sweep', { expired });
+        })
+        .catch((error: Error) => logLine('reservation_sweep_failed', { error: error.message }));
+    }
     await new Promise((r) => setTimeout(r, 1000));
     continue;
   }

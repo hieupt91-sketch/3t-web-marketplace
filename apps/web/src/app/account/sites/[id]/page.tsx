@@ -32,6 +32,7 @@ export default function SiteOverviewPage() {
   if (!site) return <Loading />;
   if (site && (site.status === 'creating' || site.status === 'provision_failed')) return <Loading />;
   const tabs: [string, string][] = [
+    ['content', 'ui.sites.tab_content'],
     ['domains', 'ui.sites.tab_domains'], ['billing', 'ui.sites.tab_billing'], ['backups', 'ui.sites.tab_backups'],
     ['updates', 'ui.sites.tab_updates'], ['members', 'ui.sites.tab_members'], ['data', 'ui.sites.tab_data'],
   ];

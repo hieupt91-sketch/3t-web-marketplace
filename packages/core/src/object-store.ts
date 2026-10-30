@@ -60,6 +60,7 @@ export class LocalObjectStore {
     const temp = `${target}.${randomUUID()}.part`;
     await mkdir(dirname(target), { recursive: true });
     await cp(sourceDir, temp, { recursive: true, errorOnExist: true, force: false, dereference: false, verbatimSymlinks: true });
+    await makeReadOnly(temp);
     // A previous attempt (or a concurrent worker) may have completed the rename
     // while this attempt was copying; re-check before renaming so a stale temp
     // is never left behind and a completed target is never clobbered.
@@ -67,23 +68,15 @@ export class LocalObjectStore {
       await removeTreeWritable(temp).catch(() => undefined);
       return;
     }
-    // Rename BEFORE sealing read-only: macOS refuses to rename a directory
-    // the owner cannot write to (EACCES), while Linux allows it. The stored
-    // tree ends up read-only either way; only the order differs. (Proven on
-    // macOS 2026-10-28: `mv` of a 0o555 directory fails with "Permission
-    // denied" where a writable directory renames fine.)
-    try {
-      await rename(temp, target);
-    } catch (error) {
-      // The temp tree is still writable at this point, but restore write bits
-      // anyway so cleanup can never leave a .part behind, and never let a
-      // cleanup failure mask the original error.
+    await rename(temp, target).catch(async (error: NodeJS.ErrnoException) => {
+      // The temp tree is read-only by now, so a plain rm would fail to unlink
+      // entries inside read-only directories and leave the .part behind (and
+      // a failing rm would replace the error that actually failed the step).
+      // Restore write bits first, and never let a cleanup failure mask the
+      // original error.
       await removeTreeWritable(temp).catch(() => undefined);
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code !== 'ENOTEMPTY' && code !== 'EEXIST') throw error;
-      return;
-    }
-    await makeReadOnly(target);
+      if (error.code !== 'ENOTEMPTY' && error.code !== 'EEXIST') throw error;
+    });
   }
 
   async exists(key: string): Promise<boolean> {

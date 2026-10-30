@@ -101,10 +101,71 @@ function SubdomainFeeInner() {
   );
 }
 
+/** DEP-06 hold duration, edited next to the fee: it is the other
+ *  subdomain value an owner may want to tune. A duration, never a price. */
+function ReservationTtlForm() {
+  const { t } = useT();
+  const [ttl, setTtl] = useState('');
+  const [loaded, setLoaded] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+  const [formError, setFormError] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api<{ ttl_minutes: number }>('/admin/settings/subdomain-reservation').then((res) => {
+      if (res.ok) {
+        setTtl(String(res.data.ttl_minutes));
+        setLoaded(true);
+      } else setError(res.error);
+    });
+  }, []);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setFormError(false);
+    setSaved(false);
+    setError(null);
+    const n = Number(ttl);
+    if (!Number.isInteger(n) || n < 1 || n > 1440) {
+      setFormError(true);
+      return;
+    }
+    setBusy(true);
+    const res = await api<{ ttl_minutes: number }>('/admin/settings/subdomain-reservation', { method: 'POST', body: { ttl_minutes: n } });
+    setBusy(false);
+    if (!res.ok) setError(res.error);
+    else setSaved(true);
+  }
+
+  if (error && !loaded) return <ErrorState error={error} />;
+  if (!loaded) return <Loading />;
+  return (
+    <form className="stack card" onSubmit={submit}>
+      <h2 style={{ margin: 0 }}>{t('ui.subdomain_reservation.title')}</h2>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.subdomain_reservation.hint')}</p>
+      {saved ? <Alert tone="success"><p>{t('ui.subdomain_reservation.saved')}</p></Alert> : null}
+      {formError ? <Alert tone="error"><p>{t('ui.subdomain_reservation.ttl')}</p></Alert> : null}
+      {error ? <ErrorState error={error} /> : null}
+      <label className="field">
+        <span>{t('ui.subdomain_reservation.ttl')}</span>
+        <input className="input" type="number" min={1} max={1440} value={ttl} onChange={(e) => setTtl(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <div className="row">
+        <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
+      </div>
+    </form>
+  );
+}
+
 export default function SubdomainFeeSettingsPage() {
   return (
     <RequirePermission permission="settings:manage">
-      <SubdomainFeeInner />
+      <div className="stack">
+        <SubdomainFeeInner />
+        <ReservationTtlForm />
+      </div>
     </RequirePermission>
   );
 }

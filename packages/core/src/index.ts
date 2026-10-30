@@ -11,3 +11,4 @@ export * from './http-client.ts';
 export * from './pricing.ts';
 export * from './payment.ts';
 export * from './bundle.ts';
+export * from './dynamic-content.ts';

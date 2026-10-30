@@ -141,4 +141,49 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(200).send({ data: next });
     },
   );
+
+  // DEP-06 hold duration. A duration, not a price: shortening or lengthening
+  // it never charges anyone; new holds use the new value, existing holds
+  // keep the expiry they were granted.
+  app.get('/settings/subdomain-reservation', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const { rows } = await db.query<{ value_json: { ttl_minutes?: number } }>(
+      "SELECT value_json FROM settings WHERE key = 'subdomain.reservation'",
+    );
+    const raw = rows[0]?.value_json ?? {};
+    return { data: { ttl_minutes: Number.isInteger(raw.ttl_minutes) && raw.ttl_minutes! >= 1 && raw.ttl_minutes! <= 1440 ? raw.ttl_minutes : 15 } };
+  });
+
+  app.post<{ Body: { ttl_minutes: number } }>(
+    '/settings/subdomain-reservation',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['ttl_minutes'],
+          properties: { ttl_minutes: { type: 'integer', minimum: 1, maximum: 1440 } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const next = { ttl_minutes: request.body.ttl_minutes };
+      await db.query(
+        `INSERT INTO settings (key, value_json) VALUES ('subdomain.reservation', $1::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+        [JSON.stringify(next)],
+      );
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.subdomain_reservation_updated',
+        resourceType: 'settings',
+        resourceId: null,
+        traceId: request.id,
+        diff: next,
+      });
+      return reply.status(200).send({ data: next });
+    },
+  );
 }

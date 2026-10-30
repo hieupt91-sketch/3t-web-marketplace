@@ -4,9 +4,9 @@ import { useState } from 'react';
 import { useT } from '@/lib/i18n';
 
 const WIDTHS = [
-  ['100%', 'ui.import.detail.width_desktop'],
-  ['768px', 'ui.import.detail.width_tablet'],
-  ['390px', 'ui.import.detail.width_mobile'],
+  ['100%', 'ui.demo.width_desktop'],
+  ['768px', 'ui.demo.width_tablet'],
+  ['390px', 'ui.demo.width_mobile'],
 ] as const;
 
 /** D01 — public demo viewer. Static demos run on the separate preview origin, sandboxed.
@@ -28,7 +28,7 @@ export function DemoViewer({ url, title, slug }: { url: string; title: string; s
         </div>
       ) : null}
       <div className="row" style={{ justifyContent: 'space-between' }}>
-        <div role="group" aria-label={t('ui.import.detail.preview_width')} className="row">
+        <div role="group" aria-label={t('ui.demo.width_group')} className="row">
           {WIDTHS.map(([value, key]) => (
             <button key={value} type="button" className={`button ${width === value ? '' : 'button--secondary'}`} aria-pressed={width === value} onClick={() => setWidth(value)}>
               {t(key)}
@@ -41,7 +41,7 @@ export function DemoViewer({ url, title, slug }: { url: string; title: string; s
       {/* Separate origin + sandbox without allow-same-origin: demo code cannot read portal cookies. */}
       <iframe
         className="preview-frame"
-        style={{ maxWidth: width, height: 640 }}
+        style={{ maxWidth: width, height: 640, marginInline: 'auto' }}
         src={url}
         title={t('ui.demo.frame_title', { title })}
         sandbox="allow-scripts allow-forms allow-popups"

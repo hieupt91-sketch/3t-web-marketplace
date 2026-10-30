@@ -69,6 +69,7 @@ interface PublicTemplateRow {
   fallback_title: string;
   fallback_summary: string | null;
   fallback_slug: string;
+  category_code: string | null;
 }
 
 /**
@@ -86,6 +87,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
     translation_status: translated ? 'published' : 'fallback',
     title: translated ? row.requested_title : row.fallback_title,
     summary: translated ? row.requested_summary : row.fallback_summary,
+    category: row.category_code,
     preview_image: previewImage,
     adapter: row.manifest_json.adapter ?? null,
     size_bytes: row.size_bytes ?? null,
@@ -118,7 +120,7 @@ const RT_LOOKUP = (column: string) =>
   `(SELECT rt.${column} FROM template_translations rt WHERE rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published')`;
 
 const TEMPLATE_SELECT = `
-  SELECT t.id, t.published_version_id, t.created_at, t.slug, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
+  SELECT t.id, t.published_version_id, t.created_at, t.slug, cat.code AS category_code, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          ${RT_LOOKUP('title')} AS requested_title, ${RT_LOOKUP('summary')} AS requested_summary, ${RT_LOOKUP('slug')} AS requested_slug,
@@ -126,6 +128,7 @@ const TEMPLATE_SELECT = `
   FROM templates t
   JOIN template_versions v ON v.id = t.published_version_id
   LEFT JOIN artifacts a ON a.id = v.artifact_id
+  LEFT JOIN template_categories cat ON cat.id = t.category_id
   JOIN template_translations ft ON ft.template_id = t.id AND ft.locale = '${DEFAULT_LOCALE}' AND ft.status = 'published'
   WHERE t.status = 'published' AND NOT t.hidden`;
 

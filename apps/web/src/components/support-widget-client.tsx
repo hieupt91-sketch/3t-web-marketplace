@@ -8,19 +8,27 @@ import type { TemplateSummary } from '@/lib/api-server';
 import { ErrorState, Loading } from '@/components/ui';
 import { classifyIntent, FINDER_CATEGORIES, type FinderCategory } from '@/lib/finder-intent';
 
+export interface ContactChannels {
+  phone: string | null;
+  zalo: string | null;
+  messenger: string | null;
+  email: string | null;
+}
+
+function telHref(phone: string): string {
+  return `tel:${phone.replace(/[^0-9+]/g, '')}`;
+}
+
 /**
- * Quick-advice assistant icon: a floating bubble on every page (bottom
- * left, so it never covers the contact widget at bottom right). Tapping
- * it opens a compact version of the homepage finder: pick a purpose or
- * type a need in plain words, and matching templates appear at once.
- * Same conservative rules as the finder: an explicit purpose always wins,
- * typed needs are classified only on a clear untied score, otherwise the
- * search falls back to plain keywords (never a wrong guess). The full
- * 5-question advisor stays on the template detail page; this panel is
- * only for finding the right template fast. Result links close the panel
- * because the root layout persists across navigation.
+ * HELP-05: the single floating support button (bottom right). Its panel
+ * holds BOTH things the old two widgets did separately — every contact
+ * channel configured in admin (call / Zalo / Messenger / email / form)
+ * and the quick template finder — so a visitor never has to guess which
+ * bubble does what. Opening the panel never sends anything anywhere
+ * (docs/12 §13): channels are plain links, and the finder only searches
+ * when the visitor picks a purpose or submits words.
  */
-export function QuickAssistant({ locale }: { locale: Locale }) {
+export function SupportWidgetClient({ locale, contact }: { locale: Locale; contact: ContactChannels }) {
   const t = (key: string, params?: Record<string, string>) => translate(locale, key, params);
   const [open, setOpen] = useState(false);
   const [selected, setSelected] = useState<FinderCategory | null>(null);
@@ -69,13 +77,22 @@ export function QuickAssistant({ locale }: { locale: Locale }) {
   const allHref = `/${locale}/templates?${new URLSearchParams({ ...(lastQuery.category ? { category: lastQuery.category } : {}), ...(lastQuery.q ? { q: lastQuery.q } : {}) })}`;
 
   return (
-    <div className="quick-assistant">
+    <div className="support-widget">
       {open ? (
-        <div className="card quick-assistant__panel stack" role="dialog" aria-label={t('ui.quick.title')}>
+        <div className="card support-widget__panel stack" role="dialog" aria-label={t('ui.support.title')}>
           <div className="row" style={{ justifyContent: 'space-between' }}>
-            <strong>{t('ui.quick.title')}</strong>
+            <strong>{t('ui.support.title')}</strong>
             <button type="button" className="button button--secondary" onClick={() => setOpen(false)}>{t('ui.quick.close')}</button>
           </div>
+          <nav className="stack" aria-label={t('ui.contact.widget_title')} style={{ gap: 'var(--space-2)' }}>
+            {contact.phone ? <a className="button button--secondary" href={telHref(contact.phone)}>{t('ui.contact.call')}: {contact.phone}</a> : null}
+            {contact.zalo ? <a className="button button--secondary" href={`https://zalo.me/${encodeURIComponent(contact.zalo)}`} target="_blank" rel="noopener noreferrer nofollow">{t('ui.contact.zalo_chat')}</a> : null}
+            {contact.messenger ? <a className="button button--secondary" href={`https://m.me/${encodeURIComponent(contact.messenger)}`} target="_blank" rel="noopener noreferrer nofollow">{t('ui.contact.messenger_chat')}</a> : null}
+            {contact.email ? <a className="button button--secondary" href={`mailto:${contact.email}`}>{contact.email}</a> : null}
+            <a className="button" href={`/${locale}/contact`}>{t('ui.contact.form_link')}</a>
+          </nav>
+          <hr style={{ margin: 0, border: 'none', borderTop: '1px solid var(--color-border)' }} />
+          <strong>{t('ui.quick.title')}</strong>
           <div className="row">
             {FINDER_CATEGORIES.map((code) => (
               <button
@@ -90,9 +107,9 @@ export function QuickAssistant({ locale }: { locale: Locale }) {
             ))}
           </div>
           <form className="search" onSubmit={submitText} role="search">
-            <label htmlFor="quick-need" className="visually-hidden">{t('ui.finder.input_label')}</label>
+            <label htmlFor="support-need" className="visually-hidden">{t('ui.finder.input_label')}</label>
             <input
-              id="quick-need"
+              id="support-need"
               className="input"
               type="search"
               value={text}
@@ -128,8 +145,8 @@ export function QuickAssistant({ locale }: { locale: Locale }) {
       ) : null}
       <button
         type="button"
-        className="button quick-assistant__button"
-        aria-label={open ? t('ui.quick.close') : t('ui.quick.open')}
+        className="button support-widget__button"
+        aria-label={open ? t('ui.quick.close') : t('ui.support.open')}
         aria-expanded={open}
         onClick={() => setOpen(!open)}
       >

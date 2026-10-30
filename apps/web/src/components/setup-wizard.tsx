@@ -201,7 +201,9 @@ export function SetupWizard({ slug, version }: { slug: string; version: string }
                         ? t('ui.setup.subdomain_taken')
                         : subCheck.reason === 'reserved'
                           ? t('ui.setup.subdomain_reserved')
-                          : t('ui.setup.subdomain_invalid')}
+                          : subCheck.reason === 'held'
+                            ? t('ui.setup.subdomain_held')
+                            : t('ui.setup.subdomain_invalid')}
                   </p>
                 ) : null}
                 <p className="muted" style={{ margin: 0 }}>{feeNote}</p>

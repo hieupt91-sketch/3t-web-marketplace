@@ -37,6 +37,35 @@ const RESERVED = new Set(['admin', 'api', 'app', 'www', 'support', 'billing', 's
 const HOP_BY_HOP = new Set(['connection', 'keep-alive', 'proxy-authenticate', 'proxy-authorization', 'te', 'trailer', 'transfer-encoding', 'upgrade']);
 const SESSION_PATH_RE = /^\/session\/([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})(\/.*)?$/;
 
+/**
+ * Demo runtimes are written to be served from a domain root (that is where a
+ * buyer's own deployment lives), so their HTML uses root-absolute URLs
+ * ("/styles.css", "/images/hero.jpg", form actions and fetch() calls under
+ * "/admin", "/api", "/uploads"). Behind the session prefix those URLs escape
+ * the session and 404 — the page renders without CSS or images. The router is
+ * the one layer that knows the prefix, so it rewrites root-absolute URLs in
+ * HTML responses, redirect targets and cookie paths back under the session
+ * prefix. Site traffic is never rewritten: hosted sites really are at a root.
+ */
+function rewriteSessionHtml(html: string, prefix: string): string {
+  let out = html.replace(/(\b(?:src|href|action|poster)\s*=\s*["'])\/(?!\/)(?!session\/)/gi, `$1${prefix}/`);
+  out = out.replace(/(["'])\/(api|admin|uploads|images|files)\//g, `$1${prefix}/$2/`);
+  out = out.replace(/(["'])\/styles\.css\b/g, `$1${prefix}/styles.css`);
+  out = out.replace(/url\((\s*["']?)\/(?!\/)(?!session\/)/g, `url($1${prefix}/`);
+  return out;
+}
+
+function rewriteSessionLocation(location: string, prefix: string): string {
+  if (location.startsWith('/') && !location.startsWith('//') && location !== prefix && !location.startsWith(`${prefix}/`)) {
+    return prefix + location;
+  }
+  return location;
+}
+
+function rewriteSessionCookie(cookie: string, prefix: string): string {
+  return cookie.replace(/;\s*path=\/(?=;|$)/i, `; Path=${prefix}/`);
+}
+
 interface SiteTarget {
   siteId: string;
   ownerId: string;
@@ -151,7 +180,7 @@ export function createSiteRouterServer(deps: SiteRouterDeps): Server {
     }
   }
 
-  function proxy(req: IncomingMessage, res: ServerResponse, upstreamHost: string, port: number, path: string, onDeadUpstream: () => void) {
+  function proxy(req: IncomingMessage, res: ServerResponse, upstreamHost: string, port: number, path: string, onDeadUpstream: () => void, sessionPrefix?: string) {
     const host = (req.headers.host ?? '').toLowerCase().replace(/:\d+$/, '').replace(/\.$/, '');
     const clientIp = req.socket.remoteAddress ?? '';
     const headers: Record<string, string | string[] | undefined> = {};
@@ -162,12 +191,36 @@ export function createSiteRouterServer(deps: SiteRouterDeps): Server {
     headers['x-forwarded-host'] = host;
     headers['x-forwarded-proto'] = (req.headers['x-forwarded-proto'] as string | undefined) ?? 'http';
     headers['x-forwarded-for'] = headers['x-forwarded-for'] ? `${headers['x-forwarded-for'] as string}, ${clientIp}` : clientIp;
+    if (sessionPrefix) {
+      headers['x-forwarded-prefix'] = sessionPrefix;
+      // HTML bodies are buffered for URL rewriting; keep them uncompressed.
+      headers['accept-encoding'] = 'identity';
+    }
     const upstream = httpRequest(
       { host: upstreamHost, port, method: req.method, path, headers },
       (upRes) => {
         const outHeaders: Record<string, string | string[]> = {};
         for (const [name, value] of Object.entries(upRes.headers)) {
           if (value !== undefined && !HOP_BY_HOP.has(name.toLowerCase())) outHeaders[name] = value;
+        }
+        if (sessionPrefix) {
+          if (typeof outHeaders.location === 'string') outHeaders.location = rewriteSessionLocation(outHeaders.location, sessionPrefix);
+          if (Array.isArray(outHeaders['set-cookie'])) outHeaders['set-cookie'] = outHeaders['set-cookie'].map((c) => rewriteSessionCookie(c, sessionPrefix));
+          else if (typeof outHeaders['set-cookie'] === 'string') outHeaders['set-cookie'] = rewriteSessionCookie(outHeaders['set-cookie'], sessionPrefix);
+          const contentType = String(outHeaders['content-type'] ?? '');
+          const encoding = String(outHeaders['content-encoding'] ?? 'identity');
+          if (contentType.includes('text/html') && (encoding === 'identity' || encoding === '')) {
+            const chunks: Buffer[] = [];
+            upRes.on('data', (chunk) => chunks.push(chunk as Buffer));
+            upRes.on('end', () => {
+              const body = rewriteSessionHtml(Buffer.concat(chunks).toString('utf8'), sessionPrefix);
+              outHeaders['content-length'] = String(Buffer.byteLength(body));
+              res.writeHead(upRes.statusCode ?? 502, outHeaders);
+              res.end(body);
+            });
+            upRes.on('error', () => res.destroy());
+            return;
+          }
         }
         res.writeHead(upRes.statusCode ?? 502, outHeaders);
         upRes.pipe(res);
@@ -207,8 +260,10 @@ export function createSiteRouterServer(deps: SiteRouterDeps): Server {
       }
       const port = await lookupSessionPort(sessionId);
       if (!port) return plain(res, 404, 'Demo session not found or expired');
-      return proxy(req, res, sessionsHost, port, rest + query, () =>
-        plain(res, 503, 'This demo is starting. Please try again in a few seconds. / Bản demo đang khởi động, vui lòng thử lại sau vài giây.', { 'retry-after': '15' }),
+      return proxy(
+        req, res, sessionsHost, port, rest + query,
+        () => plain(res, 503, 'This demo is starting. Please try again in a few seconds. / Bản demo đang khởi động, vui lòng thử lại sau vài giây.', { 'retry-after': '15' }),
+        `/session/${sessionId}`,
       );
     }
 

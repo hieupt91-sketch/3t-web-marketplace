@@ -1,10 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import { lookup, resolveTxt } from 'node:dns/promises';
 import { domainToASCII } from 'node:url';
 import { isIP } from 'node:net';
 import type { FastifyInstance } from 'fastify';
-import { enqueueJob, isUniqueViolation, tx, writeAudit } from '@3t/core';
+import { enqueueJob, isUniqueViolation, tx, validateDynamicContent, writeAudit } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { errors } from '../errors.ts';
@@ -78,6 +79,38 @@ async function enqueueSiteJob(db: Parameters<typeof enqueueJob>[0], type: string
 export async function siteRoutes(app: FastifyInstance): Promise<void> {
   const { db, store, config } = app.deps;
 
+  // ---- Subdomain reservations (docs/12 DEP-06) ----
+  // A hold is a short-lived, non-binding claim on a name while the owner
+  // finishes deploying. It never charges the subdomain fee (the fee stays
+  // an owner-set admin value confirmed at handover) and it never creates
+  // a site. Expiry is lazy on every read path; the worker sweeps rows in
+  // bulk. The TTL comes from the 'subdomain.reservation' platform setting
+  // (migration 0025 seeds 15 minutes; owner-tunable in admin settings).
+  interface HoldRow { id: string; user_id: string; expires_at: Date }
+
+  async function reservationTtlMinutes(): Promise<number> {
+    const { rows } = await db.query<{ value_json: { ttl_minutes?: number } }>(
+      "SELECT value_json FROM settings WHERE key = 'subdomain.reservation'",
+    );
+    const ttl = rows[0]?.value_json?.ttl_minutes;
+    return Number.isInteger(ttl) && ttl! >= 1 && ttl! <= 1440 ? ttl! : 15;
+  }
+
+  /** The active hold for a name, lazily expiring it when its TTL has passed. */
+  async function currentHold(client: { query: <T>(sql: string, params: unknown[]) => Promise<{ rows: T[] }> }, subdomain: string): Promise<HoldRow | null> {
+    const { rows } = await client.query<HoldRow>(
+      "SELECT id, user_id, expires_at FROM subdomain_reservations WHERE subdomain = $1 AND status = 'active'",
+      [subdomain],
+    );
+    const hold = rows[0];
+    if (!hold) return null;
+    if (new Date(hold.expires_at).getTime() <= Date.now()) {
+      await client.query("UPDATE subdomain_reservations SET status = 'expired' WHERE id = $1 AND status = 'active'", [hold.id]);
+      return null;
+    }
+    return hold;
+  }
+
   app.post<{ Body: { entitlement_id: string; display_name: string; subdomain: string; default_locale?: 'vi' | 'en'; demo_session_id?: string } }>(
     '/sites',
     { schema: { body: { type: 'object', additionalProperties: false, required: ['entitlement_id', 'display_name', 'subdomain'], properties: { entitlement_id: { type: 'string' }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, subdomain: { type: 'string', minLength: 3, maxLength: 40 }, default_locale: { enum: ['vi', 'en'] }, demo_session_id: { type: 'string' } } } } },
@@ -108,6 +141,11 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
           if (!demo.rows[0] || demo.rows[0]!.status !== 'active' || demo.rows[0]!.version_id !== e.version_id) throw errors.conflict('site.demo_mismatch');
           demoSessionId = body.demo_session_id;
         }
+        // DEP-06: a live hold by another customer blocks the create even
+        // when both customers passed the availability check earlier
+        // (UX-12); the creator's own hold is consumed below.
+        const hold = await currentHold(client, body.subdomain);
+        if (hold && hold.user_id !== auth.userId) throw errors.conflict('site.subdomain_held');
         let site;
         try {
           const inserted = await client.query<{ id: string }>(
@@ -121,6 +159,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
           throw error;
         }
         await client.query("INSERT INTO site_members (site_id, user_id, role) VALUES ($1, $2, 'owner')", [site.id, auth.userId]);
+        if (hold) await client.query("UPDATE subdomain_reservations SET status = 'consumed' WHERE id = $1 AND status = 'active'", [hold.id]);
         const job = await enqueueSiteJob(client, 'site.provision', site.id, {}, auth.userId);
         const dep = await client.query<{ id: string }>(
           "INSERT INTO deployments (site_id, version_id, artifact_id, operation, status, job_id) SELECT $1, $2, artifact_id, 'provision', 'pending', $3 FROM template_versions WHERE id = $2 RETURNING id",
@@ -141,12 +180,88 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
    * subdomain fee are owner steps at handover.
    */
   app.get<{ Querystring: { subdomain?: string } }>('/sites/check-subdomain', async (request) => {
-    requireUser(request);
+    const auth = requireUser(request);
     const raw = (request.query.subdomain ?? '').toLowerCase();
     if (!SUBDOMAIN_RE.test(raw)) return { data: { subdomain: raw, available: false, reason: 'invalid' } };
     if (RESERVED.has(raw)) return { data: { subdomain: raw, available: false, reason: 'reserved' } };
     const { rows } = await db.query('SELECT 1 FROM sites WHERE subdomain = $1 LIMIT 1', [raw]);
-    return { data: { subdomain: raw, available: rows.length === 0, reason: rows.length === 0 ? null : 'taken' } };
+    if (rows.length > 0) return { data: { subdomain: raw, available: false, reason: 'taken' } };
+    // DEP-06: an unexpired hold by another customer also makes the name
+    // unavailable; the holder sees their own hold as available.
+    const hold = await currentHold(db, raw);
+    if (hold) {
+      if (hold.user_id === auth.userId) {
+        return { data: { subdomain: raw, available: true, reason: null, held_by_you: true, reservation_expires_at: new Date(hold.expires_at).toISOString() } };
+      }
+      return { data: { subdomain: raw, available: false, reason: 'held', held_by_you: false, reservation_expires_at: new Date(hold.expires_at).toISOString() } };
+    }
+    return { data: { subdomain: raw, available: true, reason: null } };
+  });
+
+  app.get('/sites/subdomain-reservations', async (request) => {
+    const auth = requireUser(request);
+    const { rows } = await db.query<{ subdomain: string; entitlement_id: string | null; expires_at: Date; created_at: Date }>(
+      "SELECT subdomain, entitlement_id, expires_at, created_at FROM subdomain_reservations WHERE user_id = $1 AND status = 'active' AND expires_at > now() ORDER BY expires_at",
+      [auth.userId],
+    );
+    return { data: rows.map((r) => ({ subdomain: r.subdomain, entitlement_id: r.entitlement_id, expires_at: r.expires_at.toISOString(), created_at: r.created_at.toISOString() })) };
+  });
+
+  app.post<{ Body: { subdomain: string; entitlement_id?: string } }>(
+    '/sites/subdomain-reservations',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['subdomain'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, entitlement_id: { type: 'string' } } } } },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      const subdomain = request.body.subdomain.toLowerCase();
+      if (!SUBDOMAIN_RE.test(subdomain)) throw errors.validation([{ field: 'subdomain', code: 'invalid' }]);
+      if (RESERVED.has(subdomain)) throw errors.validation([{ field: 'subdomain', code: 'reserved' }]);
+      if (request.body.entitlement_id) assertId(request.body.entitlement_id);
+      const ttl = await reservationTtlMinutes();
+      const result = await tx(db, async (client) => {
+        if (request.body.entitlement_id) {
+          const ent = await client.query<{ user_id: string; mode: string; status: string }>(
+            'SELECT user_id, mode, status FROM entitlements WHERE id = $1',
+            [request.body.entitlement_id],
+          );
+          const e = ent.rows[0];
+          if (!e || e.user_id !== auth.userId || e.mode !== 'hosted' || e.status !== 'active') throw errors.notFound();
+        }
+        const taken = await client.query('SELECT 1 FROM sites WHERE subdomain = $1 LIMIT 1', [subdomain]);
+        if (taken.rows.length > 0) throw errors.conflict('site.subdomain_taken');
+        const hold = await currentHold(client, subdomain);
+        if (hold && hold.user_id !== auth.userId) throw errors.conflict('site.subdomain_held');
+        if (hold) {
+          // Renewing your own hold extends it from now.
+          const { rows } = await client.query<{ expires_at: Date }>(
+            "UPDATE subdomain_reservations SET expires_at = now() + make_interval(mins => $2), entitlement_id = COALESCE($3, entitlement_id) WHERE id = $1 RETURNING expires_at",
+            [hold.id, ttl, request.body.entitlement_id ?? null],
+          );
+          return { status: 200, expires_at: rows[0]!.expires_at };
+        }
+        try {
+          const { rows } = await client.query<{ expires_at: Date }>(
+            "INSERT INTO subdomain_reservations (subdomain, user_id, entitlement_id, expires_at) VALUES ($1, $2, $3, now() + make_interval(mins => $4)) RETURNING expires_at",
+            [subdomain, auth.userId, request.body.entitlement_id ?? null, ttl],
+          );
+          return { status: 201, expires_at: rows[0]!.expires_at };
+        } catch (error) {
+          // Lost the race against the partial unique index.
+          if (isUniqueViolation(error)) throw errors.conflict('site.subdomain_held');
+          throw error;
+        }
+      });
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.subdomain_reserved', resourceType: 'site', resourceId: null, traceId: request.id, diff: { subdomain, ttl_minutes: ttl } });
+      return reply.status(result.status).send({ data: { subdomain, expires_at: new Date(result.expires_at).toISOString(), ttl_minutes: ttl } });
+    },
+  );
+
+  app.delete<{ Params: { subdomain: string } }>('/sites/subdomain-reservations/:subdomain', async (request, reply) => {
+    const auth = requireUser(request);
+    await db.query(
+      "UPDATE subdomain_reservations SET status = 'released' WHERE subdomain = $1 AND user_id = $2 AND status = 'active'",
+      [request.params.subdomain.toLowerCase(), auth.userId],
+    );
+    return reply.status(204).send();
   });
 
   /**
@@ -208,9 +323,9 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       db.query('SELECT * FROM deployments WHERE site_id = $1 ORDER BY created_at DESC LIMIT 20', [site.id]),
       db.query('SELECT id, hostname_ascii, status, is_primary, verified_at, cert_expires_at, created_at FROM domains WHERE site_id = $1 ORDER BY created_at DESC', [site.id]),
       db.query('SELECT * FROM subscriptions WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1', [site.id]),
-      db.query<{ template_id: string }>('SELECT template_id FROM template_versions WHERE id = $1', [site.template_version_id]),
+      db.query<{ template_id: string; manifest_json: { capabilities?: string[] } }>('SELECT template_id, manifest_json FROM template_versions WHERE id = $1', [site.template_version_id]),
     ]);
-    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null } };
+    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, capabilities: template.rows[0]?.manifest_json?.capabilities ?? [], deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null } };
   });
 
   app.get<{ Params: { id: string } }>('/sites/:id/deployments', async (request) => {
@@ -363,7 +478,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/sites/:id/backups', async (request) => {
     const auth = requireUser(request);
     const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
-    const { rows } = await db.query('SELECT id, kind, status, checksum, created_at, expires_at FROM backups WHERE site_id = $1 ORDER BY created_at DESC LIMIT 50', [site.id]);
+    const { rows } = await db.query("SELECT id, kind, status, checksum, created_at, expires_at FROM backups WHERE site_id = $1 AND kind IN ('backup', 'export') ORDER BY created_at DESC LIMIT 50", [site.id]);
     return { data: rows };
   });
 
@@ -385,6 +500,137 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       const job = await enqueueSiteJob(db, 'site.restore', site.id, { backup_id: request.params.backupId, deployment_id: dep.rows[0]!.id }, auth.userId);
       await db.query('UPDATE deployments SET job_id = $2 WHERE id = $1', [dep.rows[0]!.id, job.id]);
       return { data: { deployment_id: dep.rows[0]!.id, job_id: job.id } };
+    },
+  );
+
+  // ---- Dynamic content backups (docs/12) ----
+  // A dynamic site's own backup unit is data/content.json — the file its
+  // built-in admin downloads/restores. These endpoints give the BUYER the
+  // same capability from their account: snapshot, download, restore from
+  // a platform snapshot, or upload a JSON file (e.g. one downloaded from
+  // the site's own admin) and restore it. Ownership: loadSiteForUser
+  // with ownerOnly — the caller must own the site, which exists only
+  // under their own entitlement; the platform never calls the site's
+  // admin and never touches another tenant's directory. Restores are
+  // step-up + name-confirmed, like whole-tree restores.
+  async function loadDynamicSite(siteId: string, userId: string): Promise<SiteView> {
+    const site = await loadSiteForUser(db, siteId, userId, true);
+    const version = await db.query<{ adapter: string; manifest_json: { capabilities?: string[] } }>(
+      'SELECT adapter, manifest_json FROM template_versions WHERE id = $1',
+      [site.template_version_id],
+    );
+    const v = version.rows[0];
+    if (!v || v.adapter === 'static-html' || v.adapter === 'vite-static' || !(v.manifest_json?.capabilities ?? []).includes('admin')) {
+      throw errors.conflict('site.not_dynamic');
+    }
+    return site;
+  }
+
+  async function enqueueContentRestore(site: SiteView, backup: { id: string; artifact_id: string | null }, ownerId: string) {
+    const dep = await db.query<{ id: string }>(
+      "INSERT INTO deployments (site_id, version_id, artifact_id, backup_id, operation, status) VALUES ($1, $2, $3, $4, 'restore', 'pending') RETURNING id",
+      [site.id, site.template_version_id, backup.artifact_id, backup.id],
+    );
+    const job = await enqueueSiteJob(db, 'site.content-restore', site.id, { backup_id: backup.id, deployment_id: dep.rows[0]!.id }, ownerId);
+    await db.query('UPDATE deployments SET job_id = $2 WHERE id = $1', [dep.rows[0]!.id, job.id]);
+    return { deployment_id: dep.rows[0]!.id, job_id: job.id };
+  }
+
+  app.post<{ Params: { id: string } }>('/sites/:id/content-backups', async (request, reply) => {
+    const auth = requireUser(request);
+    const site = await loadDynamicSite(request.params.id, auth.userId);
+    if (site.status !== 'active' && site.status !== 'suspended') throw errors.conflict('site.not_backed_up');
+    const { rows } = await db.query<{ id: string }>(
+      "INSERT INTO backups (site_id, kind, expires_at) VALUES ($1, 'content', now() + interval '30 days') RETURNING id",
+      [site.id],
+    );
+    const job = await enqueueSiteJob(db, 'site.content-backup', site.id, { backup_id: rows[0]!.id }, auth.userId);
+    return reply.status(202).send({ data: { backupId: rows[0]!.id, jobId: job.id } });
+  });
+
+  app.get<{ Params: { id: string } }>('/sites/:id/content-backups', async (request) => {
+    const auth = requireUser(request);
+    const site = await loadDynamicSite(request.params.id, auth.userId);
+    const { rows } = await db.query(
+      "SELECT id, kind, status, checksum, created_at, expires_at FROM backups WHERE site_id = $1 AND kind = 'content' ORDER BY created_at DESC LIMIT 50",
+      [site.id],
+    );
+    return { data: rows };
+  });
+
+  app.get<{ Params: { id: string; backupId: string } }>('/sites/:id/content-backups/:backupId/download', async (request, reply) => {
+    const auth = requireUser(request);
+    const site = await loadDynamicSite(request.params.id, auth.userId);
+    assertId(request.params.backupId);
+    const backup = await db.query<{ status: string; artifact_key: string | null }>(
+      `SELECT b.status, a.object_key AS artifact_key FROM backups b LEFT JOIN artifacts a ON a.id = b.artifact_id
+       WHERE b.id = $1 AND b.site_id = $2 AND b.kind = 'content'`,
+      [request.params.backupId, site.id],
+    );
+    if (!backup.rows[0] || backup.rows[0]!.status !== 'succeeded' || !backup.rows[0]!.artifact_key) throw errors.notFound();
+    reply.header('content-type', 'application/json');
+    reply.header('content-disposition', `attachment; filename="content-${site.id.slice(0, 8)}.json"`);
+    return reply.send(createReadStream(store.pathFor(backup.rows[0]!.artifact_key)));
+  });
+
+  app.post<{ Params: { id: string; backupId: string }; Body: { confirm_name: string } }>(
+    '/sites/:id/content-backups/:backupId/restore',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['confirm_name'], properties: { confirm_name: { type: 'string' } } } } },
+    async (request) => {
+      const auth = requireUser(request);
+      await requireStepUp(db, auth);
+      const site = await loadDynamicSite(request.params.id, auth.userId);
+      if (request.body.confirm_name !== site.display_name) throw errors.validation([{ field: 'confirm_name', code: 'mismatch' }]);
+      assertId(request.params.backupId);
+      const backup = await db.query<{ status: string; artifact_id: string | null }>(
+        "SELECT status, artifact_id FROM backups WHERE id = $1 AND site_id = $2 AND kind = 'content'",
+        [request.params.backupId, site.id],
+      );
+      if (!backup.rows[0] || backup.rows[0]!.status !== 'succeeded') throw errors.conflict('backup.not_restorable');
+      const result = await enqueueContentRestore(site, { id: request.params.backupId, artifact_id: backup.rows[0]!.artifact_id }, auth.userId);
+      return { data: result };
+    },
+  );
+
+  app.post<{ Params: { id: string }; Body: { content: unknown; confirm_name: string } }>(
+    '/sites/:id/content-backups/restore-upload',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          required: ['content', 'confirm_name'],
+          properties: { content: {}, confirm_name: { type: 'string' } },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      await requireStepUp(db, auth);
+      const site = await loadDynamicSite(request.params.id, auth.userId);
+      if (request.body.confirm_name !== site.display_name) throw errors.validation([{ field: 'confirm_name', code: 'mismatch' }]);
+      const invalid = validateDynamicContent(request.body.content);
+      if (invalid) throw errors.validation([{ field: 'content', code: invalid }]);
+      const raw = Buffer.from(JSON.stringify(request.body.content), 'utf8');
+      if (raw.length > 5 * 1024 * 1024) throw errors.validation([{ field: 'content', code: 'too_large' }]);
+      const { rows } = await db.query<{ id: string }>(
+        "INSERT INTO backups (site_id, kind, expires_at) VALUES ($1, 'content', now() + interval '30 days') RETURNING id",
+        [site.id],
+      );
+      const backupId = rows[0]!.id;
+      const key = `content-backups/${site.id}/${backupId}.json`;
+      const stored = await store.putStream(key, Readable.from([raw]), 16 * 1024 * 1024);
+      const artifact = await db.query<{ id: string }>(
+        `INSERT INTO artifacts (object_key, sha256, size_bytes, media_type, kind, retention_class, metadata_json)
+         VALUES ($1, $2, $3, 'application/json', 'site_content', 'permanent', $4) RETURNING id`,
+        [key, stored.sha256, String(stored.size), { site_id: site.id, backup_id: backupId, uploaded: true }],
+      );
+      await db.query(
+        "UPDATE backups SET status = 'succeeded', artifact_id = $2, checksum = $3 WHERE id = $1",
+        [backupId, artifact.rows[0]!.id, stored.sha256],
+      );
+      const result = await enqueueContentRestore(site, { id: backupId, artifact_id: artifact.rows[0]!.id }, auth.userId);
+      return reply.status(202).send({ data: { backup_id: backupId, ...result } });
     },
   );
 

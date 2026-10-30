@@ -60,6 +60,19 @@ beforeAll(async () => {
     req.on('data', (chunk) => chunks.push(chunk as Buffer));
     req.on('end', () => {
       res.setHeader('x-upstream', 'yes');
+      if ((req.url ?? '').startsWith('/html-page')) {
+        // Shape of a dynamic-template runtime page: root-absolute asset and
+        // app URLs, plus URLs that must never be rewritten.
+        res.setHeader('set-cookie', 'dsess=tok; HttpOnly; Path=/; SameSite=Lax');
+        res.setHeader('content-type', 'text/html; charset=utf-8');
+        res.end('<link rel="stylesheet" href="/styles.css"><img src="/images/hero.jpg"><form action="/admin/login" method="post"></form><script>fetch("/api/bookings",{method:"POST"})</script><a href="#menu">anchor</a><a href="https://example.com/x">ext</a><img src="//cdn.example.com/a.png">');
+        return;
+      }
+      if ((req.url ?? '').startsWith('/html-redirect')) {
+        res.writeHead(302, { location: '/admin/' });
+        res.end();
+        return;
+      }
       res.setHeader('set-cookie', 'site_session=abc; Path=/; HttpOnly');
       res.setHeader('content-type', 'application/json');
       res.end(JSON.stringify({ method: req.method, url: req.url, xtest: req.headers['x-test'] ?? null, host: req.headers.host ?? null, body: Buffer.concat(chunks).toString('utf8') }));
@@ -170,5 +183,33 @@ describe('demo session proxy on the preview origin', () => {
 
   it('does not treat other preview-origin paths as sessions', async () => {
     expect((await call(routerPort, 'preview.localhost', '/some-label/')).status).toBe(404);
+  });
+
+  it('rewrites root-absolute URLs in session HTML back under the session prefix', async () => {
+    const res = await call(routerPort, 'preview.localhost', `/session/${SESSION_ID}/html-page`);
+    expect(res.status).toBe(200);
+    expect(res.body).toContain(`href="/session/${SESSION_ID}/styles.css"`);
+    expect(res.body).toContain(`src="/session/${SESSION_ID}/images/hero.jpg"`);
+    expect(res.body).toContain(`action="/session/${SESSION_ID}/admin/login"`);
+    expect(res.body).toContain(`fetch("/session/${SESSION_ID}/api/bookings"`);
+    // Untouched: in-page anchors, external links, protocol-relative URLs.
+    expect(res.body).toContain('href="#menu"');
+    expect(res.body).toContain('href="https://example.com/x"');
+    expect(res.body).toContain('src="//cdn.example.com/a.png"');
+    expect(res.headers['set-cookie']).toEqual([`dsess=tok; HttpOnly; Path=/session/${SESSION_ID}/; SameSite=Lax`]);
+  });
+
+  it('rewrites absolute redirect targets of session responses', async () => {
+    const res = await call(routerPort, 'preview.localhost', `/session/${SESSION_ID}/html-redirect`);
+    expect(res.status).toBe(302);
+    expect(res.headers.location).toBe(`/session/${SESSION_ID}/admin/`);
+  });
+
+  it('does not rewrite site traffic (hosted sites live at a root)', async () => {
+    const res = await call(routerPort, `shop-one.${BASE}`, '/html-page');
+    expect(res.status).toBe(200);
+    expect(res.body).toContain('href="/styles.css"');
+    expect(res.body).toContain('src="/images/hero.jpg"');
+    expect(res.headers['set-cookie']).toEqual(['dsess=tok; HttpOnly; Path=/; SameSite=Lax']);
   });
 });

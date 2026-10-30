@@ -4,6 +4,7 @@ import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
 import { DemoCatalog } from '@/components/demo-catalog';
+import { CompareTray } from '@/components/compare-tray';
 import { JsonLd } from '@/components/json-ld';
 import { itemListJsonLd } from '@/lib/seo';
 
@@ -106,13 +107,14 @@ export default async function Templates({ params, searchParams }: Props) {
         <>
           <p className="muted" role="status">{t('ui.catalog.result_count', { count: String(result.data.length) })}</p>
           <div className="grid-cards">
-            {result.data.map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}
+            {result.data.map((template) => <TemplateCard key={template.id} template={template} locale={locale} comparable />)}
           </div>
           {next ? <p><Link className="button button--secondary" href={next}>{t('ui.catalog.more')}</Link></p> : null}
         </>
       )}
         </div>
       </div>
+      <CompareTray locale={locale} />
     </div>
   );
 }

@@ -1,12 +1,14 @@
 import { execFile } from 'node:child_process';
-import { cp, mkdir, mkdtemp, rename, rm } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReadStream } from 'node:fs';
+import { Readable } from 'node:stream';
 import {
   completeJob,
   emitEvent,
   failJob,
+  validateDynamicContent,
   type Db,
   type JobRow,
   type LocalObjectStore,
@@ -14,7 +16,7 @@ import {
 } from '@3t/core';
 import { httpStatus, killPid, spawnServer, writeSiteMeta } from './runtime-agent.ts';
 
-export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart'] as const;
+export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore'] as const;
 
 interface SiteRow {
   id: string;
@@ -252,6 +254,73 @@ async function runUpdate(deps: { config: PlatformConfig; db: Db; store: LocalObj
   }
 }
 
+/**
+ * Dynamic content backup (docs/12): the dynamic family's own backup unit
+ * is data/content.json — the same file the site's built-in admin offers
+ * for download. The platform stores it as a 'content' backup so customers
+ * can snapshot content without a whole-tree backup. The file is
+ * shape-validated on the way in AND on restore, so a corrupt snapshot
+ * can never be applied.
+ */
+async function runContentBackup(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, backupId: string): Promise<void> {
+  const { config, db, store } = deps;
+  try {
+    const raw = await readFile(join(siteDir(config, site.id), 'data', 'content.json'));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.toString('utf8'));
+    } catch {
+      throw new Error('site content is not valid JSON');
+    }
+    const invalid = validateDynamicContent(parsed);
+    if (invalid) throw new Error(`site content invalid: ${invalid}`);
+    const stored = await store.putStream(`content-backups/${site.id}/${backupId}.json`, Readable.from([raw]), 16 * 1024 * 1024);
+    const artifact = await db.query<{ id: string }>(
+      `INSERT INTO artifacts (object_key, sha256, size_bytes, media_type, kind, retention_class, metadata_json)
+       VALUES ($1, $2, $3, 'application/json', 'site_content', 'permanent', $4) RETURNING id`,
+      [`content-backups/${site.id}/${backupId}.json`, stored.sha256, String(stored.size), { site_id: site.id, backup_id: backupId }],
+    );
+    await db.query("UPDATE backups SET status = 'succeeded', artifact_id = $2, checksum = $3, expires_at = now() + interval '30 days' WHERE id = $1", [backupId, artifact.rows[0]!.id, stored.sha256]);
+  } catch (error) {
+    await db.query("UPDATE backups SET status = 'failed' WHERE id = $1", [backupId]);
+    throw error;
+  }
+}
+
+async function runContentRestore(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, backupId: string, deploymentId: string | null): Promise<void> {
+  const { config, db, store } = deps;
+  const backup = await db.query<{ artifact_key: string }>(
+    `SELECT a.object_key AS artifact_key FROM backups b JOIN artifacts a ON a.id = b.artifact_id
+     WHERE b.id = $1 AND b.site_id = $2 AND b.kind = 'content' AND b.status = 'succeeded'`,
+    [backupId, site.id],
+  );
+  if (!backup.rows[0]) throw new Error('content backup not restorable');
+  try {
+    if (deploymentId) await db.query("UPDATE deployments SET status = 'running' WHERE id = $1", [deploymentId]);
+    const raw = await readFile(store.pathFor(backup.rows[0]!.artifact_key));
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.toString('utf8'));
+    } catch {
+      throw new Error('content backup is not valid JSON');
+    }
+    const invalid = validateDynamicContent(parsed);
+    if (invalid) throw new Error(`content backup invalid: ${invalid}`);
+    const dataDir = join(siteDir(config, site.id), 'data');
+    await mkdir(dataDir, { recursive: true });
+    const target = join(dataDir, 'content.json');
+    // Mirror the template's own restore: keep the current file as .bak.
+    await copyFile(target, `${target}.bak`).catch(() => undefined);
+    const tmpFile = join(dataDir, `.content.json.tmp-${Date.now()}`);
+    await writeFile(tmpFile, raw);
+    await rename(tmpFile, target);
+    if (deploymentId) await db.query("UPDATE deployments SET status = 'succeeded', finished_at = now() WHERE id = $1", [deploymentId]);
+  } catch (error) {
+    if (deploymentId) await db.query("UPDATE deployments SET status = 'failed', finished_at = now(), error_code = 'site_content_restore_failed' WHERE id = $1", [deploymentId]);
+    throw error;
+  }
+}
+
 async function runRestart(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow): Promise<void> {
   const { config, db } = deps;
   if (site.runtime_pid) killPid(site.runtime_pid);
@@ -272,6 +341,8 @@ export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: 
     else if (job.type === 'site.restore') await runRestore(deps, job, site, payload.backup_id!, payload.deployment_id ?? null);
     else if (job.type === 'site.update') await runUpdate(deps, job, site, payload.version_id!, payload.deployment_id ?? null);
     else if (job.type === 'site.restart') await runRestart(deps, job, site);
+    else if (job.type === 'site.content-backup') await runContentBackup(deps, job, site, payload.backup_id!);
+    else if (job.type === 'site.content-restore') await runContentRestore(deps, job, site, payload.backup_id!, payload.deployment_id ?? null);
     else throw new Error(`unknown site job type: ${job.type}`);
     await completeJob(deps.db, job);
   } catch (error) {
@@ -283,3 +354,13 @@ export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: 
 }
 
 export { httpStatus };
+
+/** DEP-06 hygiene: bulk-release expired subdomain holds. The API also
+ *  expires lazily on every read path, so this only keeps the table small
+ *  and the audit picture honest; correctness never depends on it. */
+export async function sweepExpiredReservations(db: Db): Promise<number> {
+  const { rowCount } = await db.query(
+    "UPDATE subdomain_reservations SET status = 'expired' WHERE status = 'active' AND expires_at <= now()",
+  );
+  return rowCount ?? 0;
+}
