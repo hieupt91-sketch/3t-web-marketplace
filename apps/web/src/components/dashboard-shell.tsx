@@ -42,6 +42,7 @@ const NAV: Record<'account' | 'admin' | 'partner', NavItem[]> = {
     { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
     { href: '/admin/settings/contact', labelKey: 'ui.admin.nav.contact_settings', permission: 'settings:manage' },
     { href: '/admin/settings/subdomain-fee', labelKey: 'ui.admin.nav.subdomain_fee_settings', permission: 'settings:manage' },
+    { href: '/admin/settings/payments', labelKey: 'ui.admin.nav.payment_settings', permission: 'settings:manage' },
     { href: '/admin/payments/reconciliation', labelKey: 'ui.admin.nav.reconciliation', permission: 'payment:read' },
     { href: '/admin/payments/refunds', labelKey: 'ui.admin.nav.refunds', permission: 'payment:read' },
     { href: '/admin/support', labelKey: 'ui.admin.nav.support', permission: 'support:read' },

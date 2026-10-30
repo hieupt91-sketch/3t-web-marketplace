@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
 import type { PoolClient } from '@3t/core';
 import {
+  BankTransferProvider,
   buildCleanSiteTree,
   buildSelfhostBundle,
   emitEvent,
@@ -35,6 +36,32 @@ interface QuoteLine {
   label: string;
   interval: 'one_time' | 'monthly' | 'yearly';
   amount_minor: string;
+}
+
+/** Owner-configured bank transfer (settings key 'payment.bank_transfer'). */
+export interface BankTransferSettings {
+  enabled: boolean;
+  bank_name: string;
+  account_number: string;
+  account_holder: string;
+  hub_api_key: string;
+}
+
+export async function loadBankTransferSettings(db: Db): Promise<BankTransferSettings> {
+  // A missing settings row means "not configured yet", never a 500 on checkout.
+  const raw = (await getSetting(db, 'payment.bank_transfer').catch(() => null)) as Partial<BankTransferSettings> | null;
+  return {
+    enabled: raw?.enabled === true,
+    bank_name: typeof raw?.bank_name === 'string' ? raw.bank_name : '',
+    account_number: typeof raw?.account_number === 'string' ? raw.account_number : '',
+    account_holder: typeof raw?.account_holder === 'string' ? raw.account_holder : '',
+    hub_api_key: typeof raw?.hub_api_key === 'string' ? raw.hub_api_key : '',
+  };
+}
+
+/** Bank transfer can be offered only when the owner enabled it AND filled the account in. */
+export function bankTransferAvailable(s: BankTransferSettings): boolean {
+  return s.enabled && s.bank_name.trim() !== '' && s.account_number.trim() !== '' && s.account_holder.trim() !== '';
 }
 
 /**
@@ -196,7 +223,7 @@ export async function processRefundEvent(db: Db, provider: string, rawBody: stri
  * create one entitlement per order item and mark the order paid — all idempotent. A duplicate or
  * out-of-order event never regresses a paid order or duplicates an entitlement (invariant §6.3).
  */
-async function processPaymentEvent(db: Db, provider: string, rawBody: string, event: NormalizedEvent): Promise<'processed' | 'duplicate' | 'ignored' | 'needs_reconciliation'> {
+export async function processPaymentEvent(db: Db, provider: string, rawBody: string, event: NormalizedEvent): Promise<'processed' | 'duplicate' | 'ignored' | 'needs_reconciliation'> {
   const bodyHash = hashToken(rawBody).toString('hex');
   return tx(db, async (client) => {
     const inserted = await client.query(
@@ -417,8 +444,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  // Create a payment session with the configured provider (mock sandbox for now).
-  app.post<{ Params: { id: string } }>('/orders/:id/payment-sessions', async (request, reply) => {
+  // Create a payment session. The buyer may name a provider; the default is
+  // bank transfer when the owner has enabled and configured it, otherwise
+  // the sandbox mock. In production the mock can never be chosen while a
+  // real method is available — nobody may check out for free by naming it.
+  app.post<{ Params: { id: string }; Body: { provider?: string } }>('/orders/:id/payment-sessions', async (request, reply) => {
     const auth = requireUser(request);
     assertId(request.params.id);
     const { rows } = await db.query<{ id: string; buyer_id: string; status: string; total_minor: string; currency: string }>(
@@ -428,7 +458,42 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const o = rows[0];
     if (!o || o.buyer_id !== auth.userId) throw errors.notFound();
     if (o.status !== 'awaiting_payment') throw errors.conflict('order.not_payable');
-    const session = payment.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt: new Date(Date.now() + config.paymentWindowMinutes * 60_000) });
+    const bankSettings = await loadBankTransferSettings(db);
+    const bankAvailable = bankTransferAvailable(bankSettings);
+    const requested = typeof request.body?.provider === 'string' ? request.body.provider : null;
+    const chosen = requested ?? (bankAvailable ? 'bank_transfer' : payment.name);
+    const expiresAt = new Date(Date.now() + config.paymentWindowMinutes * 60_000);
+    if (chosen === 'bank_transfer') {
+      if (!bankAvailable) throw errors.conflict('payment.method_unavailable');
+      const provider = new BankTransferProvider(bankSettings.hub_api_key, config.portalOrigin);
+      // The content code is the attempt's unique reference; regenerate on the
+      // (astronomically unlikely) collision instead of failing the checkout.
+      for (let attemptNo = 0; attemptNo < 3; attemptNo++) {
+        const session = provider.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt });
+        const instructions = {
+          bank_name: bankSettings.bank_name,
+          account_number: bankSettings.account_number,
+          account_holder: bankSettings.account_holder,
+          content_code: session.providerRef,
+          amount_minor: o.total_minor,
+          currency: o.currency,
+        };
+        try {
+          await db.query(
+            "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json) VALUES ($1, 'bank_transfer', $2, $3, $4, 'pending', $5::jsonb)",
+            [o.id, session.providerRef, o.total_minor, o.currency, JSON.stringify(instructions)],
+          );
+        } catch (err) {
+          if ((err as { code?: string }).code === '23505' && attemptNo < 2) continue;
+          throw err;
+        }
+        return reply.status(201).send({ data: { provider: 'bank_transfer', sandbox: false, provider_ref: session.providerRef, pay_url: session.payUrl, expires_at: session.expiresAt.toISOString(), instructions } });
+      }
+      throw errors.conflict('payment.method_unavailable');
+    }
+    if (chosen !== payment.name) throw errors.conflict('payment.method_unavailable');
+    if (config.env === 'production' && bankAvailable) throw errors.conflict('payment.method_unavailable');
+    const session = payment.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt });
     await db.query(
       "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, $2, $3, $4, $5, 'pending')",
       [o.id, payment.name, session.providerRef, o.total_minor, o.currency],
@@ -453,11 +518,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     assertId(request.params.id);
     const order = await db.query('SELECT id FROM orders WHERE id = $1 AND buyer_id = $2', [request.params.id, auth.userId]);
     if (!order.rows[0]) throw errors.notFound();
-    const { rows } = await db.query<{ id: string; provider: string; provider_ref: string | null; amount_minor: string; currency: string; status: string; created_at: Date }>(
-      'SELECT id, provider, provider_ref, amount_minor::text, currency, status, created_at FROM payment_attempts WHERE order_id = $1 ORDER BY created_at DESC',
+    const { rows } = await db.query<{ id: string; provider: string; provider_ref: string | null; amount_minor: string; currency: string; status: string; created_at: Date; instructions_json: unknown }>(
+      'SELECT id, provider, provider_ref, amount_minor::text, currency, status, created_at, instructions_json FROM payment_attempts WHERE order_id = $1 ORDER BY created_at DESC',
       [request.params.id],
     );
-    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString() })), page: { next_cursor: null, has_more: false } };
+    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
   });
 
   // Buyer requests a refund (B05). Amount must not exceed the not-yet-refunded remainder;
@@ -586,8 +651,22 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   // exact raw bytes (a raw-body capture) wired in at the integration milestone.
   app.post('/payments/webhooks/:provider', async (request: FastifyRequest, reply) => {
     const providerName = (request.params as { provider: string }).provider;
-    if (providerName !== payment.name) throw errors.notFound();
     const raw = typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
+    // Bank transfer hub (SePay-compatible): the provider is configured from
+    // admin settings at request time, so rotating the hub key needs no deploy.
+    if (providerName === 'bank_transfer') {
+      const settings = await loadBankTransferSettings(db);
+      const provider = new BankTransferProvider(settings.hub_api_key, config.portalOrigin);
+      let event: NormalizedEvent;
+      try {
+        event = provider.verifyWebhook(raw, request.headers as Record<string, string | undefined>);
+      } catch {
+        throw errors.badRequest('payment.webhook_invalid');
+      }
+      const outcome = await processPaymentEvent(db, 'bank_transfer', raw, event);
+      return reply.status(200).send({ received: true, outcome });
+    }
+    if (providerName !== payment.name) throw errors.notFound();
     let event: NormalizedEvent;
     try {
       event = payment.verifyWebhook(raw, request.headers as Record<string, string | undefined>);

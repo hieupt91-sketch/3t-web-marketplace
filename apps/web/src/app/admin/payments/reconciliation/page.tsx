@@ -23,12 +23,22 @@ interface ReconEvent {
   processing_status: string;
   received_at: string;
 }
+interface PendingTransfer {
+  attempt_id: string;
+  order_id: string;
+  content_code: string | null;
+  amount_minor: string;
+  currency: string;
+  buyer_email: string;
+  created_at: string;
+}
 
 /** A12 — reconciliation queue. Resolving never edits raw provider events; it audits the decision. */
 function ReconciliationInner() {
   const { t, dt, locale } = useT();
   const [orders, setOrders] = useState<ReconOrder[]>([]);
   const [events, setEvents] = useState<ReconEvent[]>([]);
+  const [transfers, setTransfers] = useState<PendingTransfer[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [reason, setReason] = useState('');
@@ -37,11 +47,20 @@ function ReconciliationInner() {
   const [done, setDone] = useState(false);
 
   const load = useCallback(async () => {
-    const res = await api<{ orders: ReconOrder[]; unmatched_events: ReconEvent[] }>('/admin/reconciliation');
+    const res = await api<{ orders: ReconOrder[]; unmatched_events: ReconEvent[]; pending_transfers: PendingTransfer[] }>('/admin/reconciliation');
     if (!res.ok) return setError(res.error);
-    setOrders(res.data.orders); setEvents(res.data.unmatched_events); setLoaded(true);
+    setOrders(res.data.orders); setEvents(res.data.unmatched_events); setTransfers(res.data.pending_transfers ?? []); setLoaded(true);
   }, []);
   useEffect(() => { void load(); }, [load]);
+
+  async function confirmTransfer(attemptId: string) {
+    setBusy(attemptId); setDone(false);
+    const res = await api(`/admin/payments/attempts/${attemptId}/confirm`, { method: 'POST', body: {} });
+    setBusy(null);
+    if (!res.ok) return setError(res.error);
+    setDone(true);
+    void load();
+  }
 
   async function resolve(orderId: string) {
     setBusy(orderId); setDone(false);
@@ -81,6 +100,27 @@ function ReconciliationInner() {
                   </button>
                 </div>
                 <ul>{o.attempts.map((a, i) => <li key={i} className="muted">{a.provider_ref ?? '—'} · {formatMoney({ amount_minor: a.amount_minor, currency: a.currency }, locale)} · {a.status}</li>)}</ul>
+              </td>
+            </tr>
+          ))}</tbody>
+        </table></div>
+      )}
+      <h2>{t('ui.admin.pending_transfers')}</h2>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.admin.pending_transfers_hint')}</p>
+      {transfers.length === 0 ? (
+        <EmptyState title={t('ui.admin.pending_transfers_empty')}><p>—</p></EmptyState>
+      ) : (
+        <div className="table-wrap"><table className="table">
+          <thead><tr><th>{t('ui.checkout.transfer_content')}</th><th>{t('ui.checkout.total')}</th><th>{t('ui.admin.buyer')}</th><th></th></tr></thead>
+          <tbody>{transfers.map((p) => (
+            <tr key={p.attempt_id}>
+              <td className="mono">{p.content_code ?? '—'}</td>
+              <td className="tabular">{formatMoney({ amount_minor: p.amount_minor, currency: p.currency }, locale)}</td>
+              <td>{p.buyer_email}<br /><span className="muted">{dt(p.created_at)}</span></td>
+              <td>
+                <button type="button" className="button" disabled={busy === p.attempt_id} onClick={() => void confirmTransfer(p.attempt_id)}>
+                  {busy === p.attempt_id ? t('ui.state.saving') : t('ui.admin.confirm_received')}
+                </button>
               </td>
             </tr>
           ))}</tbody>

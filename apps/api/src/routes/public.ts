@@ -209,6 +209,12 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const subdomain_fee = feeRaw
       ? { amount_minor: typeof feeRaw.amount_minor === 'number' ? feeRaw.amount_minor : null, period: feeRaw.period === 'monthly' ? 'monthly' : 'once' }
       : null;
+    const payRow = await db.query<{ value_json: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.bank_transfer'");
+    const payRaw = payRow.rows[0]?.value_json;
+    const bank_transfer_enabled = payRaw?.enabled === true
+      && typeof payRaw.bank_name === 'string' && payRaw.bank_name.trim() !== ''
+      && typeof payRaw.account_number === 'string' && payRaw.account_number.trim() !== ''
+      && typeof payRaw.account_holder === 'string' && payRaw.account_holder.trim() !== '';
     return {
       data: {
         brand: { name: 'webmaket' },
@@ -218,6 +224,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         terms_version: terms.rows[0]?.value_json.current ?? null,
         contact,
         subdomain_fee,
+        payment: { bank_transfer: bank_transfer_enabled },
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
       },
     };

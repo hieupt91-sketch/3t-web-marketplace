@@ -1,4 +1,4 @@
-import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual, createHash } from 'node:crypto';
 
 /**
  * Payment provider abstraction (docs/08 §1). A concrete provider is chosen at the integration
@@ -153,6 +153,102 @@ export class MockPaymentProvider implements PaymentProvider {
       amountMinor: String(parsed.amount_minor),
       currency: parsed.currency,
       occurredAt: parsed.occurred_at ? new Date(parsed.occurred_at) : new Date(),
+    };
+  }
+}
+
+/**
+ * Bank transfer settled through a transaction hub (SePay-compatible).
+ *
+ * The buyer transfers to the owner's bank account with a per-order content
+ * code; the hub (which watches the bank account) posts the incoming
+ * transaction to the platform webhook, authenticated by an API key the
+ * owner configures in admin settings. The provider reference IS the
+ * content code the buyer must write, so a hub report maps straight back
+ * to the payment attempt. Amounts reported by hubs are whole dong, which
+ * is exactly this platform's minor unit for VND.
+ *
+ * Payloads that are authentic but cannot settle anything (outgoing
+ * transfers, missing code) normalize to a `pending` event with an empty
+ * reference, which the settlement pipeline records and ignores — it must
+ * never fail or settle a real attempt by accident.
+ */
+export class BankTransferProvider implements PaymentProvider {
+  readonly name = 'bank_transfer';
+  readonly sandbox = false;
+  constructor(
+    private readonly hubApiKey: string,
+    private readonly portalOrigin: string,
+  ) {}
+
+  /** Content code the buyer writes in the transfer note: WM + 10 hex chars. */
+  static newContentCode(): string {
+    return `WM${randomUUID().replace(/-/g, '').slice(0, 10).toUpperCase()}`;
+  }
+
+  createSession(input: { orderId: string; amountMinor: string; currency: string; returnUrl: string; expiresAt: Date }): PaymentSession {
+    return {
+      providerRef: BankTransferProvider.newContentCode(),
+      // There is no external pay page; the buyer stays on the portal pay
+      // page, which renders the transfer instructions for this session.
+      payUrl: `${this.portalOrigin}/checkout/orders/${input.orderId}/pay`,
+      expiresAt: input.expiresAt,
+    };
+  }
+
+  private authed(headers: Record<string, string | undefined>): boolean {
+    if (!this.hubApiKey) return false;
+    const expected = Buffer.from(this.hubApiKey);
+    const candidates = [
+      headers['authorization']?.replace(/^Apikey\s+/i, ''),
+      headers['authorization']?.replace(/^Bearer\s+/i, ''),
+      headers['x-hub-secret'],
+    ];
+    return candidates.some((raw) => {
+      if (!raw) return false;
+      const provided = Buffer.from(raw.trim());
+      return provided.length === expected.length && timingSafeEqual(provided, expected);
+    });
+  }
+
+  verifyWebhook(rawBody: string, headers: Record<string, string | undefined>): NormalizedEvent {
+    if (!this.authed(headers)) throw new WebhookVerificationError('bad_hub_key');
+    let parsed: Record<string, unknown>;
+    try {
+      parsed = JSON.parse(rawBody) as Record<string, unknown>;
+    } catch {
+      throw new WebhookVerificationError('invalid_json');
+    }
+    const fallbackId = `hubevt_${createHash('sha256').update(rawBody).digest('hex').slice(0, 32)}`;
+    const eventId = String(parsed.id ?? parsed.transaction_id ?? parsed.referenceCode ?? fallbackId);
+    const ignored: NormalizedEvent = {
+      providerEventId: eventId,
+      providerRef: '',
+      status: 'pending',
+      amountMinor: '0',
+      currency: 'VND',
+      occurredAt: new Date(),
+    };
+    // SePay shape: transferType tells direction; only incoming money settles.
+    if (typeof parsed.transferType === 'string' && parsed.transferType !== 'in') return ignored;
+    const content = typeof parsed.content === 'string' ? parsed.content : '';
+    let code = typeof parsed.code === 'string' ? parsed.code.trim().toUpperCase() : '';
+    if (!/^WM[0-9A-F]{10}$/.test(code)) {
+      const found = content.toUpperCase().match(/WM[0-9A-F]{10}/);
+      code = found ? found[0] : '';
+    }
+    if (!code) return ignored;
+    const rawAmount = parsed.transferAmount ?? parsed.amount_minor ?? parsed.amount;
+    const amount = typeof rawAmount === 'number' ? Math.trunc(rawAmount) : Number.parseInt(String(rawAmount ?? ''), 10);
+    if (!Number.isFinite(amount) || amount <= 0) return ignored;
+    const occurred = typeof parsed.transactionDate === 'string' ? new Date(parsed.transactionDate) : new Date();
+    return {
+      providerEventId: eventId,
+      providerRef: code,
+      status: 'settled',
+      amountMinor: String(amount),
+      currency: 'VND',
+      occurredAt: Number.isNaN(occurred.getTime()) ? new Date() : occurred,
     };
   }
 }

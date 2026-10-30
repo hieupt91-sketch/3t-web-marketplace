@@ -3,7 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { tx, writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
-import { fulfillOrder, recomputeOrderRefundStatus } from './commerce.ts';
+import { fulfillOrder, processPaymentEvent, recomputeOrderRefundStatus } from './commerce.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function assertId(id: string) {
@@ -34,13 +34,64 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
       `SELECT order_id, provider_ref, amount_minor::text, currency, status FROM payment_attempts
        WHERE order_id IN (SELECT id FROM orders WHERE status = 'needs_reconciliation') ORDER BY created_at DESC`,
     );
+    // Bank transfers still waiting for money: staff match these against the
+    // bank statement (content code + amount) until the hub reports them.
+    const pendingTransfers = await db.query<{ id: string; order_id: string; provider_ref: string | null; amount_minor: string; currency: string; created_at: Date; buyer_email: string; order_status: string }>(
+      `SELECT pa.id, pa.order_id, pa.provider_ref, pa.amount_minor::text, pa.currency, pa.created_at, u.email_normalized AS buyer_email, o.status AS order_status
+       FROM payment_attempts pa
+       JOIN orders o ON o.id = pa.order_id
+       JOIN users u ON u.id = o.buyer_id
+       WHERE pa.provider = 'bank_transfer' AND pa.status = 'pending' AND o.status = 'awaiting_payment'
+       ORDER BY pa.created_at ASC LIMIT 100`,
+    );
     return {
       data: {
         orders: orders.rows.map((o) => ({ id: o.id, buyer_id: o.buyer_id, total_minor: o.total_minor, currency: o.currency, created_at: o.created_at.toISOString(), attempts: attempts.rows.filter((a) => a.order_id === o.id) })),
         unmatched_events: events.rows.map((e) => ({ id: e.id, provider: e.provider, provider_event_id: e.provider_event_id, order_id: e.order_id, processing_status: e.processing_status, received_at: e.received_at.toISOString() })),
+        pending_transfers: pendingTransfers.rows.map((p) => ({ attempt_id: p.id, order_id: p.order_id, content_code: p.provider_ref, amount_minor: p.amount_minor, currency: p.currency, buyer_email: p.buyer_email, created_at: p.created_at.toISOString() })),
       },
     };
   });
+
+  // Manual confirmation of a bank transfer (the fallback when no hub report
+  // arrives): the staffer has seen the money in the bank account and settles
+  // the attempt through the very same verified-event pipeline as a hub
+  // webhook, so fulfilment, dedupe and audit behave identically.
+  app.post<{ Params: { id: string }; Body: { note?: string } }>(
+    '/payments/attempts/:id/confirm',
+    { schema: { body: { type: 'object', additionalProperties: false, properties: { note: { type: 'string', maxLength: 500 } } } } },
+    async (request) => {
+      const auth = requirePermission(request, 'payment:confirm');
+      assertId(request.params.id);
+      const { rows } = await db.query<{ id: string; provider: string; provider_ref: string | null; amount_minor: string; currency: string; status: string }>(
+        'SELECT id, provider, provider_ref, amount_minor::text, currency, status FROM payment_attempts WHERE id = $1',
+        [request.params.id],
+      );
+      const attempt = rows[0];
+      if (!attempt) throw errors.notFound();
+      if (attempt.provider !== 'bank_transfer' || !attempt.provider_ref) throw errors.conflict('payment.not_confirmable');
+      if (attempt.status !== 'pending') throw errors.conflict('payment.not_pending');
+      const raw = JSON.stringify({ manual: true, attempt_id: attempt.id, confirmed_by: auth.userId });
+      const outcome = await processPaymentEvent(db, 'bank_transfer', raw, {
+        providerEventId: `manual_${randomUUID()}`,
+        providerRef: attempt.provider_ref,
+        status: 'settled',
+        amountMinor: attempt.amount_minor,
+        currency: attempt.currency,
+        occurredAt: new Date(),
+      });
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'payment.manual_confirmed',
+        resourceType: 'payment_attempt',
+        resourceId: attempt.id,
+        traceId: request.id,
+        diff: { outcome, note: request.body?.note ?? '' },
+      });
+      return { data: { id: attempt.id, outcome } };
+    },
+  );
 
   // Resolve a needs_reconciliation order: 'paid' fulfils it (entitlements, once, via the
   // same fulfillOrder used by payment settlement); 'cancelled' closes it without fulfilment.
