@@ -27,30 +27,23 @@ export function LanguageSwitch() {
   }
 
   return (
-    <div role="group" aria-label={t('ui.language.label')} className="row" style={{ gap: 4 }}>
-      {LOCALES.filter((l) => l.enabled).map((l, index) => (
-        <span key={l.code} className="row" style={{ gap: 4 }}>
-          {index > 0 ? <span aria-hidden="true">/</span> : null}
-          <button
-            type="button"
-            lang={l.code}
-            onClick={() => void choose(l.code)}
-            aria-pressed={l.code === locale}
-            style={{
-              background: 'none',
-              border: 0,
-              padding: '0 4px',
-              minHeight: 44,
-              font: 'inherit',
-              cursor: 'pointer',
-              color: l.code === locale ? 'var(--color-text)' : 'var(--color-primary)',
-              fontWeight: l.code === locale ? 700 : 400,
-              textDecoration: l.code === locale ? 'none' : 'underline',
-            }}
-          >
-            {l.displayNameNative}
-          </button>
-        </span>
+    <div role="group" aria-label={t('ui.language.label')} className="lang-switch">
+      <svg viewBox="0 0 24 24" aria-hidden="true" width="17" height="17" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="lang-switch__globe">
+        <circle cx="12" cy="12" r="10" />
+        <path d="M2 12h20" />
+        <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+      </svg>
+      {LOCALES.filter((l) => l.enabled).map((l) => (
+        <button
+          key={l.code}
+          type="button"
+          lang={l.code}
+          onClick={() => void choose(l.code)}
+          aria-pressed={l.code === locale}
+          className={`lang-switch__option${l.code === locale ? ' lang-switch__option--active' : ''}`}
+        >
+          {l.code.toUpperCase()}
+        </button>
       ))}
     </div>
   );

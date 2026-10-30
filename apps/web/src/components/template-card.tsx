@@ -29,25 +29,28 @@ export function TemplateCard({ template, locale, comparable = false }: { templat
           <span style={{ color: '#ffffff', fontWeight: 700, fontSize: 18, textAlign: 'center', padding: 'var(--space-4)' }}>{template.title}</span>
         )}
         {template.demo.available && template.demo.url ? <LiveThumb url={template.demo.url} title={template.title} /> : null}
+        {template.translation_status === 'fallback' ? <span className="badge badge--warning template-card__badge" lang="vi">{t('ui.catalog.fallback_vi')}</span> : null}
+        {comparable ? <CompareToggle slug={template.slug} locale={locale} chip /> : null}
       </div>
-      <h3 style={{ margin: 0 }}>
+      <h3 className="template-card__title" style={{ margin: 0 }}>
         <Link href={`/${locale}/templates/${template.slug}`}>{template.title}</Link>
       </h3>
-      {template.summary ? <p className="muted" style={{ margin: 0 }}>{template.summary}</p> : null}
-      {cheapest ? (
-        <p style={{ margin: 0 }} className="tabular">
-          {t('ui.catalog.price_from')} <strong>{formatMoney(cheapest, locale)}</strong>
-        </p>
-      ) : null}
-      <p style={{ margin: 0 }} className="muted">
+      <p className="template-card__price tabular" style={{ margin: 0 }}>
+        {cheapest ? (
+          <>
+            <span>{t('ui.catalog.price_from')}</span>
+            <strong>{formatMoney(cheapest, locale)}</strong>
+          </>
+        ) : null}
+      </p>
+      <p className="muted template-card__summary" style={{ margin: 0 }} aria-hidden={template.summary ? undefined : true}>
+        {template.summary ?? ''}
+      </p>
+      <p className="muted template-card__meta" style={{ margin: 0 }}>
         {t('ui.catalog.content_locales', { locales: template.content_locales.join(', ').toUpperCase() })}
       </p>
-      {template.translation_status === 'fallback' ? <p className="badge badge--warning" lang="vi">{t('ui.catalog.fallback_vi')}</p> : null}
-      <p className="row" style={{ margin: 0 }}>
-        <SaveButton templateId={template.id} locale={locale} />
-        {comparable ? <CompareToggle slug={template.slug} locale={locale} /> : null}
-      </p>
-      <div className="row">
+      <div className="row template-card__actions" style={{ marginTop: 'auto' }}>
+        <SaveButton templateId={template.id} locale={locale} iconOnly />
         {template.demo.available ? <Link className="button button--secondary" href={`/${locale}/demo/${template.slug}`}>{t('ui.catalog.view_demo')}</Link> : null}
         <Link className="button" href={`/${locale}/templates/${template.slug}`}>{t('ui.catalog.view_detail')}</Link>
       </div>

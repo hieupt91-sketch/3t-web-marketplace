@@ -167,17 +167,97 @@ h3 {
 }
 .site-nav a {
   text-decoration: none;
-  min-height: 44px;
+  min-height: 48px;
   display: inline-flex;
   align-items: center;
   color: var(--color-text);
 }
+.site-nav a:not(.button) {
+  font-weight: 600;
+  padding-inline: var(--space-3);
+  border-radius: var(--radius-pill);
+  transition: background var(--motion), color var(--motion);
+}
 .site-nav a:not(.button):hover {
   color: var(--color-primary);
-  text-decoration: underline;
-  text-decoration-color: var(--color-primary-violet);
-  text-underline-offset: 4px;
-  text-decoration-thickness: 2px;
+  background: var(--color-bg-accent);
+}
+.brand__name {
+  font-size: 19px;
+  font-weight: 800;
+  letter-spacing: 0.06em;
+}
+/* Header icon shortcuts (saved templates, orders) with a count badge. */
+.header-icons {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-1);
+}
+.site-nav a.icon-button {
+  position: relative;
+  width: 48px;
+  height: 48px;
+  padding: 0;
+  justify-content: center;
+  border-radius: 50%;
+  color: var(--color-text);
+}
+.site-nav a.icon-button:hover {
+  background: var(--color-bg-accent);
+  color: var(--color-primary);
+}
+.icon-button__badge {
+  position: absolute;
+  top: 4px;
+  right: 2px;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 5px;
+  border-radius: var(--radius-pill);
+  background: var(--color-gradient);
+  color: var(--color-on-primary);
+  font-size: 11px;
+  font-weight: 700;
+  line-height: 18px;
+  text-align: center;
+}
+/* Language switch: a compact segmented control (globe + VI | EN). */
+.lang-switch {
+  display: inline-flex;
+  align-items: center;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+}
+.lang-switch__globe {
+  margin-inline: 5px 2px;
+  flex: none;
+}
+.lang-switch__option {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: none;
+  font: inherit;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--color-text-muted);
+  cursor: pointer;
+  transition: background var(--motion), color var(--motion);
+}
+.lang-switch__option:hover {
+  color: var(--color-primary);
+}
+.lang-switch__option--active {
+  background: var(--color-gradient);
+  color: var(--color-on-primary);
+}
+.lang-switch__option--active:hover {
+  color: var(--color-on-primary);
 }
 .container {
   max-width: var(--container-store);
@@ -661,8 +741,114 @@ table.table {
 }
 
 .template-card {
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: var(--space-3);
+  height: 100%;
+}
+/* Fixed two-line slots keep every card in a row on the same grid: titles
+ * and summaries may differ in length, but the price, save and action rows
+ * below them always land at the same heights. */
+.template-card__title {
+  line-height: 1.35;
+  height: calc(1.35em * 2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.template-card__summary {
+  font-size: 14px;
+  line-height: 1.5;
+  height: calc(1.5em * 2);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+/* The price is the card's decision number: it sits right under the
+ * title, larger and in the brand colour, in a fixed-height slot. */
+.template-card__price {
+  min-height: 30px;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+.template-card__price span {
+  font-size: 14px;
+  color: var(--color-text-muted);
+}
+.template-card__price strong {
+  font-size: 21px;
+  font-weight: 800;
+  color: var(--color-primary);
+  letter-spacing: -0.01em;
+}
+.template-card__meta {
+  font-size: 13px;
+}
+/* The fallback-language note rides on the cover as a chip instead of
+ * taking a row of its own (which used to push the buttons down). */
+.template-card__badge {
+  position: absolute;
+  top: var(--space-2);
+  left: var(--space-2);
+  z-index: 2;
+  box-shadow: var(--shadow-card);
+}
+/* One action row per card, never wrapping: save (icon), demo, detail —
+ * pinned to the card's bottom edge so rows line up across a shelf. */
+.template-card__actions {
+  flex-wrap: nowrap;
+}
+.template-card__actions .button {
+  flex: 1;
+  white-space: nowrap;
+  padding-inline: var(--space-2);
+}
+.template-card__actions .save-button--icon {
+  flex: none;
+  width: 48px;
+  min-width: 48px;
+  padding: 0;
+}
+/* CAT-09 compare toggle as a cover chip (catalog cards). */
+.compare-chip-wrap {
+  position: absolute;
+  top: var(--space-2);
+  right: var(--space-2);
+  z-index: 2;
+}
+.compare-chip {
+  min-height: 32px;
+  padding: 0 var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--color-border);
+  background: rgb(255 255 255 / 0.94);
+  box-shadow: var(--shadow-card);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--color-text);
+  cursor: pointer;
+}
+.compare-chip[aria-pressed='true'] {
+  background: var(--color-gradient);
+  border-color: transparent;
+  color: var(--color-on-primary);
+}
+.compare-chip__note {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  white-space: nowrap;
+  padding: var(--space-1) var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-card);
+  font-size: 12px;
+  color: var(--color-text);
 }
 .template-card__image {
   position: relative;
@@ -774,25 +960,102 @@ table.table {
 .trust-icon svg[fill="none"] {
   fill: none;
 }
-.category-card {
-  text-decoration: none;
-  color: inherit;
-}
-/* Purpose card photo: a real template photo of the industry; the gradient
- *  behind it shows only when that photo fails to load. */
-.purpose-photo {
-  aspect-ratio: 16 / 9;
-  border-radius: 12px;
+/* Homepage finder: one compact styled band with a purpose tile rail —
+ * a single row of small photo tiles instead of eight full-size cards,
+ * so the picker stays a fraction of its former page height. */
+.finder-band {
+  position: relative;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  background: linear-gradient(180deg, var(--color-bg-accent), var(--color-surface) 72%);
+  padding: var(--space-5);
   overflow: hidden;
 }
-.purpose-photo img {
+.finder-band::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 3px;
+  background: var(--color-gradient);
+}
+.purpose-rail {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: var(--space-3);
+}
+.purpose-tile {
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  min-width: 0;
+  overflow: hidden;
+  padding: var(--space-2);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-input);
+  background: var(--color-surface);
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  transition: box-shadow var(--motion), transform var(--motion), border-color var(--motion);
+}
+.purpose-tile:hover {
+  transform: translateY(-2px);
+  box-shadow: var(--shadow-card-hover);
+  border-color: var(--color-primary);
+}
+.purpose-tile__photo {
+  aspect-ratio: 4 / 3;
+  border-radius: 8px;
+  overflow: hidden;
+  display: block;
+}
+.purpose-tile__photo img {
   width: 100%;
   height: 100%;
   object-fit: cover;
   display: block;
 }
-.category-card:hover {
-  text-decoration: none;
+.purpose-tile__label {
+  font-weight: 700;
+  font-size: 14px;
+  line-height: 1.3;
+}
+.purpose-tile__desc {
+  font-size: 12.5px;
+  color: var(--color-text-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 100%;
+}
+.purpose-tile--active {
+  background: var(--color-gradient);
+  border-color: transparent;
+  color: var(--color-on-primary);
+  box-shadow: var(--shadow-button);
+}
+.purpose-tile--active .purpose-tile__desc {
+  color: rgb(255 255 255 / 0.85);
+}
+@media (max-width: 1023px) {
+  .purpose-rail {
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+  }
+}
+@media (max-width: 639px) {
+  .purpose-rail {
+    display: flex;
+    overflow-x: auto;
+    scroll-snap-type: x mandatory;
+    margin-inline: calc(-1 * var(--space-5));
+    padding-inline: var(--space-5);
+    padding-bottom: var(--space-2);
+  }
+  .purpose-tile {
+    flex: 0 0 128px;
+    scroll-snap-align: start;
+  }
 }
 .step-number {
   display: inline-flex;
@@ -868,26 +1131,78 @@ table.table {
   border-radius: var(--radius-card);
   border: 1px solid rgb(255 255 255 / 0.5);
   box-shadow: 0 24px 48px rgb(15 23 42 / 0.35);
+  aspect-ratio: 3 / 2;
 }
-.hero-frame img {
-  display: block;
+/* Rotating showcase slides: crossfade + a slow Ken Burns drift. The
+ * first slide is the no-JS fallback; the active one always sits on top
+ * fully opaque. */
+.hero-slide {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transform: scale(1.02);
+  transition: opacity 900ms ease, transform 6000ms ease;
+}
+.hero-slide:first-child {
+  opacity: 1;
+}
+.hero-slide--active {
+  opacity: 1;
+  transform: scale(1.09);
+}
+.hero-dots {
+  position: absolute;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 6px;
+  z-index: 3;
+}
+.hero-dot {
+  width: 8px;
+  height: 8px;
+  padding: 0;
+  border: 0;
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 0.55);
+  cursor: pointer;
+  transition: width var(--motion), background var(--motion);
+}
+.hero-dot--active {
+  width: 24px;
+  background: #ffffff;
 }
 .float-card {
   position: absolute;
   z-index: 2;
   width: 150px;
+  aspect-ratio: 3 / 2;
   overflow: hidden;
   border-radius: 14px;
   border: 3px solid #ffffff;
   box-shadow: var(--shadow-card-hover);
   animation: hero-float 6s ease-in-out infinite;
 }
-.float-card img {
-  display: block;
+.float-slide {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  height: auto;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+  opacity: 0;
+  transition: opacity 900ms ease;
+}
+.float-slide:first-child {
+  opacity: 1;
+}
+.float-slide--active {
+  opacity: 1;
 }
 .float-card--a {
   left: 0;

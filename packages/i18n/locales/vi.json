@@ -1462,4 +1462,6 @@
   "ui.checkout.redirect_manual": "Tới trang thanh toán"
 ,
   "ui.home.template_count": "{count} mẫu"
+,
+  "ui.nav.orders": "Đơn hàng"
 }

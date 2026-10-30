@@ -1462,4 +1462,6 @@
   "ui.checkout.redirect_manual": "Go to the payment page"
 ,
   "ui.home.template_count": "{count} templates"
+,
+  "ui.nav.orders": "Orders"
 }

@@ -9,9 +9,9 @@ import { TemplateCard } from '@/components/template-card';
 import { EmptyState, ErrorState, Loading } from '@/components/ui';
 import { classifyIntent, type FinderCategory } from '@/lib/finder-intent';
 
-/** Purpose picker cards: each shows a real photo from a representative
- *  template of its industry (all 96 templates ship a hero photo); the
- *  gradient behind it is only the fallback when that photo fails to load. */
+/** Purpose tiles: each shows a real photo from a representative template
+ *  of its industry (all 96 templates ship a hero photo); the gradient
+ *  behind it is only the fallback when that photo fails to load. */
 const PURPOSES: { code: FinderCategory; a: string; b: string; rep: string }[] = [
   { code: 'landing', a: '#1d4ed8', b: '#7c3aed', rep: 'landing-saas' },
   { code: 'business', a: '#0f766e', b: '#0ea5e9', rep: 'phong-kham' },
@@ -33,6 +33,10 @@ const PURPOSES: { code: FinderCategory; a: string; b: string; rep: string }[] = 
  * catalog API and TemplateCard, and "view all" opens the same query in the
  * full catalog. Templates are display pages, so the finder also sets that
  * expectation and points admin needs at the detail-page advisor.
+ *
+ * Presentation: a compact styled band with a one-row tile rail (owner
+ * request) instead of eight full-size photo cards — the picker takes a
+ * fraction of the page height it used to, and results render below it.
  */
 export function TemplateFinder() {
   const { t, locale } = useT();
@@ -82,41 +86,42 @@ export function TemplateFinder() {
   const allHref = `/${locale}/templates?${new URLSearchParams({ ...(lastQuery.category ? { category: lastQuery.category } : {}), ...(lastQuery.q ? { q: lastQuery.q } : {}) })}`;
 
   return (
-    <section className="stack">
-      <h2 style={{ margin: 0 }}>{t('ui.home.purpose_title')}</h2>
-      <p className="muted" style={{ margin: 0 }}>{t('ui.home.purpose_lead')}</p>
-      <div className="grid-cards">
-        {PURPOSES.map((purpose) => (
-          <button
-            key={purpose.code}
-            type="button"
-            className="card category-card"
-            aria-pressed={selected === purpose.code}
-            style={{ textAlign: 'left', cursor: 'pointer', font: 'inherit', color: 'inherit', ...(selected === purpose.code ? { outline: '2px solid #1d4ed8' } : {}) }}
-            onClick={() => pickPurpose(purpose.code)}
-          >
-            <div className="purpose-photo" aria-hidden="true" style={{ background: `linear-gradient(135deg, ${purpose.a}, ${purpose.b})` }}>
-              <img src={`/api/v1/templates/${purpose.rep}/preview-image`} alt="" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
-            </div>
-            <h3 style={{ margin: 0 }}>{t(`ui.category.${purpose.code}`)}</h3>
-            <p className="muted" style={{ margin: 0 }}>{t(`ui.home.purpose_${purpose.code}`)}</p>
-          </button>
-        ))}
-      </div>
-      <form className="search" onSubmit={submitText} role="search">
-        <label htmlFor="finder-need" className="visually-hidden">{t('ui.finder.input_label')}</label>
-        <input
-          id="finder-need"
-          className="input"
-          type="search"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          placeholder={t('ui.finder.input_placeholder')}
-        />
-        <button className="button" type="submit" disabled={loading}>{loading ? t('ui.state.saving') : t('ui.finder.search')}</button>
-      </form>
-      {hint ? <p style={{ margin: 0 }}>{t('ui.finder.need_hint')}</p> : null}
-      {understood ? <p style={{ margin: 0 }}>{t('ui.finder.understood', { category: t(`ui.category.${understood}`) })}</p> : null}
+    <>
+      <section className="stack finder-band">
+        <h2 style={{ margin: 0 }}>{t('ui.home.purpose_title')}</h2>
+        <p className="muted" style={{ margin: 0 }}>{t('ui.home.purpose_lead')}</p>
+        <div className="purpose-rail">
+          {PURPOSES.map((purpose) => (
+            <button
+              key={purpose.code}
+              type="button"
+              className={`purpose-tile${selected === purpose.code ? ' purpose-tile--active' : ''}`}
+              aria-pressed={selected === purpose.code}
+              onClick={() => pickPurpose(purpose.code)}
+            >
+              <span className="purpose-tile__photo" aria-hidden="true" style={{ background: `linear-gradient(135deg, ${purpose.a}, ${purpose.b})` }}>
+                <img src={`/api/v1/templates/${purpose.rep}/preview-image`} alt="" loading="lazy" onError={(e) => { e.currentTarget.style.display = 'none'; }} />
+              </span>
+              <span className="purpose-tile__label">{t(`ui.category.${purpose.code}`)}</span>
+              <span className="purpose-tile__desc" title={t(`ui.home.purpose_${purpose.code}`)}>{t(`ui.home.purpose_${purpose.code}`)}</span>
+            </button>
+          ))}
+        </div>
+        <form className="search" onSubmit={submitText} role="search">
+          <label htmlFor="finder-need" className="visually-hidden">{t('ui.finder.input_label')}</label>
+          <input
+            id="finder-need"
+            className="input"
+            type="search"
+            value={text}
+            onChange={(e) => setText(e.target.value)}
+            placeholder={t('ui.finder.input_placeholder')}
+          />
+          <button className="button" type="submit" disabled={loading}>{loading ? t('ui.state.saving') : t('ui.finder.search')}</button>
+        </form>
+        {hint ? <p style={{ margin: 0 }}>{t('ui.finder.need_hint')}</p> : null}
+        {understood ? <p style={{ margin: 0 }}>{t('ui.finder.understood', { category: t(`ui.category.${understood}`) })}</p> : null}
+      </section>
       {loading ? <Loading /> : null}
       {error ? <ErrorState error={error} onRetry={() => void runSearch(lastQuery.category, lastQuery.q)} /> : null}
       {!loading && !error && results ? (
@@ -136,6 +141,6 @@ export function TemplateFinder() {
         )
       ) : null}
       <p className="muted" style={{ margin: 0 }}>{t('ui.finder.note_display')}</p>
-    </section>
+    </>
   );
 }

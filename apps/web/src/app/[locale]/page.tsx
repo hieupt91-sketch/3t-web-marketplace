@@ -6,6 +6,7 @@ import { TemplateCard } from '@/components/template-card';
 import { TemplateFinder } from '@/components/template-finder';
 import { DemoCatalog } from '@/components/demo-catalog';
 import { CategoryMarquee } from '@/components/category-marquee';
+import { HeroShowcase, type HeroSlide } from '@/components/hero-showcase';
 
 type Params = { params: Promise<{ locale: Locale }> };
 
@@ -49,6 +50,26 @@ export default async function Home({ params }: Params) {
     ...CATEGORY_ORDER.filter((c) => byCategory.has(c)),
     ...[...byCategory.keys()].filter((c) => !CATEGORY_ORDER.includes(c)).sort(),
   ];
+  // Hero showcase: real cover photos, one per category first, rotating in
+  // the frame; the floating cards cycle the next picks. Static artwork is
+  // the fallback when the catalog cannot be read.
+  const photoPool = catalog.ok ? catalog.data.filter((x) => x.preview_image) : [];
+  const distinctSlides: HeroSlide[] = [];
+  {
+    const seen = new Set<string>();
+    for (const x of photoPool) {
+      const code = x.category ?? 'website';
+      if (seen.has(code)) continue;
+      seen.add(code);
+      distinctSlides.push({ src: x.preview_image!, alt: x.title });
+    }
+  }
+  const heroSlides = distinctSlides.slice(0, 5);
+  const heroFloatA = distinctSlides.slice(5, 8);
+  const heroFloatB = distinctSlides.length > 8 ? distinctSlides.slice(8, 11) : distinctSlides.slice(1, 4);
+  const heroFallback: HeroSlide[] = [{ src: '/hero/hero-showcase.jpg', alt: '' }];
+  const floatFallbackA: HeroSlide[] = [{ src: '/demo/demo-fashion.jpg', alt: '' }];
+  const floatFallbackB: HeroSlide[] = [{ src: '/demo/demo-restaurant.jpg', alt: '' }];
   return (
     <>
       <section className="hero">
@@ -73,19 +94,11 @@ export default async function Home({ params }: Params) {
               <li><span className="trust-icon"><TrustIcon kind="headset" /></span>{t('ui.home.trust_support')}</li>
             </ul>
           </div>
-          <div className="hero-visual" aria-hidden="true">
-            <div className="hero-blob hero-blob--a" />
-            <div className="hero-blob hero-blob--b" />
-            <div className="hero-frame">
-              <img src="/hero/hero-showcase.jpg" alt="" width={960} height={640} />
-            </div>
-            <div className="float-card float-card--a">
-              <img src="/demo/demo-fashion.jpg" alt="" width={300} height={200} />
-            </div>
-            <div className="float-card float-card--b">
-              <img src="/demo/demo-restaurant.jpg" alt="" width={300} height={200} />
-            </div>
-          </div>
+          <HeroShowcase
+            slides={heroSlides.length > 0 ? heroSlides : heroFallback}
+            floatA={heroFloatA.length > 0 ? heroFloatA : floatFallbackA}
+            floatB={heroFloatB.length > 0 ? heroFloatB : floatFallbackB}
+          />
         </div>
       </section>
       <div className="container stack">
