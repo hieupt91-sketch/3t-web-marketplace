@@ -27,7 +27,6 @@
   "error.payment.webhook_invalid": "Sự kiện thanh toán không hợp lệ.",
   "error.plan.not_purchasable": "Gói này chưa thể mua (thiếu giá phù hợp).",
   "error.quote.expired": "Báo giá đã hết hạn. Hãy tạo báo giá mới.",
-  "error.rate_limit.exceeded": "Bạn thao tác quá nhanh. Hãy thử lại sau ít phút.",
   "error.reconciliation.not_pending": "Đơn hàng không ở trạng thái chờ đối soát.",
   "error.refund.amount_exceeds_remaining": "Số tiền hoàn vượt phần chưa hoàn của đơn hàng.",
   "error.refund.not_pending": "Khoản hoàn tiền không ở trạng thái chờ nhà cung cấp xử lý.",

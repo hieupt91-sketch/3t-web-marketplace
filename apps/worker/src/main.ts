@@ -28,6 +28,36 @@ function logLine(event: string, fields: Record<string, unknown> = {}) {
 
 logLine('started', { screenshots: screenshotter !== null });
 
+// Deploy race: on a fresh stack the migrations may land after this worker
+// starts, and every claim until then fails with "relation jobs does not
+// exist". Wait for the core tables (bounded — after the deadline the claim
+// loop's own retry logging takes over, exactly as before this gate).
+{
+  const deadline = Date.now() + 120_000;
+  let announced = false;
+  for (;;) {
+    let ready = false;
+    try {
+      const { rows } = await db.query<{ ready: boolean }>(
+        "SELECT to_regclass('public.jobs') IS NOT NULL AND to_regclass('public.sites') IS NOT NULL AS ready",
+      );
+      ready = rows[0]?.ready === true;
+    } catch {
+      ready = false;
+    }
+    if (ready) break;
+    if (Date.now() > deadline) {
+      logLine('schema_wait_timeout');
+      break;
+    }
+    if (!announced) {
+      logLine('waiting_for_schema');
+      announced = true;
+    }
+    await new Promise((r) => setTimeout(r, 2000));
+  }
+}
+
 // Boot sweep: site servers are children of this process and die with it (and
 // with the host). Re-enqueue a restart for every live site so hosted sites
 // come back after a worker/VPS reboot without waiting for a visitor; the

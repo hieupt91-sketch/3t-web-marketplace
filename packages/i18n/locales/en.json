@@ -27,7 +27,6 @@
   "error.payment.webhook_invalid": "Invalid payment event.",
   "error.plan.not_purchasable": "This plan cannot be purchased yet (missing a suitable price).",
   "error.quote.expired": "This quote has expired. Create a new one.",
-  "error.rate_limit.exceeded": "Too many attempts. Try again in a few minutes.",
   "error.reconciliation.not_pending": "The order is not awaiting reconciliation.",
   "error.refund.amount_exceeds_remaining": "The refund amount exceeds the order's unrefunded remainder.",
   "error.refund.not_pending": "The refund is not awaiting provider settlement.",

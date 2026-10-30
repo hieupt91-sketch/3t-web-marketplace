@@ -586,6 +586,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     }
     if (chosen !== payment.name) throw errors.conflict('payment.method_unavailable');
     if (config.env === 'production' && anyRealMethod) throw errors.conflict('payment.method_unavailable');
+    // Production: the sandbox is for staff test purchases only. A plain
+    // buyer must never settle an order without real money moving; while no
+    // real method is configured the honest answer is "not payable yet",
+    // never a free checkout through the mock.
+    if (config.env === 'production' && auth.roles.length === 0) throw errors.conflict('payment.method_unavailable');
     const session = payment.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt });
     await db.query(
       "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, $2, $3, $4, $5, 'pending')",
@@ -671,6 +676,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!payment.sandbox) throw errors.notFound();
+      // Production: settling a sandbox payment is a staff test action.
+      if (config.env === 'production') {
+        const auth = requireUser(request);
+        if (auth.roles.length === 0) throw errors.notFound();
+      }
       const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
         'SELECT amount_minor::text, currency, status FROM payment_attempts WHERE provider = $1 AND provider_ref = $2',
         [payment.name, request.params.ref],
@@ -691,6 +701,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!payment.sandbox) throw errors.notFound();
+      // Production: settling a sandbox payment is a staff test action.
+      if (config.env === 'production') {
+        const auth = requireUser(request);
+        if (auth.roles.length === 0) throw errors.notFound();
+      }
       const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
         'SELECT amount_minor::text, currency, status FROM refunds WHERE provider = $1 AND provider_ref = $2',
         [payment.name, request.params.ref],
@@ -710,6 +725,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!payment.sandbox) throw errors.notFound();
+      // Production: settling a sandbox payment is a staff test action.
+      if (config.env === 'production') {
+        const auth = requireUser(request);
+        if (auth.roles.length === 0) throw errors.notFound();
+      }
       const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
         'SELECT amount_minor::text, currency, status FROM refunds WHERE provider = $1 AND provider_ref = $2',
         [payment.name, request.params.ref],
