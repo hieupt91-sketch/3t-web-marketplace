@@ -1460,4 +1460,6 @@
   "ui.checkout.redirecting_title": "Đang chuyển tới cổng thanh toán",
   "ui.checkout.redirecting_note": "Bạn đang được chuyển sang trang thanh toán an toàn của cổng. Thanh toán xong, đơn sẽ tự hoàn thành và bạn được đưa về trang kết quả.",
   "ui.checkout.redirect_manual": "Tới trang thanh toán"
+,
+  "ui.home.template_count": "{count} mẫu"
 }

@@ -299,6 +299,95 @@ h3 {
   }
 }
 
+/* Homepage category showcase: quick-nav chips + auto-scrolling rows. */
+.cat-nav {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+.cat-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  padding: var(--space-2) var(--space-3);
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 600;
+  text-decoration: none;
+  transition: border-color var(--motion), background var(--motion);
+}
+.cat-chip:hover {
+  border-color: var(--color-primary);
+  background: var(--color-bg-accent);
+}
+.cat-chip__count {
+  font-size: 0.8125rem;
+  font-weight: 700;
+  color: var(--color-primary);
+  background: var(--color-bg-accent);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-2);
+}
+.cat-section {
+  scroll-margin-top: calc(var(--header-height) + var(--space-4));
+  border-top: 1px solid var(--color-border);
+  padding-top: var(--space-5);
+}
+.cat-section__head {
+  flex-wrap: nowrap;
+}
+.cat-section__spacer {
+  flex: 1;
+}
+.marquee {
+  overflow: hidden;
+  -webkit-mask-image: linear-gradient(90deg, transparent, #000 3.5%, #000 96.5%, transparent);
+  mask-image: linear-gradient(90deg, transparent, #000 3.5%, #000 96.5%, transparent);
+}
+.marquee__track {
+  display: flex;
+  width: max-content;
+  animation: marquee-scroll 45s linear infinite;
+}
+.marquee--reverse .marquee__track {
+  animation-direction: reverse;
+}
+.marquee:hover .marquee__track,
+.marquee:focus-within .marquee__track,
+.marquee[data-offscreen='true'] .marquee__track {
+  animation-play-state: paused;
+}
+.marquee__group {
+  display: flex;
+  gap: var(--space-5);
+  padding-right: var(--space-5);
+}
+.marquee__group > .template-card {
+  flex: 0 0 330px;
+}
+@keyframes marquee-scroll {
+  to {
+    transform: translateX(-50%);
+  }
+}
+@media (max-width: 639px) {
+  .marquee__group > .template-card {
+    flex-basis: 264px;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .marquee {
+    overflow-x: auto;
+    -webkit-mask-image: none;
+    mask-image: none;
+  }
+  .marquee__track {
+    animation: none;
+  }
+}
+
 .button {
   display: inline-flex;
   align-items: center;

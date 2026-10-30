@@ -5,6 +5,7 @@ import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
 import { TemplateFinder } from '@/components/template-finder';
 import { DemoCatalog } from '@/components/demo-catalog';
+import { CategoryMarquee } from '@/components/category-marquee';
 
 type Params = { params: Promise<{ locale: Locale }> };
 
@@ -30,7 +31,7 @@ function TrustIcon({ kind }: { kind: 'eye' | 'bolt' | 'headset' }) {
 /** P01 — home. Shows only published templates from the API; no placeholder products. */
 export default async function Home({ params }: Params) {
   const { locale } = await params;
-  const t = (key: string) => translate(locale, key);
+  const t = (key: string, params?: Record<string, string>) => translate(locale, key, params);
   const catalog = await fetchPublic<TemplateSummary[]>('/templates?limit=100', locale);
   // The storefront groups templates by category (owner request): one section
   // per category with a link into the filtered library.
@@ -89,6 +90,19 @@ export default async function Home({ params }: Params) {
       </section>
       <div className="container stack">
         <TemplateFinder />
+        {catalog.ok && catalog.data.length > 0 ? (
+          <nav className="cat-nav" aria-label={t('ui.home.purpose_title')}>
+            {categoryCodes.map((code) => {
+              const label = t(`ui.category.${code}`);
+              return (
+                <a className="cat-chip" key={code} href={`#cat-${code}`}>
+                  {label === `ui.category.${code}` ? code : label}
+                  <span className="cat-chip__count">{byCategory.get(code)!.length}</span>
+                </a>
+              );
+            })}
+          </nav>
+        ) : null}
         {!catalog.ok ? (
           <section className="stack">
             <div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div>
@@ -99,17 +113,29 @@ export default async function Home({ params }: Params) {
             <DemoCatalog locale={locale} />
           </section>
         ) : (
-          categoryCodes.map((code) => {
+          categoryCodes.map((code, sectionIndex) => {
             const label = t(`ui.category.${code}`);
+            const items = byCategory.get(code)!;
+            const shown = items.slice(0, 8);
+            const cards = (list: TemplateSummary[]) => list.map((template) => <TemplateCard key={template.id} template={template} locale={locale} />);
             return (
-              <section className="stack" key={code}>
-                <div className="row" style={{ justifyContent: 'space-between' }}>
+              <section className="stack cat-section" id={`cat-${code}`} key={code}>
+                <div className="row cat-section__head">
                   <h2 style={{ margin: 0 }}>{label === `ui.category.${code}` ? code : label}</h2>
+                  <span className="badge">{t('ui.home.template_count', { count: String(items.length) })}</span>
+                  <span className="cat-section__spacer" />
                   <Link href={`/${locale}/templates?category=${code}`}>{t('ui.home.view_all')}</Link>
                 </div>
-                <div className="grid-cards">
-                  {byCategory.get(code)!.slice(0, 4).map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}
-                </div>
+                {shown.length >= 2 ? (
+                  <CategoryMarquee reverse={sectionIndex % 2 === 1} durationSeconds={Math.max(30, shown.length * 7)}>
+                    <div className="marquee__group">{cards(shown)}</div>
+                    <div className="marquee__group" aria-hidden="true" inert>
+                      {cards(shown)}
+                    </div>
+                  </CategoryMarquee>
+                ) : (
+                  <div className="grid-cards">{cards(shown)}</div>
+                )}
               </section>
             );
           })

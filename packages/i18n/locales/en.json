@@ -1460,4 +1460,6 @@
   "ui.checkout.redirecting_title": "Taking you to the payment gateway",
   "ui.checkout.redirecting_note": "You are being redirected to the gateway's secure payment page. Once paid, your order completes automatically and you are brought back to the result page.",
   "ui.checkout.redirect_manual": "Go to the payment page"
+,
+  "ui.home.template_count": "{count} templates"
 }
