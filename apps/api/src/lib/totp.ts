@@ -63,6 +63,6 @@ export function verifyTotp(secret: string, code: string, atMs: number = Date.now
   return hotp(key, step - 1n) === code || hotp(key, step) === code || hotp(key, step + 1n) === code;
 }
 
-export function totpAuthUri(secret: string, account: string, issuer = '3T Web Marketplace'): string {
+export function totpAuthUri(secret: string, account: string, issuer = 'webmaket'): string {
   return `otpauth://totp/${encodeURIComponent(issuer)}:${encodeURIComponent(account)}?secret=${secret}&issuer=${encodeURIComponent(issuer)}&algorithm=SHA1&digits=6&period=30`;
 }

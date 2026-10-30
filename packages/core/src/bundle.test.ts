@@ -112,16 +112,22 @@ describe('toCleanVariantText', () => {
     expect(toCleanVariantText('Liên hệ demo: 0967 136 099, Zalo: 0967136099.')).toBe('Liên hệ demo: Số điện thoại của bạn, Zalo: Số điện thoại của bạn.');
   });
 
-  it('removes stale 3T demo-warning sentences in both languages', () => {
+  it('removes stale demo-warning sentences in both languages (3T and webmaket wording)', () => {
     const vi = 'Giữ nguyên. Riêng số demo 0967 136 099 là số demo của 3T: nếu quên thay, khách sẽ gọi nhầm. Hết.';
     expect(toCleanVariantText(vi)).toBe('Giữ nguyên. Hết.');
     const en = 'Keep this. The demo number 0967 136 099 belongs to 3T: replace it before publishing. Done.';
     expect(toCleanVariantText(en)).toBe('Keep this. Done.');
+    const viNew = 'Giữ nguyên. Riêng số demo 0967 136 099 là số demo của webmaket: nếu quên thay, khách sẽ gọi nhầm. Hết.';
+    expect(toCleanVariantText(viNew)).toBe('Giữ nguyên. Hết.');
+    const enNew = 'Keep this. The demo number 0967 136 099 belongs to webmaket: replace it before publishing. Done.';
+    expect(toCleanVariantText(enNew)).toBe('Keep this. Done.');
   });
 
   it('rewrites the CONFIG comment parenthetical as a fill-in instruction', () => {
     const input = '- Điện thoại demo: 0967 136 099 (số demo của 3T — người mua thay bằng số thật trước khi đăng)';
     expect(toCleanVariantText(input)).toBe('- Điện thoại demo: Số điện thoại của bạn (thay bằng số thật trước khi đăng)');
+    const inputNew = '- Điện thoại demo: 0967 136 099 (số demo của webmaket — người mua thay bằng số thật trước khi đăng)';
+    expect(toCleanVariantText(inputNew)).toBe('- Điện thoại demo: Số điện thoại của bạn (thay bằng số thật trước khi đăng)');
   });
 
   it('leaves text without the demo phone untouched', () => {

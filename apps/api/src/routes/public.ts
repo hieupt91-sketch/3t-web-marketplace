@@ -208,7 +208,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       : null;
     return {
       data: {
-        brand: { name: 'Web Marketplace' },
+        brand: { name: 'webmaket' },
         default_locale: DEFAULT_LOCALE,
         locales: LOCALES.filter((l) => l.enabled).map((l) => ({ code: l.code, display_name: l.displayNameNative, direction: l.direction })),
         currency: config.currency,

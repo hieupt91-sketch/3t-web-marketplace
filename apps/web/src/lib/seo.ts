@@ -2,7 +2,7 @@ import { translate, type Locale } from '@3t/i18n';
 import type { TemplateSummary } from './api-server';
 
 /** Storefront brand name (matches the metadata title template and the seeded platform brand). */
-export const SITE_NAME = 'Web Marketplace';
+export const SITE_NAME = 'webmaket';
 
 /**
  * Canonical public origin for absolute SEO URLs (sitemap, robots, OG, JSON-LD, llms.txt).

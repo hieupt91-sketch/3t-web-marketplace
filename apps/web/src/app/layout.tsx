@@ -16,7 +16,7 @@ export async function generateMetadata(): Promise<Metadata> {
   const ogTitle = translate(locale, 'ui.home.meta_title');
   return {
     metadataBase: new URL(base),
-    title: { default: 'Web Marketplace', template: '%s — Web Marketplace' },
+    title: { default: 'webmaket', template: '%s — webmaket' },
     description,
     openGraph: {
       type: 'website',
