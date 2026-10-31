@@ -2,7 +2,7 @@
 
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { createContext, useContext, useEffect, type ReactNode } from 'react';
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react';
 import { useT } from '@/lib/i18n';
 import { useMe, type Me } from '@/lib/use-me';
 import { ErrorState, Loading } from './ui';
@@ -53,9 +53,11 @@ const NAV: Record<'account' | 'partner', NavItem[]> = {
   ],
 };
 
-/** The admin menu is grouped by job, not dumped in one flat list:
- *  overview → selling → payments → operations → system → settings.
- *  A group renders only when the staffer can see at least one item. */
+/** The admin menu is split into collapsible main menus by function —
+ *  overview → goods → content → payments → operations → system →
+ *  settings — so the sidebar stays short: only expanded groups show
+ *  their sub-items. A group renders only when the staffer can see at
+ *  least one item. */
 const ADMIN_NAV: NavGroup[] = [
   {
     labelKey: 'ui.admin.nav.group_overview',
@@ -65,12 +67,17 @@ const ADMIN_NAV: NavGroup[] = [
     ],
   },
   {
-    labelKey: 'ui.admin.nav.group_business',
+    labelKey: 'ui.admin.nav.group_goods',
     items: [
       { href: '/admin/templates', labelKey: 'ui.admin.nav.templates', permission: 'template:read' },
       { href: '/admin/imports', labelKey: 'ui.admin.nav.imports', permission: 'template:read' },
       { href: '/admin/imports/new', labelKey: 'ui.admin.nav.import_new', permission: 'template:import' },
       { href: '/admin/pricing', labelKey: 'ui.admin.nav.pricing', permission: 'pricing:write' },
+    ],
+  },
+  {
+    labelKey: 'ui.admin.nav.group_content',
+    items: [
       { href: '/admin/content', labelKey: 'ui.admin.nav.content', permission: 'content:read' },
       { href: '/admin/translations', labelKey: 'ui.admin.translations', permission: 'template:read' },
     ],
@@ -81,6 +88,7 @@ const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/payments/reconciliation', labelKey: 'ui.admin.nav.reconciliation', permission: 'payment:read' },
       { href: '/admin/payments/refunds', labelKey: 'ui.admin.nav.refunds', permission: 'payment:read' },
       { href: '/admin/payouts', labelKey: 'ui.admin.payouts', permission: 'payout:read' },
+      { href: '/admin/settings/payments', labelKey: 'ui.admin.nav.payment_settings', permission: 'settings:manage' },
     ],
   },
   {
@@ -107,7 +115,6 @@ const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/settings', labelKey: 'ui.admin.nav.settings_hub', permission: 'settings:manage' },
       { href: '/admin/settings/contact', labelKey: 'ui.admin.nav.contact_settings', permission: 'settings:manage' },
       { href: '/admin/settings/subdomain-fee', labelKey: 'ui.admin.nav.subdomain_fee_settings', permission: 'settings:manage' },
-      { href: '/admin/settings/payments', labelKey: 'ui.admin.nav.payment_settings', permission: 'settings:manage' },
       { href: '/admin/settings/ads', labelKey: 'ui.admin.nav.ads_settings', permission: 'settings:manage' },
     ],
   },
@@ -122,6 +129,40 @@ export function DashboardShell({ area, children }: { area: 'account' | 'admin' |
   const state = useMe();
   const router = useRouter();
   const pathname = usePathname() ?? '/';
+
+  /* Collapsible admin main menus: which groups are expanded, persisted
+   * per browser. The group holding the current page opens on its own;
+   * a group the staffer closed by hand stays closed until they move
+   * to a page inside another group. */
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const [navLoaded, setNavLoaded] = useState(false);
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem('mp_admin_nav_open');
+      if (raw) setOpenGroups(JSON.parse(raw) as Record<string, boolean>);
+    } catch {
+      /* storage unavailable: defaults apply */
+    }
+    setNavLoaded(true);
+  }, []);
+  const activeAdminGroup = ADMIN_NAV.find((g) =>
+    g.items.some((i) => pathname === i.href || (i.href !== '/admin' && pathname.startsWith(`${i.href}/`))),
+  )?.labelKey;
+  useEffect(() => {
+    if (!navLoaded || area !== 'admin' || !activeAdminGroup) return;
+    setOpenGroups((prev) => (prev[activeAdminGroup] ? prev : { ...prev, [activeAdminGroup]: true }));
+  }, [navLoaded, area, activeAdminGroup]);
+  const toggleGroup = (key: string, currentlyOpen: boolean) => {
+    setOpenGroups((prev) => {
+      const next = { ...prev, [key]: !currentlyOpen };
+      try {
+        window.localStorage.setItem('mp_admin_nav_open', JSON.stringify(next));
+      } catch {
+        /* storage unavailable: the toggle still applies for this view */
+      }
+      return next;
+    });
+  };
 
   useEffect(() => {
     if (state.status === 'anonymous') {
@@ -152,12 +193,36 @@ export function DashboardShell({ area, children }: { area: 'account' | 'admin' |
       <div className="dashboard">
         <nav className="dashboard__nav" aria-label={t(area === 'admin' ? 'ui.admin.nav.label' : 'ui.account.nav.label')}>
           {area === 'admin' ? (
-            groups.map((g) => (
-              <div key={g.labelKey} className="dashboard__nav-group">
-                <p className="dashboard__nav-heading">{t(g.labelKey)}</p>
-                <ul>{g.items.map(link)}</ul>
-              </div>
-            ))
+            groups.map((g) => {
+              const open = openGroups[g.labelKey] ?? g.labelKey === activeAdminGroup;
+              return (
+                <div key={g.labelKey} className="dashboard__nav-group">
+                  <button
+                    type="button"
+                    className="dashboard__nav-heading"
+                    aria-expanded={open}
+                    onClick={() => toggleGroup(g.labelKey, open)}
+                  >
+                    <span>{t(g.labelKey)}</span>
+                    <svg
+                      className={`dashboard__nav-chevron${open ? ' dashboard__nav-chevron--open' : ''}`}
+                      viewBox="0 0 24 24"
+                      aria-hidden="true"
+                      width="14"
+                      height="14"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    >
+                      <path d="m6 9 6 6 6-6" />
+                    </svg>
+                  </button>
+                  {open ? <ul>{g.items.map(link)}</ul> : null}
+                </div>
+              );
+            })
           ) : (
             <ul>{flatItems.map(link)}</ul>
           )}

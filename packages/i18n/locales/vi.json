@@ -1545,5 +1545,7 @@
   "ui.how.guide_step3": "Thanh toán bằng cách bạn quen: chuyển khoản ngân hàng, PayPal, chuyển khoản USD, VNPay hoặc MoMo.",
   "ui.how.guide_step4": "Website hiện trong mục Site của tôi với trạng thái Đang hoạt động — bấm vào là mở trang của bạn.",
   "ui.home.live_demo": "Demo chạy thật",
-  "ui.home.view_template": "Xem mẫu này"
+  "ui.home.view_template": "Xem mẫu này",
+  "ui.admin.nav.group_goods": "Hàng hóa",
+  "ui.admin.nav.group_content": "Nội dung"
 }

@@ -1545,5 +1545,7 @@
   "ui.how.guide_step3": "Pay the way you prefer: bank transfer, PayPal, USD transfer, VNPay or MoMo.",
   "ui.how.guide_step4": "Your website appears under My sites with an Active status — click through to open it.",
   "ui.home.live_demo": "Live demo",
-  "ui.home.view_template": "View this template"
+  "ui.home.view_template": "View this template",
+  "ui.admin.nav.group_goods": "Goods",
+  "ui.admin.nav.group_content": "Content"
 }
