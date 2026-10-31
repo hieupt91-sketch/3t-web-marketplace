@@ -1557,5 +1557,9 @@
   "ui.payment_settings.casso_webhook_url": "Casso webhook URL",
   "ui.admin.templates.col_kind": "Kind",
   "ui.home.dynamic_title": "Dynamic templates — with an admin page",
-  "ui.home.dynamic_body": "Templates that ship with their own admin page to edit content, receive form submissions and manage data — no code needed."
+  "ui.home.dynamic_body": "Templates that ship with their own admin page to edit content, receive form submissions and manage data — no code needed.",
+  "ui.demo.demo_admin_title": "Demo admin account",
+  "ui.demo.demo_admin_user": "Username",
+  "ui.demo.demo_admin_note": "Log in with this account to try the template’s full admin: edit details, content and prices freely. Changes live only inside this demo session and are wiped when it ends or when you reset it.",
+  "ui.demo.demo_admin_hint": "The demo session includes the admin page — when it starts you get a demo account to log in and try editing everything."
 }

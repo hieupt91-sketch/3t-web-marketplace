@@ -40,6 +40,7 @@ export default async function DemoPage({ params }: Props) {
       ) : template.demo.session ? (
         <div className="alert alert--info">
           <p>{t('ui.demo.start_body')}</p>
+          {isDynamicAdapter(template.adapter) ? <p>{t('ui.demo.demo_admin_hint')}</p> : null}
           <p><Link className="button" href={`/${locale}/demo/start/${template.demo.version_id}`}>{t('ui.catalog.view_demo_live')}</Link></p>
         </div>
       ) : (

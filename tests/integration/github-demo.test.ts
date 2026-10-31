@@ -191,4 +191,62 @@ describe('demo sessions', () => {
     // Clean up the spawned server so the test process can exit.
     await ctx.app.inject({ method: 'POST', url: `/api/v1/demo-sessions/${demoId}/cancel`, headers: { origin: ORIGIN } });
   });
+
+  it('seeds a login-able demo admin per session; edits stay inside the session', async () => {
+    const zip = buildZip(await walk(join(REPO_ROOT, 'examples/node-service-admin')));
+    const session = await ctx.app.inject({ method: 'POST', url: '/api/v1/admin/imports/upload-sessions', headers: admin(), payload: { filename: 'fixture-admin.zip', size_bytes: zip.length, sha256: createHash('sha256').update(zip).digest('hex'), rights_confirmed: true } });
+    await ctx.app.inject({ method: 'PUT', url: session.json().data.upload_url, headers: { ...admin(), 'content-type': 'application/zip' }, payload: zip });
+    const created = await ctx.app.inject({ method: 'POST', url: '/api/v1/admin/imports', headers: { ...admin(), 'idempotency-key': randomUUID() }, payload: { upload_session_id: session.json().data.id } });
+    await drainWorker();
+    const imp = await ctx.app.inject({ method: 'GET', url: `/api/v1/admin/imports/${created.json().data.resource_id}`, headers: admin() });
+    const versionId = imp.json().data.draft.version_id as string;
+
+    const demo = await ctx.app.inject({ method: 'POST', url: '/api/v1/demo-sessions', headers: { origin: ORIGIN }, payload: { version_id: versionId } });
+    expect(demo.statusCode, demo.body).toBe(201);
+    expect(demo.json().data.demo_admin).toEqual({ username: 'admin', password: 'Demo1234' });
+    const demoId = demo.json().data.id as string;
+    const url = demo.json().data.url as string;
+
+    const get = await ctx.app.inject({ method: 'GET', url: `/api/v1/demo-sessions/${demoId}`, headers: { origin: ORIGIN } });
+    expect(get.json().data.demo_admin.login_url).toBe(`${url.replace(/\/$/, '')}/admin`);
+
+    // The demo admin really logs in and edits; the change shows on the site.
+    const homeBefore = await (await fetch(url)).text();
+    expect(homeBefore).toContain('Xin chào');
+    const login = await fetch(`${url.replace(/\/$/, '')}/admin/login`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({ username: 'admin', password: 'Demo1234' }).toString(),
+    });
+    expect(login.status).toBe(302);
+    const cookie = login.headers.get('set-cookie') ?? '';
+    expect(cookie).toContain('dsess=');
+    const save = await fetch(`${url.replace(/\/$/, '')}/admin/save`, {
+      method: 'POST', redirect: 'manual',
+      headers: { 'content-type': 'application/x-www-form-urlencoded', cookie },
+      body: new URLSearchParams({ headline: 'Đã sửa trong demo' }).toString(),
+    });
+    expect(save.status).toBe(302);
+    const homeAfter = await (await fetch(url)).text();
+    expect(homeAfter).toContain('Đã sửa trong demo');
+
+    // A second session of the same template is untouched and has its own admin.
+    const demo2 = await ctx.app.inject({ method: 'POST', url: '/api/v1/demo-sessions', headers: { origin: ORIGIN }, payload: { version_id: versionId } });
+    expect(demo2.statusCode, demo2.body).toBe(201);
+    expect(demo2.json().data.demo_admin).toEqual({ username: 'admin', password: 'Demo1234' });
+    const home2 = await (await fetch(demo2.json().data.url as string)).text();
+    expect(home2).toContain('Xin chào');
+    expect(home2).not.toContain('Đã sửa trong demo');
+
+    // Reset wipes the edit and re-seeds the demo admin.
+    const reset = await ctx.app.inject({ method: 'POST', url: `/api/v1/demo-sessions/${demoId}/reset`, headers: { origin: ORIGIN } });
+    expect(reset.statusCode, reset.body).toBe(200);
+    const homeReset = await (await fetch(reset.json().data.url as string)).text();
+    expect(homeReset).toContain('Xin chào');
+    const getAfterReset = await ctx.app.inject({ method: 'GET', url: `/api/v1/demo-sessions/${demoId}`, headers: { origin: ORIGIN } });
+    expect(getAfterReset.json().data.demo_admin).not.toBeNull();
+
+    await ctx.app.inject({ method: 'POST', url: `/api/v1/demo-sessions/${demoId}/cancel`, headers: { origin: ORIGIN } });
+    await ctx.app.inject({ method: 'POST', url: `/api/v1/demo-sessions/${demo2.json().data.id}/cancel`, headers: { origin: ORIGIN } });
+  });
 });

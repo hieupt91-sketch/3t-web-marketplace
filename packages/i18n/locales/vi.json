@@ -1557,5 +1557,9 @@
   "ui.payment_settings.casso_webhook_url": "Địa chỉ webhook Casso",
   "ui.admin.templates.col_kind": "Loại",
   "ui.home.dynamic_title": "Mẫu động — có trang quản trị",
-  "ui.home.dynamic_body": "Nhóm mẫu kèm sẵn trang quản trị để tự sửa nội dung, nhận form và quản lý dữ liệu — không cần đụng vào code."
+  "ui.home.dynamic_body": "Nhóm mẫu kèm sẵn trang quản trị để tự sửa nội dung, nhận form và quản lý dữ liệu — không cần đụng vào code.",
+  "ui.demo.demo_admin_title": "Tài khoản quản trị demo",
+  "ui.demo.demo_admin_user": "Tên đăng nhập",
+  "ui.demo.demo_admin_note": "Đăng nhập bằng tài khoản này để thử toàn bộ trang quản trị của mẫu: sửa thông tin, nội dung, giá… thoải mái. Mọi thay đổi chỉ nằm trong phiên demo này và tự xoá khi phiên kết thúc hoặc khi bạn bấm Đặt lại.",
+  "ui.demo.demo_admin_hint": "Phiên demo có cả trang quản trị — khi bắt đầu, bạn được cấp một tài khoản demo để đăng nhập và sửa thử mọi thông tin."
 }

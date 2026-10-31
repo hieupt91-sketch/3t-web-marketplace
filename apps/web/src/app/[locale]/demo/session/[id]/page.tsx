@@ -13,6 +13,7 @@ interface Session {
   template_slug: string | null;
   url: string | null;
   admin_url: string | null;
+  demo_admin: { username: string; password: string; login_url: string } | null;
   admin_launched: boolean;
   status: string;
   expires_at: string;
@@ -91,8 +92,23 @@ export default function DemoSessionPage({ params }: { params: Promise<{ id: stri
       ) : (
         <EmptyState title={t('ui.demo.unavailable')}><p>{t('ui.demo.unavailable_body')}</p></EmptyState>
       )}
+      {session.demo_admin ? (
+        <section className="card stack">
+          <h2 style={{ margin: 0 }}>{t('ui.demo.demo_admin_title')}</h2>
+          <dl className="details">
+            <dt>{t('ui.demo.demo_admin_user')}</dt><dd className="mono">{session.demo_admin.username}</dd>
+            <dt>{t('ui.auth.field.password')}</dt><dd className="mono">{session.demo_admin.password}</dd>
+          </dl>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.demo.demo_admin_note')}</p>
+          <div>
+            <a className="button" href={session.demo_admin.login_url} target="_blank" rel="noopener">{t('ui.demo.admin_launch')}</a>
+          </div>
+        </section>
+      ) : null}
       <div className="row">
-        <button type="button" className="button" disabled={busy !== null} onClick={() => void act('admin-launch')}>{t('ui.demo.admin_launch')}</button>
+        {session.demo_admin ? null : (
+          <button type="button" className="button" disabled={busy !== null} onClick={() => void act('admin-launch')}>{t('ui.demo.admin_launch')}</button>
+        )}
         <button type="button" className="button button--secondary" disabled={busy !== null} onClick={() => void act('reset')}>{t('ui.demo.reset')}</button>
         <button type="button" className="button button--danger" disabled={busy !== null} onClick={() => void act('cancel')}>{t('ui.demo.cancel')}</button>
         {session.template_slug ? <Link className="button button--secondary" href={`/${locale}/templates/${session.template_slug}`}>{t('ui.demo.buy_template')}</Link> : null}

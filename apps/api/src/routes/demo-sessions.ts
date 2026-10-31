@@ -1,10 +1,10 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { cp, mkdir, readdir, rm } from 'node:fs/promises';
+import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { chmod } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
-import { get as httpGet } from 'node:http';
+import { get as httpGet, request as httpRequest } from 'node:http';
 import { hashToken, previewOrigin, randomToken, writeAudit, type Db, type PlatformConfig } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
@@ -65,6 +65,63 @@ function killPid(pid: number | null): void {
   }
 }
 
+/**
+ * Fixed PUBLIC demo credentials for isolated-admin demo sessions (owner
+ * request): every visitor of a demo session can log into the template's own
+ * admin with this account and edit freely — the session copy is throwaway,
+ * so nothing here is a secret and nothing survives the session.
+ */
+export const DEMO_ADMIN_USERNAME = 'admin';
+export const DEMO_ADMIN_PASSWORD = 'Demo1234';
+
+function httpFormPost(port: number, path: string, fields: Record<string, string>): Promise<{ status: number; setCookie: boolean }> {
+  return new Promise((resolve) => {
+    const body = new URLSearchParams(fields).toString();
+    const req = httpRequest(
+      { host: '127.0.0.1', port, path, method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(body) }, timeout: 5000 },
+      (res) => {
+        res.resume();
+        res.on('end', () => resolve({ status: res.statusCode ?? 0, setCookie: Boolean(res.headers['set-cookie']?.length) }));
+      },
+    );
+    req.on('timeout', () => req.destroy());
+    req.on('error', () => resolve({ status: 0, setCookie: false }));
+    req.end(body);
+  });
+}
+
+/**
+ * Seed the demo admin account into a freshly spawned session copy, using
+ * the template family's own first-run setup flow: the app writes a one-time
+ * setup token to data/setup-token.txt when it boots without an admin, and
+ * POST /admin/setup creates the account. Best effort by design — any
+ * mismatch (a different bootstrap, an admin already present) leaves the
+ * demo viewable exactly as before, just without a login-able admin.
+ */
+async function seedDemoAdmin(
+  deps: { config: PlatformConfig },
+  sessionId: string,
+  version: VersionRow,
+  port: number,
+): Promise<boolean> {
+  try {
+    if (version.manifest_json.demo?.mode !== 'isolatedAdmin') return false;
+    const tokenFile = join(deps.config.workDir, 'demo-sessions', sessionId, 'data', 'setup-token.txt');
+    let token = '';
+    for (let attempt = 0; attempt < 10 && !token; attempt++) {
+      token = (await readFile(tokenFile, 'utf8').catch(() => '')).trim();
+      if (!token) await new Promise((r) => setTimeout(r, 300));
+    }
+    if (!token) return false;
+    const setup = await httpFormPost(port, '/admin/setup', { token, username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD });
+    if (![301, 302, 303].includes(setup.status)) return false;
+    const login = await httpFormPost(port, '/admin/login', { username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD });
+    return [301, 302, 303].includes(login.status) && login.setCookie;
+  } catch {
+    return false;
+  }
+}
+
 /** Spawn a runtime bundle for a demo session (dev/local runtime; see M5 for the agent). */
 async function spawnDemoServer(
   deps: { db: Db; store: { pathFor: (key: string) => string }; config: PlatformConfig },
@@ -122,9 +179,9 @@ async function loadSession(db: Db, id: string) {
   await sweepExpired(db);
   const { rows } = await db.query<{
     id: string; version_id: string; preview_label: string | null; runtime_port: number | null; status: string;
-    admin_token_expires_at: Date | null; expires_at: Date; created_at: Date;
+    admin_token_expires_at: Date | null; demo_admin_ready: boolean; expires_at: Date; created_at: Date;
   }>(
-    'SELECT id, version_id, preview_label, runtime_port, status, admin_token_expires_at, expires_at, created_at FROM demo_sessions WHERE id = $1',
+    'SELECT id, version_id, preview_label, runtime_port, status, admin_token_expires_at, demo_admin_ready, expires_at, created_at FROM demo_sessions WHERE id = $1',
     [id],
   );
   return rows[0] ?? null;
@@ -199,8 +256,13 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
           throw error;
         }
       }
+      let demoAdminReady = false;
+      if (isRuntime && runtimePort) {
+        demoAdminReady = await seedDemoAdmin({ config }, sessionId, v, runtimePort);
+        if (demoAdminReady) await db.query('UPDATE demo_sessions SET demo_admin_ready = true WHERE id = $1', [sessionId]);
+      }
       const url = sessionUrl(config, { id: sessionId, preview_label: previewLabel, runtime_port: runtimePort });
-      return reply.status(201).send({ data: { id: sessionId, version_id: v.id, url, admin_url: null, status: 'active', expires_at: created.rows[0]!.expires_at.toISOString() } });
+      return reply.status(201).send({ data: { id: sessionId, version_id: v.id, url, admin_url: null, demo_admin: demoAdminReady ? { username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD } : null, status: 'active', expires_at: created.rows[0]!.expires_at.toISOString() } });
     },
   );
 
@@ -218,6 +280,9 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
       data: {
         id: row.id, version_id: row.version_id, template_slug: tpl.rows[0]?.slug ?? null, url: row.status === 'active' ? base : null,
         admin_url: row.status === 'active' && adminLaunched && base ? `${base.replace(/\/$/, '')}/admin` : null,
+        demo_admin: row.status === 'active' && row.demo_admin_ready && base
+          ? { username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD, login_url: `${base.replace(/\/$/, '')}/admin` }
+          : null,
         admin_launched: adminLaunched, status: row.status,
         expires_at: row.expires_at.toISOString(), created_at: row.created_at.toISOString(),
       },
@@ -254,8 +319,10 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
       );
       const spawned = await spawnDemoServer({ db, store, config }, row.id, version.rows[0]!);
       await db.query('UPDATE demo_sessions SET runtime_port = $2, runtime_pid = $3, admin_token_hash = NULL, admin_token_expires_at = NULL WHERE id = $1', [row.id, spawned.port, spawned.pid]);
+      const ready = await seedDemoAdmin({ config }, row.id, version.rows[0]!, spawned.port);
+      await db.query('UPDATE demo_sessions SET demo_admin_ready = $2 WHERE id = $1', [row.id, ready]);
     } else {
-      await db.query('UPDATE demo_sessions SET admin_token_hash = NULL, admin_token_expires_at = NULL WHERE id = $1', [row.id]);
+      await db.query('UPDATE demo_sessions SET admin_token_hash = NULL, admin_token_expires_at = NULL, demo_admin_ready = false WHERE id = $1', [row.id]);
     }
     const fresh = await loadSession(db, row.id);
     return { data: { id: row.id, url: sessionUrl(config, fresh!), status: fresh!.status, expires_at: fresh!.expires_at.toISOString() } };
