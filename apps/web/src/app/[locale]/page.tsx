@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
+import { isDynamicAdapter } from '@/lib/template-kind';
 import { TemplateCard } from '@/components/template-card';
 import { TemplateFinder } from '@/components/template-finder';
 import { DemoCatalog } from '@/components/demo-catalog';
@@ -50,6 +51,10 @@ export default async function Home({ params }: Params) {
     ...CATEGORY_ORDER.filter((c) => byCategory.has(c)),
     ...[...byCategory.keys()].filter((c) => !CATEGORY_ORDER.includes(c)).sort(),
   ];
+  // Dynamic templates get their own showcase section above the category
+  // sections: the static/dynamic split is structural on the homepage too,
+  // not just a badge (owner: the two kinds must be visibly separate).
+  const dynamicItems = catalog.ok ? catalog.data.filter((tpl) => isDynamicAdapter(tpl.adapter)) : [];
   // Hero banner: a curated set of the strongest, highest-resolution
   // covers. Many catalog covers are small portrait stock that upscale
   // into mush in a wide frame, so the banner picks come first when the
@@ -107,7 +112,22 @@ export default async function Home({ params }: Params) {
             <DemoCatalog locale={locale} />
           </section>
         ) : (
-          categoryCodes.map((code, sectionIndex) => {
+          <>
+          {dynamicItems.length > 0 ? (
+            <section className="stack cat-section" id="cat-dynamic">
+              <div className="row cat-section__head">
+                <h2 style={{ margin: 0 }}>{t('ui.home.dynamic_title')}</h2>
+                <span className="badge">{t('ui.home.template_count', { count: String(dynamicItems.length) })}</span>
+                <span className="cat-section__spacer" />
+                <Link href={`/${locale}/templates?kind=dynamic`}>{t('ui.home.view_all')}</Link>
+              </div>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.home.dynamic_body')}</p>
+              <div className="grid-cards">
+                {dynamicItems.slice(0, 4).map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}
+              </div>
+            </section>
+          ) : null}
+          {categoryCodes.map((code, sectionIndex) => {
             const label = t(`ui.category.${code}`);
             const items = byCategory.get(code)!;
             const shown = items.slice(0, 8);
@@ -132,7 +152,8 @@ export default async function Home({ params }: Params) {
                 )}
               </section>
             );
-          })
+          })}
+          </>
         )}
         <section className="cta-band stack">
           <h2 style={{ margin: 0 }}>{t('ui.home.cta_title')}</h2>

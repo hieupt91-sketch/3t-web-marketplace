@@ -1555,5 +1555,7 @@
   "ui.catalog.kind_dynamic": "Mẫu động",
   "ui.catalog.badge_dynamic": "Động · Có trang quản trị",
   "ui.payment_settings.casso_webhook_url": "Địa chỉ webhook Casso",
-  "ui.admin.templates.col_kind": "Loại"
+  "ui.admin.templates.col_kind": "Loại",
+  "ui.home.dynamic_title": "Mẫu động — có trang quản trị",
+  "ui.home.dynamic_body": "Nhóm mẫu kèm sẵn trang quản trị để tự sửa nội dung, nhận form và quản lý dữ liệu — không cần đụng vào code."
 }

@@ -30,17 +30,19 @@ export function TemplateCard({ template, locale, comparable = false }: { templat
           <span style={{ color: '#ffffff', fontWeight: 700, fontSize: 18, textAlign: 'center', padding: 'var(--space-4)' }}>{template.title}</span>
         )}
         {template.demo.available && template.demo.url ? <LiveThumb url={template.demo.url} title={template.title} /> : null}
-        {isDynamicAdapter(template.adapter) ? (
-          <span className="badge badge--info template-card__kind">{t('ui.catalog.badge_dynamic')}</span>
-        ) : (
-          <span className="badge badge--neutral template-card__kind">{t('ui.catalog.kind_static')}</span>
-        )}
         {template.translation_status === 'fallback' ? <span className="badge badge--warning template-card__badge" lang="vi">{t('ui.catalog.fallback_vi')}</span> : null}
         {comparable ? <CompareToggle slug={template.slug} locale={locale} chip /> : null}
       </div>
       <h3 className="template-card__title" style={{ margin: 0 }}>
         <Link href={`/${locale}/templates/${template.slug}`}>{template.title}</Link>
       </h3>
+      <p style={{ margin: 0 }}>
+        {isDynamicAdapter(template.adapter) ? (
+          <span className="badge badge--info">{t('ui.catalog.badge_dynamic')}</span>
+        ) : (
+          <span className="badge badge--neutral">{t('ui.catalog.kind_static')}</span>
+        )}
+      </p>
       <p className="template-card__price tabular" style={{ margin: 0 }}>
         {cheapest ? (
           <>

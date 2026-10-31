@@ -1555,5 +1555,7 @@
   "ui.catalog.kind_dynamic": "Dynamic template",
   "ui.catalog.badge_dynamic": "Dynamic · Admin included",
   "ui.payment_settings.casso_webhook_url": "Casso webhook URL",
-  "ui.admin.templates.col_kind": "Kind"
+  "ui.admin.templates.col_kind": "Kind",
+  "ui.home.dynamic_title": "Dynamic templates — with an admin page",
+  "ui.home.dynamic_body": "Templates that ship with their own admin page to edit content, receive form submissions and manage data — no code needed."
 }

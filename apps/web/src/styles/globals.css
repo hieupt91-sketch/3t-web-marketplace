@@ -784,6 +784,51 @@ button.dashboard__nav-heading:hover {
   border-radius: var(--radius-pill);
   padding: 0 var(--space-2);
 }
+/* Static/dynamic split — deliberately larger and more prominent than the
+   category chips below it: this is the catalog's top-level division. */
+.kind-nav {
+  display: flex;
+  gap: var(--space-3);
+  flex-wrap: wrap;
+}
+.kind-nav__item {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-5);
+  border: 2px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-weight: 700;
+  font-size: 1.125rem;
+  text-decoration: none;
+}
+.kind-nav__item:hover {
+  border-color: var(--color-primary);
+  color: var(--color-primary);
+}
+.kind-nav__item--active {
+  background: var(--color-gradient);
+  border-color: transparent;
+  color: var(--color-on-primary);
+  box-shadow: var(--shadow-button);
+}
+.kind-nav__item--active:hover {
+  color: var(--color-on-primary);
+}
+.kind-nav__count {
+  font-size: 1rem;
+  font-weight: 800;
+  color: var(--color-primary);
+  background: var(--color-bg-accent);
+  border-radius: var(--radius-pill);
+  padding: 0 var(--space-3);
+}
+.kind-nav__item--active .kind-nav__count {
+  background: rgb(255 255 255 / 0.22);
+  color: var(--color-on-primary);
+}
 .cat-section {
   scroll-margin-top: calc(var(--header-height) + var(--space-4));
   border-top: 1px solid var(--color-border);

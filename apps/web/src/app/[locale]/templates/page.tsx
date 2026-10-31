@@ -73,18 +73,18 @@ export default async function Templates({ params, searchParams }: Props) {
         <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
         <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
       </form>
-      <nav className="cat-nav" aria-label={t('ui.catalog.filter_kind')}>
-        <Link className={`cat-chip${kind === '' ? ' cat-chip--active' : ''}`} href={kindHref('')}>
+      <nav className="kind-nav" aria-label={t('ui.catalog.filter_kind')}>
+        <Link className={`kind-nav__item${kind === '' ? ' kind-nav__item--active' : ''}`} href={kindHref('')}>
           {t('ui.catalog.filter_all')}
-          {allForCounts.ok ? <span className="cat-chip__count">{allForCounts.data.length}</span> : null}
+          {allForCounts.ok ? <span className="kind-nav__count">{allForCounts.data.length}</span> : null}
         </Link>
-        <Link className={`cat-chip${kind === 'static' ? ' cat-chip--active' : ''}`} href={kindHref('static')}>
+        <Link className={`kind-nav__item${kind === 'static' ? ' kind-nav__item--active' : ''}`} href={kindHref('static')}>
           {t('ui.catalog.kind_static')}
-          {allForCounts.ok ? <span className="cat-chip__count">{staticCount}</span> : null}
+          {allForCounts.ok ? <span className="kind-nav__count">{staticCount}</span> : null}
         </Link>
-        <Link className={`cat-chip${kind === 'dynamic' ? ' cat-chip--active' : ''}`} href={kindHref('dynamic')}>
+        <Link className={`kind-nav__item${kind === 'dynamic' ? ' kind-nav__item--active' : ''}`} href={kindHref('dynamic')}>
           {t('ui.catalog.kind_dynamic')}
-          {allForCounts.ok ? <span className="cat-chip__count">{dynamicCount}</span> : null}
+          {allForCounts.ok ? <span className="kind-nav__count">{dynamicCount}</span> : null}
         </Link>
       </nav>
       {chipCodes.length > 0 ? (
