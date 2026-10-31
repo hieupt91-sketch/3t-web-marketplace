@@ -53,6 +53,7 @@ export function LanguageSwitch() {
         </svg>
       </button>
       <span className="lang-menu__panel">
+        <span className="lang-menu__caption">{t('ui.language.label')}</span>
         {LOCALES.filter((l) => l.enabled).map((l) => (
           <button
             key={l.code}

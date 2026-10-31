@@ -143,11 +143,13 @@ h3 {
   max-width: var(--container-store);
   margin-inline: auto;
   min-height: var(--header-height);
-  flex-wrap: wrap;
+  /* One row, always: the search flexes and the nav tightens before
+   * anything wraps (a wrapped, right-floating nav row read as broken). */
+  flex-wrap: nowrap;
   padding-inline: var(--space-4);
   display: flex;
   align-items: center;
-  gap: var(--space-4);
+  gap: var(--space-3);
 }
 .brand {
   font-weight: 700;
@@ -160,10 +162,50 @@ h3 {
 }
 .site-nav {
   display: flex;
-  gap: var(--space-4);
+  gap: var(--space-3);
   align-items: center;
   margin-inline-start: auto;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
+  min-width: 0;
+}
+@media (max-width: 1500px) {
+  .site-nav {
+    gap: var(--space-1);
+  }
+  .site-nav a:not(.button) {
+    padding-inline: 10px;
+  }
+  /* The anonymous nav (login + register buttons) is the widest variant;
+   * the search yields width first so the row never spills. */
+  .header-search {
+    flex-basis: 225px;
+  }
+}
+@media (max-width: 900px) {
+  /* Small screens get a deliberate second bar (full-width, bordered,
+   * left-aligned, scrollable) instead of an accidental wrap. */
+  .site-header__inner {
+    flex-wrap: wrap;
+    row-gap: 0;
+    padding-block: var(--space-2);
+  }
+  .site-nav {
+    order: 3;
+    flex-basis: 100%;
+    margin-inline-start: 0;
+    overflow-x: auto;
+    border-top: 1px solid var(--color-border);
+    padding-top: var(--space-1);
+    scrollbar-width: none;
+  }
+  .site-nav::-webkit-scrollbar {
+    display: none;
+  }
+  /* Items keep their natural width and the row scrolls sideways;
+   * without this the links shrink and their labels wrap mid-word. */
+  .site-nav > * {
+    flex: none;
+  }
 }
 .site-nav a {
   text-decoration: none;
@@ -171,6 +213,7 @@ h3 {
   display: inline-flex;
   align-items: center;
   color: var(--color-text);
+  white-space: nowrap;
 }
 .site-nav a:not(.button) {
   font-weight: 600;
@@ -348,6 +391,14 @@ h3 {
   display: grid;
   animation: panel-in var(--motion) ease-out;
 }
+.lang-menu__caption {
+  padding: 6px var(--space-3) 2px;
+  font-size: 11.5px;
+  font-weight: 700;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
 .lang-menu__item {
   display: flex;
   align-items: center;
@@ -378,6 +429,7 @@ h3 {
   align-items: center;
   gap: var(--space-2);
   flex: 0 1 300px;
+  min-width: 0;
   height: 44px;
   margin-inline-start: var(--space-3);
   padding-inline: 14px;
@@ -1237,11 +1289,13 @@ table.table {
 }
 .trust-row {
   display: flex;
-  flex-direction: column;
-  gap: var(--space-3);
+  flex-direction: row;
+  flex-wrap: wrap;
+  gap: var(--space-2) var(--space-5);
   list-style: none;
   margin: 0;
   padding: 0;
+  font-size: 14.5px;
   color: rgb(255 255 255 / 0.9);
 }
 .trust-row li {
@@ -1437,18 +1491,142 @@ table.table {
   background: #c084fc;
   animation-delay: 6s;
 }
-.hero-frame {
+/* The hero visual as a browser window: chrome bar (dots, address pill,
+ * live-demo chip), the rotating real cover photos, and a caption bar
+ * naming the template on show. Replaces the bare photo frame + floating
+ * cards, which read as a random stock-photo dump. */
+.browser-frame {
   position: relative;
   z-index: 1;
   overflow: hidden;
-  border-radius: var(--radius-card);
-  border: 1px solid rgb(255 255 255 / 0.5);
-  box-shadow: 0 24px 48px rgb(15 23 42 / 0.35);
-  aspect-ratio: 3 / 2;
+  border-radius: 18px;
+  background: #ffffff;
+  border: 1px solid rgb(255 255 255 / 0.6);
+  box-shadow: 0 30px 60px rgb(2 6 23 / 0.45);
 }
-/* Rotating showcase slides: crossfade + a slow Ken Burns drift. The
- * first slide is the no-JS fallback; the active one always sits on top
- * fully opaque. */
+.browser-frame__bar {
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  height: 44px;
+  padding-inline: 14px;
+  background: #eef2f7;
+  border-bottom: 1px solid var(--color-border);
+}
+.browser-frame__dots {
+  display: inline-flex;
+  gap: 7px;
+  flex: none;
+}
+.browser-frame__dots span {
+  width: 11px;
+  height: 11px;
+  border-radius: 50%;
+  background: #f87171;
+}
+.browser-frame__dots span:nth-child(2) {
+  background: #fbbf24;
+}
+.browser-frame__dots span:nth-child(3) {
+  background: #34d399;
+}
+.browser-frame__url {
+  flex: 1;
+  max-width: 320px;
+  margin-inline: auto;
+  padding: 4px 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: #ffffff;
+  color: var(--color-text-muted);
+  font-size: 12.5px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+}
+.live-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 4px 10px;
+  border-radius: var(--radius-pill);
+  background: rgb(22 163 74 / 0.12);
+  color: #15803d;
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+}
+.live-chip__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #16a34a;
+  animation: live-pulse 1.8s ease-in-out infinite;
+}
+@keyframes live-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 rgb(22 163 74 / 0.45); }
+  50% { box-shadow: 0 0 0 5px rgb(22 163 74 / 0); }
+}
+@keyframes hero-drift {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  50% { transform: translate(20px, -16px) scale(1.08); }
+}
+.browser-frame__screen {
+  position: relative;
+  aspect-ratio: 16 / 10;
+  background: #0f172a;
+}
+.browser-frame__caption {
+  position: absolute;
+  inset-inline: 0;
+  bottom: 0;
+  z-index: 3;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: 30px 16px 12px;
+  background: linear-gradient(180deg, transparent, rgb(2 6 23 / 0.78));
+  color: #ffffff;
+}
+.browser-frame__titles {
+  display: flex;
+  align-items: baseline;
+  gap: var(--space-2);
+  min-width: 0;
+  flex: 1;
+}
+.browser-frame__title {
+  font-weight: 700;
+  font-size: 15px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.browser-frame__cat {
+  flex: none;
+  padding: 2px 9px;
+  border-radius: var(--radius-pill);
+  background: rgb(255 255 255 / 0.22);
+  font-size: 12px;
+  font-weight: 600;
+}
+.browser-frame__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  flex: none;
+  color: #ffffff;
+  font-weight: 700;
+  font-size: 14px;
+  text-decoration: none;
+}
+.browser-frame__link:hover {
+  text-decoration: underline;
+}
+/* Rotating slides inside the browser screen: a clean crossfade (the
+ * old Ken Burns zoom made screenshots feel seasick). The first slide
+ * is the no-JS fallback; the active one sits fully opaque on top. */
 .hero-slide {
   position: absolute;
   inset: 0;
@@ -1457,24 +1635,18 @@ table.table {
   object-fit: cover;
   display: block;
   opacity: 0;
-  transform: scale(1.02);
-  transition: opacity 900ms ease, transform 6000ms ease;
+  transition: opacity 900ms ease;
 }
 .hero-slide:first-child {
   opacity: 1;
 }
 .hero-slide--active {
   opacity: 1;
-  transform: scale(1.09);
 }
 .hero-dots {
-  position: absolute;
-  left: 50%;
-  bottom: 12px;
-  transform: translateX(-50%);
   display: flex;
   gap: 6px;
-  z-index: 3;
+  flex: none;
 }
 .hero-dot {
   width: 8px;
@@ -1489,65 +1661,6 @@ table.table {
 .hero-dot--active {
   width: 24px;
   background: #ffffff;
-}
-.float-card {
-  position: absolute;
-  z-index: 2;
-  width: 150px;
-  aspect-ratio: 3 / 2;
-  overflow: hidden;
-  border-radius: 14px;
-  border: 3px solid #ffffff;
-  box-shadow: var(--shadow-card-hover);
-  animation: hero-float 6s ease-in-out infinite;
-}
-.float-slide {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  object-fit: cover;
-  display: block;
-  opacity: 0;
-  transition: opacity 900ms ease;
-}
-.float-slide:first-child {
-  opacity: 1;
-}
-.float-slide--active {
-  opacity: 1;
-}
-.float-card--a {
-  left: 0;
-  bottom: 16px;
-}
-.float-card--b {
-  right: 0;
-  top: 20px;
-  width: 130px;
-  animation-delay: 3s;
-}
-@keyframes hero-float {
-  0%, 100% { transform: translateY(0); }
-  50% { transform: translateY(-12px); }
-}
-@keyframes hero-drift {
-  0%, 100% { transform: translate(0, 0) scale(1); }
-  50% { transform: translate(20px, -16px) scale(1.08); }
-}
-@media (max-width: 639px) {
-  .float-card {
-    width: 110px;
-  }
-  .float-card--b {
-    width: 96px;
-  }
-}
-@media (prefers-reduced-motion: reduce) {
-  .hero-blob,
-  .float-card {
-    animation: none;
-  }
 }
 /* Auth pages (Canva v5): white card on a soft gradient backdrop. */
 .auth-main {

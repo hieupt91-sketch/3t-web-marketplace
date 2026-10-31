@@ -1543,5 +1543,7 @@
   "ui.how.guide_step1": "Chọn mẫu trong thư viện — lọc nhanh theo ngành nghề (Ẩm thực, Làm đẹp, Bất động sản…) hoặc gõ từ khóa.",
   "ui.how.guide_step2": "Mở trang chi tiết, xem thử bản demo chạy thật và chọn gói (tự triển khai hoặc hosting kèm tên miền phụ).",
   "ui.how.guide_step3": "Thanh toán bằng cách bạn quen: chuyển khoản ngân hàng, PayPal, chuyển khoản USD, VNPay hoặc MoMo.",
-  "ui.how.guide_step4": "Website hiện trong mục Site của tôi với trạng thái Đang hoạt động — bấm vào là mở trang của bạn."
+  "ui.how.guide_step4": "Website hiện trong mục Site của tôi với trạng thái Đang hoạt động — bấm vào là mở trang của bạn.",
+  "ui.home.live_demo": "Demo chạy thật",
+  "ui.home.view_template": "Xem mẫu này"
 }

@@ -61,15 +61,17 @@ export default async function Home({ params }: Params) {
       const code = x.category ?? 'website';
       if (seen.has(code)) continue;
       seen.add(code);
-      distinctSlides.push({ src: x.preview_image!, alt: x.title });
+      const catLabel = t(`ui.category.${code}`);
+      distinctSlides.push({
+        src: x.preview_image!,
+        alt: x.title,
+        href: `/${locale}/templates/${x.slug}`,
+        caption: catLabel === `ui.category.${code}` ? undefined : catLabel,
+      });
     }
   }
   const heroSlides = distinctSlides.slice(0, 5);
-  const heroFloatA = distinctSlides.slice(5, 8);
-  const heroFloatB = distinctSlides.length > 8 ? distinctSlides.slice(8, 11) : distinctSlides.slice(1, 4);
   const heroFallback: HeroSlide[] = [{ src: '/hero/hero-showcase.jpg', alt: '' }];
-  const floatFallbackA: HeroSlide[] = [{ src: '/demo/demo-fashion.jpg', alt: '' }];
-  const floatFallbackB: HeroSlide[] = [{ src: '/demo/demo-restaurant.jpg', alt: '' }];
   return (
     <>
       <section className="hero">
@@ -78,16 +80,10 @@ export default async function Home({ params }: Params) {
             <p className="hero-badge">{t('ui.home.badge')}</p>
             <h1>{t('ui.home.title')}</h1>
             <p className="muted" style={{ maxWidth: 680 }}>{t('ui.home.lead')}</p>
-            <form className="search" action={`/${locale}/templates`} method="get" role="search">
-              <label htmlFor="home-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
-              <input id="home-search" className="input" type="search" name="q" placeholder={t('ui.catalog.search_placeholder')} />
-              <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
-            </form>
             <div className="hero-actions">
               <Link className="button" href={`/${locale}/templates`}>{t('ui.home.browse_all')}</Link>
               <Link className="button button--secondary" href={`/${locale}/how-it-works`}>{t('ui.home.how_it_works')}</Link>
             </div>
-            <p style={{ margin: 0 }}><Link href={`/${locale}/plans/compare`}>{t('ui.home.compare_plans')}</Link></p>
             <ul className="trust-row">
               <li><span className="trust-icon"><TrustIcon kind="eye" /></span>{t('ui.home.trust_demo')}</li>
               <li><span className="trust-icon"><TrustIcon kind="bolt" /></span>{t('ui.home.trust_instant')}</li>
@@ -96,8 +92,6 @@ export default async function Home({ params }: Params) {
           </div>
           <HeroShowcase
             slides={heroSlides.length > 0 ? heroSlides : heroFallback}
-            floatA={heroFloatA.length > 0 ? heroFloatA : floatFallbackA}
-            floatB={heroFloatB.length > 0 ? heroFloatB : floatFallbackB}
           />
         </div>
       </section>

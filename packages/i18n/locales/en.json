@@ -1543,5 +1543,7 @@
   "ui.how.guide_step1": "Pick a template in the library — filter by trade (Food, Beauty, Real estate…) or search by keyword.",
   "ui.how.guide_step2": "Open the detail page, try the live demo and choose a package (self-host, or hosting with a subdomain).",
   "ui.how.guide_step3": "Pay the way you prefer: bank transfer, PayPal, USD transfer, VNPay or MoMo.",
-  "ui.how.guide_step4": "Your website appears under My sites with an Active status — click through to open it."
+  "ui.how.guide_step4": "Your website appears under My sites with an Active status — click through to open it.",
+  "ui.home.live_demo": "Live demo",
+  "ui.home.view_template": "View this template"
 }
