@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { EmptyState, ErrorState, Loading, StatusBadge } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
+import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface Entitlement {
   id: string;
@@ -12,7 +13,7 @@ interface Entitlement {
   status: string;
   instance_limit: number;
   updates_until: string | null;
-  template: { id: string; slug: string };
+  template: { id: string; slug: string; adapter: string | null };
   version: { id: string; semver: string };
   created_at: string;
 }
@@ -56,7 +57,12 @@ function PurchasesInner() {
             <article key={e.id} className="card stack">
               <div className="row" style={{ justifyContent: 'space-between' }}>
                 <strong className="mono">{e.template.slug}</strong>
-                <StatusBadge tone={e.status === 'active' ? 'success' : 'neutral'}>{t(`ui.entitlement.status.${e.status}`)}</StatusBadge>
+                <span className="row">
+                  <StatusBadge tone={isDynamicAdapter(e.template.adapter) ? 'info' : 'neutral'}>
+                    {isDynamicAdapter(e.template.adapter) ? t('ui.catalog.kind_dynamic') : t('ui.catalog.kind_static')}
+                  </StatusBadge>
+                  <StatusBadge tone={e.status === 'active' ? 'success' : 'neutral'}>{t(`ui.entitlement.status.${e.status}`)}</StatusBadge>
+                </span>
               </div>
               <dl className="details">
                 <dt>{t('ui.deployment.selfhost')}</dt><dd>{t(`ui.deployment.${e.mode}`)}</dd>

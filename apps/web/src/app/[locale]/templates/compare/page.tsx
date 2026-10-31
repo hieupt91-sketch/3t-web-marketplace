@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { formatMoney, translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
+import { isDynamicAdapter } from '@/lib/template-kind';
 import { CompareStoredLink } from '@/components/compare-stored-link';
 import { coverGradient } from '@/lib/cover-gradient';
 
@@ -60,6 +61,7 @@ export default async function CompareTemplatesPage({ params, searchParams }: Pro
 
   const hasAdmin = (d: Detail) => d.capabilities.includes('admin');
   const rows: { label: string; values: (d: Detail) => string }[] = [
+    { label: t('ui.catalog.filter_kind'), values: (d) => (isDynamicAdapter(d.adapter) ? t('ui.catalog.kind_dynamic') : t('ui.catalog.kind_static')) },
     { label: t('ui.compare.audience'), values: (d) => (d.category ? t(`ui.category.${d.category}`) : '—') },
     { label: t('ui.compare.edit'), values: (d) => (hasAdmin(d) ? t('ui.compare.edit_admin') : t('ui.compare.edit_files')) },
     { label: t('ui.compare.form'), values: (d) => (hasAdmin(d) ? t('ui.compare.form_received') : t('ui.compare.form_display')) },
@@ -111,6 +113,13 @@ export default async function CompareTemplatesPage({ params, searchParams }: Pro
                       {d.preview_image ? <img src={d.preview_image} alt="" /> : null}
                     </span>
                     <Link href={`/${locale}/templates/${d.slug}`}>{d.title}</Link>
+                    <span>
+                      {isDynamicAdapter(d.adapter) ? (
+                        <span className="badge badge--info">{t('ui.catalog.badge_dynamic')}</span>
+                      ) : (
+                        <span className="badge badge--neutral">{t('ui.catalog.kind_static')}</span>
+                      )}
+                    </span>
                     <span className="row">
                       <Link className="button button--secondary" href={`/${locale}/templates/${d.slug}`}>{t('ui.catalog.view_detail')}</Link>
                       <Link className="button button--secondary" href={removeHref(d.slug)}>{t('ui.compare.remove')}</Link>

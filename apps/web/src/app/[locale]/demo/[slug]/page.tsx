@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
+import { isDynamicAdapter } from '@/lib/template-kind';
 import { DemoViewer } from '@/components/demo-viewer';
 
 type Props = { params: Promise<{ locale: Locale; slug: string }> };
@@ -27,6 +28,13 @@ export default async function DemoPage({ params }: Props) {
     <div className="container stack">
       <p><Link href={`/${locale}/templates/${template.slug}`}>← {template.title}</Link></p>
       <h1>{t('ui.demo.heading', { title: template.title })}</h1>
+      <p style={{ margin: 0 }}>
+        {isDynamicAdapter(template.adapter) ? (
+          <span className="badge badge--info">{t('ui.catalog.badge_dynamic')}</span>
+        ) : (
+          <span className="badge badge--neutral">{t('ui.catalog.kind_static')}</span>
+        )}
+      </p>
       {template.demo.available && template.demo.url ? (
         <DemoViewer url={template.demo.url} title={template.title} slug={template.slug} />
       ) : template.demo.session ? (

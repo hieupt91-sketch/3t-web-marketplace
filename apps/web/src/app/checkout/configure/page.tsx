@@ -8,6 +8,7 @@ import { AuthGate } from '@/components/auth-gate';
 import { Alert, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
+import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface Plan { id: string; code: string; deployment_mode: string; name: Record<string, string>; prices: { interval: string; amount_minor: string; currency: string }[] }
 interface Template { id: string; slug: string; title: string; adapter: string | null; plans: Plan[] }
@@ -47,7 +48,14 @@ function Configure() {
   return (
     <div className="stack">
       <h1>{t('ui.checkout.configure_title')}</h1>
-      <p className="muted">{tpl.title}</p>
+      <p className="muted">
+        {tpl.title}{' '}
+        {isDynamicAdapter(tpl.adapter) ? (
+          <span className="badge badge--info">{t('ui.catalog.badge_dynamic')}</span>
+        ) : (
+          <span className="badge badge--neutral">{t('ui.catalog.kind_static')}</span>
+        )}
+      </p>
       {error ? <ErrorState error={error} /> : null}
       <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field"><strong>{t('ui.checkout.choose_plan')}</strong></legend>

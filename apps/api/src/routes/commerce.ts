@@ -975,8 +975,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/me/entitlements', async (request) => {
     const auth = requireUser(request);
-    const { rows } = await db.query<{ id: string; mode: string; status: string; instance_limit: number; updates_until: Date | null; template_id: string; version_id: string; slug: string; semver: string; created_at: Date }>(
-      `SELECT e.id, e.mode, e.status, e.instance_limit, e.updates_until, e.template_id, e.version_id, t.slug, v.semver, e.created_at
+    const { rows } = await db.query<{ id: string; mode: string; status: string; instance_limit: number; updates_until: Date | null; template_id: string; version_id: string; slug: string; semver: string; adapter: string; created_at: Date }>(
+      `SELECT e.id, e.mode, e.status, e.instance_limit, e.updates_until, e.template_id, e.version_id, t.slug, v.semver, v.adapter, e.created_at
        FROM entitlements e JOIN templates t ON t.id = e.template_id JOIN template_versions v ON v.id = e.version_id
        WHERE e.user_id = $1 ORDER BY e.created_at DESC`,
       [auth.userId],
@@ -988,7 +988,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         status: e.status,
         instance_limit: e.instance_limit,
         updates_until: e.updates_until?.toISOString() ?? null,
-        template: { id: e.template_id, slug: e.slug },
+        template: { id: e.template_id, slug: e.slug, adapter: e.adapter },
         version: { id: e.version_id, semver: e.semver },
         created_at: e.created_at.toISOString(),
       })),

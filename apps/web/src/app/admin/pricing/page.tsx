@@ -8,11 +8,13 @@ import { Alert, EmptyState, ErrorState, Loading, StatusBadge } from '@/component
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { templateTone } from '@/lib/status';
+import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface OverviewRow {
   id: string;
   slug: string;
   title_vi: string | null;
+  adapter: string | null;
   category_id: string | null;
   category_code: string | null;
   status: string;
@@ -42,6 +44,7 @@ function validAmount(value: string): boolean {
 function PricingInner() {
   const { t, locale } = useT();
   const [rows, setRows] = useState<OverviewRow[]>([]);
+  const [kindFilter, setKindFilter] = useState<'' | 'static' | 'dynamic'>('');
   const [categories, setCategories] = useState<Category[]>([]);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -141,6 +144,9 @@ function PricingInner() {
   }
 
   const payloadReady = scopePayload() !== null;
+  // Display filter only: bulk scopes stay server-side (all / category /
+  // selected ids); the kind filter just narrows which rows are on screen.
+  const visibleRows = kindFilter === '' ? rows : rows.filter((r) => isDynamicAdapter(r.adapter) === (kindFilter === 'dynamic'));
 
   return (
     <div className="stack">
@@ -199,12 +205,20 @@ function PricingInner() {
               </button>
             </div>
           </section>
+          <div className="row" role="group" aria-label={t('ui.catalog.filter_kind')}>
+            {(['', 'static', 'dynamic'] as const).map((k) => (
+              <button key={k || 'all'} type="button" className={`button${kindFilter === k ? '' : ' button--secondary'}`} aria-pressed={kindFilter === k} onClick={() => setKindFilter(k)}>
+                {k === '' ? t('ui.catalog.filter_all') : t(`ui.catalog.kind_${k}`)}
+              </button>
+            ))}
+          </div>
           <div className="table-wrap">
             <table className="table">
               <thead>
                 <tr>
                   <th scope="col"><span className="visually-hidden">{t('ui.pricing.scope_selected')}</span></th>
                   <th scope="col">{t('ui.admin.templates.col_name')}</th>
+                  <th scope="col">{t('ui.admin.templates.col_kind')}</th>
                   <th scope="col">{t('ui.pricing.col_category')}</th>
                   <th scope="col">{t('ui.admin.templates.col_status')}</th>
                   <th scope="col">{t('ui.pricing.col_price')}</th>
@@ -213,7 +227,7 @@ function PricingInner() {
                 </tr>
               </thead>
               <tbody>
-                {rows.map((row) => (
+                {visibleRows.map((row) => (
                   <tr key={row.id}>
                     <td>
                       <input
@@ -226,6 +240,11 @@ function PricingInner() {
                     <td>
                       <Link href={`/admin/templates/${row.id}`}><strong>{row.title_vi ?? row.slug}</strong></Link>
                       <div className="mono muted">{row.slug}</div>
+                    </td>
+                    <td>
+                      <StatusBadge tone={isDynamicAdapter(row.adapter) ? 'info' : 'neutral'}>
+                        {isDynamicAdapter(row.adapter) ? t('ui.catalog.kind_dynamic') : t('ui.catalog.kind_static')}
+                      </StatusBadge>
                     </td>
                     <td>{row.category_code ?? '—'}</td>
                     <td>

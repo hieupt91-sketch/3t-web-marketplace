@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { notFound } from 'next/navigation';
 import { formatMoney, translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type PublicPlan, type TemplateSummary } from '@/lib/api-server';
+import { isDynamicAdapter } from '@/lib/template-kind';
 import { languageAlternates } from '@/lib/seo';
 
 type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ template?: string }> };
@@ -50,6 +51,13 @@ async function TemplateCompare({ locale, slug }: { locale: Locale; slug: string 
     <div className="container stack">
       <p><Link href={`/${locale}/templates/${result.data.slug}`}>← {result.data.title}</Link></p>
       <h1>{t('ui.compare.title')}</h1>
+      <p style={{ margin: 0 }}>
+        {isDynamicAdapter(result.data.adapter) ? (
+          <span className="badge badge--info">{t('ui.catalog.badge_dynamic')}</span>
+        ) : (
+          <span className="badge badge--neutral">{t('ui.catalog.kind_static')}</span>
+        )}
+      </p>
       {plans.length === 0 ? (
         <p className="muted">{t('ui.detail.no_plans')}</p>
       ) : (

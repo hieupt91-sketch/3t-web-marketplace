@@ -469,9 +469,10 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     requirePermission(request, 'template:read');
     const { rows } = await db.query<{
       id: string; slug: string; title_vi: string | null; category_id: string | null; category_code: string | null;
-      status: string; hidden: boolean; current_price_minor: string | null;
+      status: string; hidden: boolean; current_price_minor: string | null; adapter: string | null;
     }>(
       `SELECT t.id, t.slug, tt.title AS title_vi, t.category_id, c.code AS category_code, t.status, t.hidden,
+              (SELECT v.adapter FROM template_versions v WHERE v.template_id = t.id ORDER BY v.created_at DESC LIMIT 1) AS adapter,
               (SELECT pp.amount_minor::text
                  FROM plans p JOIN plan_prices pp ON pp.plan_id = p.id
                 WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'selfhost'
