@@ -253,21 +253,26 @@ h3 {
 .nav-dropdown__toggle:hover {
   color: var(--color-primary);
 }
+/* Mega-menu: two contained columns of icon tiles. Columns are
+ * minmax(0, 1fr) and labels ellipsize, so the count pills can never
+ * spill past the panel's right edge (the old fixed 360px panel with
+ * nowrap space-between rows pushed them out over the hero). */
 .nav-dropdown__panel {
   position: absolute;
-  top: calc(100% + 6px);
-  right: -12px;
+  top: calc(100% + 8px);
+  left: 50%;
+  translate: -50% 0;
   z-index: 30;
   /* Closed panels are display:none, not just visibility:hidden — a hidden
    * but rendered panel still widens the page's scrollable overflow on
    * mobile (measured: it pushed a 360px viewport to 463px). */
   display: none;
-  grid-template-columns: 1fr 1fr;
-  gap: 2px;
-  width: min(360px, 88vw);
-  padding: var(--space-2);
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  width: min(600px, calc(100vw - 24px));
+  padding: 12px;
   border: 1px solid var(--color-border);
-  border-radius: 16px;
+  border-radius: 18px;
   background: var(--color-surface);
   box-shadow: var(--shadow-card-hover);
 }
@@ -281,20 +286,48 @@ h3 {
 }
 .site-nav a.nav-dropdown__item {
   display: flex;
-  justify-content: space-between;
   align-items: center;
-  gap: var(--space-2);
-  min-height: 44px;
-  padding-inline: var(--space-3);
-  border-radius: 10px;
+  gap: 10px;
+  min-width: 0;
+  min-height: 54px;
+  padding: 8px 10px;
+  border-radius: 12px;
   font-weight: 600;
-  white-space: nowrap;
+  white-space: normal;
 }
 .site-nav a.nav-dropdown__item:hover {
   background: var(--color-bg-accent);
   color: var(--color-primary);
 }
+.nav-dropdown__icon {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  border-radius: 10px;
+  color: var(--color-primary);
+  background: var(--color-bg-accent);
+}
+.nav-dropdown__icon--food { color: #ea580c; background: #ffedd5; }
+.nav-dropdown__icon--beauty { color: #db2777; background: #fce7f3; }
+.nav-dropdown__icon--realestate { color: #0284c7; background: #e0f2fe; }
+.nav-dropdown__icon--business { color: #4f46e5; background: #e0e7ff; }
+.nav-dropdown__icon--store { color: #16a34a; background: #dcfce7; }
+.nav-dropdown__icon--landing { color: #7c3aed; background: #ede9fe; }
+.nav-dropdown__icon--portfolio { color: #0891b2; background: #cffafe; }
+.nav-dropdown__icon--blog { color: #d97706; background: #fef3c7; }
+.nav-dropdown__label {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 14.5px;
+}
 .nav-dropdown__count {
+  flex: none;
   font-size: 12px;
   font-weight: 700;
   color: var(--color-primary);
@@ -304,14 +337,29 @@ h3 {
 }
 .site-nav a.nav-dropdown__item--all {
   grid-column: 1 / -1;
+  min-height: 48px;
+  margin-top: 4px;
   border-top: 1px solid var(--color-border);
   border-radius: 0 0 10px 10px;
   color: var(--color-primary);
 }
-@media (max-width: 639px) {
+/* On small screens the panel escapes the horizontally scrolling nav
+ * (which would clip it) as a fixed sheet under the header. */
+@media (max-width: 900px) {
   .nav-dropdown__panel {
-    right: auto;
-    left: 0;
+    position: fixed;
+    top: 110px;
+    left: 12px;
+    right: 12px;
+    width: auto;
+    translate: none;
+    max-height: calc(100dvh - 126px);
+    overflow-y: auto;
+  }
+}
+@media (max-width: 560px) {
+  .nav-dropdown__panel {
+    grid-template-columns: minmax(0, 1fr);
   }
 }
 /* Header icon shortcuts (saved templates, orders) with a count badge. */

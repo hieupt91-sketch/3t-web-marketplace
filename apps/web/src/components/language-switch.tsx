@@ -1,6 +1,6 @@
 'use client';
 
-import { useRef, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePathname } from 'next/navigation';
 import { LOCALES, type Locale } from '@3t/i18n';
 import { api } from '@/lib/api';
@@ -17,6 +17,17 @@ export function LanguageSwitch() {
   const pathname = usePathname() ?? '/';
   const [open, setOpen] = useState(false);
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const rootRef = useRef<HTMLSpanElement | null>(null);
+
+  /* Touch has no hover-leave: close on an outside tap while open. */
+  useEffect(() => {
+    if (!open) return;
+    const onDown = (e: PointerEvent) => {
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+    };
+    document.addEventListener('pointerdown', onDown);
+    return () => document.removeEventListener('pointerdown', onDown);
+  }, [open ]);
 
   const scheduleClose = () => {
     closeTimer.current = setTimeout(() => setOpen(false), 250);
@@ -38,7 +49,18 @@ export function LanguageSwitch() {
   }
 
   return (
-    <span className={`lang-menu${open ? ' lang-menu--open' : ''}`} onMouseEnter={openNow} onMouseLeave={scheduleClose}>
+    <span
+      ref={rootRef}
+      className={`lang-menu${open ? ' lang-menu--open' : ''}`}
+      onPointerEnter={(e) => {
+        /* Mouse-only hover-open: on touch the synthetic enter fires
+         * right before the tap's click and would undo the toggle. */
+        if (e.pointerType === 'mouse') openNow();
+      }}
+      onPointerLeave={(e) => {
+        if (e.pointerType === 'mouse') scheduleClose();
+      }}
+    >
       <button
         type="button"
         className="lang-menu__button"
