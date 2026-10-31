@@ -8,16 +8,14 @@ export interface HeroSlide {
   src: string;
   alt: string;
   href?: string;
-  caption?: string;
 }
 
 /**
- * The hero visual as a browser window onto a real demo: a chrome frame
- * (traffic dots, address pill, live-demo chip) around the rotating cover
- * photos, with a caption bar naming the actual template on show and a
- * link through to it. The frame sells the product's core promise — what
- * you see is a real, running website — instead of floating random
- * photos. Rotation pauses on hover and for reduced-motion users.
+ * The hero banner: a browser window (chrome bar with address pill and
+ * live-demo chip) around rotating cover photos — and NOTHING over the
+ * photo itself. It is a banner, not a caption card: the dots and the
+ * "view this template" link live in a quiet row under the frame.
+ * Rotation pauses on hover and for reduced-motion users.
  */
 export function HeroShowcase({ slides }: { slides: HeroSlide[] }) {
   const { t } = useT();
@@ -65,38 +63,36 @@ export function HeroShowcase({ slides }: { slides: HeroSlide[] }) {
               className={`hero-slide${i === active ? ' hero-slide--active' : ''}`}
             />
           ))}
-          {current ? (
-            <div className="browser-frame__caption">
-              <span className="browser-frame__titles">
-                <span className="browser-frame__title">{current.alt}</span>
-                {current.caption ? <span className="browser-frame__cat">{current.caption}</span> : null}
-              </span>
-              {current.href ? (
-                <Link className="browser-frame__link" href={current.href}>
-                  {t('ui.home.view_template')}
-                  <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
-                    <path d="M5 12h14" /><path d="m13 6 6 6-6 6" />
-                  </svg>
-                </Link>
-              ) : null}
-              {slides.length > 1 ? (
-                <span className="hero-dots">
-                  {slides.map((slide, i) => (
-                    <button
-                      key={slide.src}
-                      type="button"
-                      aria-label={slide.alt}
-                      aria-current={i === active}
-                      className={`hero-dot${i === active ? ' hero-dot--active' : ''}`}
-                      onClick={() => setActive(i)}
-                    />
-                  ))}
-                </span>
-              ) : null}
-            </div>
-          ) : null}
         </div>
       </div>
+      {current ? (
+        <div className="hero-frame-meta">
+          {slides.length > 1 ? (
+            <span className="hero-dots">
+              {slides.map((slide, i) => (
+                <button
+                  key={slide.src}
+                  type="button"
+                  aria-label={slide.alt}
+                  aria-current={i === active}
+                  className={`hero-dot${i === active ? ' hero-dot--active' : ''}`}
+                  onClick={() => setActive(i)}
+                />
+              ))}
+            </span>
+          ) : (
+            <span />
+          )}
+          {current.href ? (
+            <Link className="hero-frame-meta__link" href={current.href}>
+              {t('ui.home.view_template')}
+              <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M5 12h14" /><path d="m13 6 6 6-6 6" />
+              </svg>
+            </Link>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

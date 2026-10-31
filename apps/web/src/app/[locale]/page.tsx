@@ -50,27 +50,27 @@ export default async function Home({ params }: Params) {
     ...CATEGORY_ORDER.filter((c) => byCategory.has(c)),
     ...[...byCategory.keys()].filter((c) => !CATEGORY_ORDER.includes(c)).sort(),
   ];
-  // Hero showcase: real cover photos, one per category first, rotating in
-  // the frame; the floating cards cycle the next picks. Static artwork is
-  // the fallback when the catalog cannot be read.
+  // Hero banner: a curated set of the strongest, highest-resolution
+  // covers. Many catalog covers are small portrait stock that upscale
+  // into mush in a wide frame, so the banner picks come first when the
+  // catalog has them; any remaining slots fill from the catalog order.
+  const HERO_PICKS = ['biet-thu-nghi-duong', 'blog-am-thuc', 'noi-that', 'spa-lam-dep', 'nuoc-ep-sinh-to'];
   const photoPool = catalog.ok ? catalog.data.filter((x) => x.preview_image) : [];
-  const distinctSlides: HeroSlide[] = [];
+  const heroSlides: HeroSlide[] = [];
   {
-    const seen = new Set<string>();
+    const bySlug = new Map(photoPool.map((x) => [x.slug, x] as const));
+    const used = new Set<string>();
+    const push = (x: (typeof photoPool)[number] | undefined) => {
+      if (!x || used.has(x.slug)) return;
+      used.add(x.slug);
+      heroSlides.push({ src: x.preview_image!, alt: x.title, href: `/${locale}/templates/${x.slug}` });
+    };
+    for (const slug of HERO_PICKS) push(bySlug.get(slug));
     for (const x of photoPool) {
-      const code = x.category ?? 'website';
-      if (seen.has(code)) continue;
-      seen.add(code);
-      const catLabel = t(`ui.category.${code}`);
-      distinctSlides.push({
-        src: x.preview_image!,
-        alt: x.title,
-        href: `/${locale}/templates/${x.slug}`,
-        caption: catLabel === `ui.category.${code}` ? undefined : catLabel,
-      });
+      if (heroSlides.length >= 5) break;
+      push(x);
     }
   }
-  const heroSlides = distinctSlides.slice(0, 5);
   const heroFallback: HeroSlide[] = [{ src: '/hero/hero-showcase.jpg', alt: '' }];
   return (
     <>

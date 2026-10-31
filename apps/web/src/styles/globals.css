@@ -253,10 +253,10 @@ h3 {
 .nav-dropdown__toggle:hover {
   color: var(--color-primary);
 }
-/* Mega-menu: two contained columns of icon tiles. Columns are
- * minmax(0, 1fr) and labels ellipsize, so the count pills can never
- * spill past the panel's right edge (the old fixed 360px panel with
- * nowrap space-between rows pushed them out over the hero). */
+/* Category dropdown: one long single column of plain text rows
+ * (owner taste: no icons, no counts). The column is minmax(0, 1fr)
+ * and labels ellipsize, so a long category name can never push
+ * anything past the panel's edge. */
 .nav-dropdown__panel {
   position: absolute;
   top: calc(100% + 8px);
@@ -267,12 +267,12 @@ h3 {
    * but rendered panel still widens the page's scrollable overflow on
    * mobile (measured: it pushed a 360px viewport to 463px). */
   display: none;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 4px 10px;
-  width: min(600px, calc(100vw - 24px));
-  padding: 12px;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 2px;
+  width: min(360px, calc(100vw - 24px));
+  padding: 10px;
   border: 1px solid var(--color-border);
-  border-radius: 18px;
+  border-radius: 16px;
   background: var(--color-surface);
   box-shadow: var(--shadow-card-hover);
 }
@@ -289,9 +289,9 @@ h3 {
   align-items: center;
   gap: 10px;
   min-width: 0;
-  min-height: 54px;
-  padding: 8px 10px;
-  border-radius: 12px;
+  min-height: 48px;
+  padding: 10px 14px;
+  border-radius: 10px;
   font-weight: 600;
   white-space: normal;
 }
@@ -299,41 +299,13 @@ h3 {
   background: var(--color-bg-accent);
   color: var(--color-primary);
 }
-.nav-dropdown__icon {
-  flex: none;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 10px;
-  color: var(--color-primary);
-  background: var(--color-bg-accent);
-}
-.nav-dropdown__icon--food { color: #ea580c; background: #ffedd5; }
-.nav-dropdown__icon--beauty { color: #db2777; background: #fce7f3; }
-.nav-dropdown__icon--realestate { color: #0284c7; background: #e0f2fe; }
-.nav-dropdown__icon--business { color: #4f46e5; background: #e0e7ff; }
-.nav-dropdown__icon--store { color: #16a34a; background: #dcfce7; }
-.nav-dropdown__icon--landing { color: #7c3aed; background: #ede9fe; }
-.nav-dropdown__icon--portfolio { color: #0891b2; background: #cffafe; }
-.nav-dropdown__icon--blog { color: #d97706; background: #fef3c7; }
 .nav-dropdown__label {
   flex: 1;
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-size: 14.5px;
-}
-.nav-dropdown__count {
-  flex: none;
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--color-primary);
-  background: var(--color-bg-accent);
-  border-radius: var(--radius-pill);
-  padding: 1px 7px;
+  font-size: 15px;
 }
 .site-nav a.nav-dropdown__item--all {
   grid-column: 1 / -1;
@@ -355,11 +327,6 @@ h3 {
     translate: none;
     max-height: calc(100dvh - 126px);
     overflow-y: auto;
-  }
-}
-@media (max-width: 560px) {
-  .nav-dropdown__panel {
-    grid-template-columns: minmax(0, 1fr);
   }
 }
 /* Header icon shortcuts (saved templates, orders) with a count badge. */
@@ -1625,51 +1592,29 @@ table.table {
   aspect-ratio: 16 / 10;
   background: #0f172a;
 }
-.browser-frame__caption {
-  position: absolute;
-  inset-inline: 0;
-  bottom: 0;
-  z-index: 3;
+/* The banner photo carries no text at all; the dots and the link to
+ * the shown template sit in one quiet row under the frame, on the
+ * hero's own background. */
+.hero-frame-meta {
+  position: relative;
+  z-index: 1;
   display: flex;
   align-items: center;
+  justify-content: space-between;
   gap: var(--space-3);
-  padding: 30px 16px 12px;
-  background: linear-gradient(180deg, transparent, rgb(2 6 23 / 0.78));
-  color: #ffffff;
+  margin-top: 14px;
+  padding-inline: 4px;
 }
-.browser-frame__titles {
-  display: flex;
-  align-items: baseline;
-  gap: var(--space-2);
-  min-width: 0;
-  flex: 1;
-}
-.browser-frame__title {
-  font-weight: 700;
-  font-size: 15px;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-.browser-frame__cat {
-  flex: none;
-  padding: 2px 9px;
-  border-radius: var(--radius-pill);
-  background: rgb(255 255 255 / 0.22);
-  font-size: 12px;
-  font-weight: 600;
-}
-.browser-frame__link {
+.hero-frame-meta__link {
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  flex: none;
   color: #ffffff;
   font-weight: 700;
   font-size: 14px;
   text-decoration: none;
 }
-.browser-frame__link:hover {
+.hero-frame-meta__link:hover {
   text-decoration: underline;
 }
 /* Rotating slides inside the browser screen: a clean crossfade (the
