@@ -1420,7 +1420,7 @@
   "ui.payment_settings.account_number": "Account number",
   "ui.payment_settings.account_holder": "Account holder",
   "ui.payment_settings.hub_title": "Automatic confirmation via a bank hub",
-  "ui.payment_settings.hub_hint": "Register with a bank-account monitoring hub (SePay-compatible), point the hub's webhook at the address below and paste the hub's API key. With a hub, orders complete themselves when money arrives; without one, confirm manually on the Reconciliation page.",
+  "ui.payment_settings.hub_hint": "Register with a bank-account monitoring hub — Casso or SePay both work. Point the hub webhook at that hub's own address below (Casso has its own URL) and share one key: paste the hub key into the key field below; for Casso, set this same value as the Security Key of the webhook inside Casso. With a hub, orders complete themselves when money arrives; without one, confirm manually on the Reconciliation page.",
   "ui.payment_settings.webhook_url": "Webhook URL",
   "ui.payment_settings.hub_status": "Hub API key",
   "ui.payment_settings.hub_configured": "Configured",
@@ -1549,5 +1549,11 @@
   "ui.admin.nav.group_goods": "Goods",
   "ui.admin.nav.group_content": "Content",
   "ui.admin.filter_all": "All",
-  "ui.payment_settings.index_hint": "Each method has its own settings page — enable and configure every method separately, nothing mixed together."
+  "ui.payment_settings.index_hint": "Each method has its own settings page — enable and configure every method separately, nothing mixed together.",
+  "ui.catalog.filter_kind": "Template kind",
+  "ui.catalog.kind_static": "Static template",
+  "ui.catalog.kind_dynamic": "Dynamic template",
+  "ui.catalog.badge_dynamic": "Dynamic · Admin included",
+  "ui.payment_settings.casso_webhook_url": "Casso webhook URL",
+  "ui.admin.templates.col_kind": "Kind"
 }

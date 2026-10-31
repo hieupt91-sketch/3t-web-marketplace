@@ -24,7 +24,7 @@ export async function adminCatalogRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.get<{ Querystring: { limit?: string; cursor?: string; status?: string } }>('/templates', async (request) => {
+  app.get<{ Querystring: { limit?: string; cursor?: string; status?: string; kind?: string } }>('/templates', async (request) => {
     requirePermission(request, 'template:read');
     const limit = parseLimit(request.query.limit);
     const cursor = decodeCursor(request.query.cursor);
@@ -33,6 +33,14 @@ export async function adminCatalogRoutes(app: FastifyInstance): Promise<void> {
     if (request.query.status && ['draft', 'published', 'archived'].includes(request.query.status)) {
       params.push(request.query.status);
       where.push(`t.status = $${params.length}`);
+    }
+    if (request.query.kind === 'static' || request.query.kind === 'dynamic') {
+      // Static vs dynamic by the LATEST version's runtime adapter, the same
+      // split the storefront shows — the two kinds stay visibly separate.
+      const latestAdapter = `(SELECT v.adapter FROM template_versions v WHERE v.template_id = t.id ORDER BY v.created_at DESC LIMIT 1)`;
+      where.push(request.query.kind === 'dynamic'
+        ? `${latestAdapter} IN ('node-http', 'next-standalone')`
+        : `COALESCE(${latestAdapter}, 'static-html') NOT IN ('node-http', 'next-standalone')`);
     }
     if (cursor) {
       params.push(cursor.t, cursor.id);

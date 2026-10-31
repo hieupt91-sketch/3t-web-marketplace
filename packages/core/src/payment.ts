@@ -271,3 +271,74 @@ export class BankTransferProvider implements PaymentProvider {
     };
   }
 }
+
+/**
+ * Casso hub webhook (developer.casso.vn): Casso watches the owner's bank
+ * account and POSTs every new transaction as `{ error: 0, data: [tx, ...] }`,
+ * authenticated by a `secure-token` header whose value the owner chooses in
+ * Casso's webhook config — the platform stores that same value as the bank
+ * hub key, so one secret serves both hub kinds. One call can carry several
+ * transactions, hence a batch verifier. Events settle through the SAME
+ * bank_transfer pipeline as SePay reports (attempts are provider
+ * 'bank_transfer'); Casso transaction ids are namespaced `casso:` so the
+ * two hubs' ids can never collide in the dedupe table. Transactions that
+ * cannot settle anything (money out, no order code) normalize to pending
+ * events with an empty reference, which the pipeline records and ignores.
+ */
+export class CassoHubProvider {
+  readonly name = 'casso';
+  readonly sandbox = false;
+  constructor(private readonly secureToken: string) {}
+
+  private authed(headers: Record<string, string | undefined>): boolean {
+    if (!this.secureToken) return false;
+    const raw = headers['secure-token'];
+    if (!raw) return false;
+    const provided = Buffer.from(raw.trim());
+    const expected = Buffer.from(this.secureToken);
+    return provided.length === expected.length && timingSafeEqual(provided, expected);
+  }
+
+  verifyWebhookBatch(rawBody: string, headers: Record<string, string | undefined>): NormalizedEvent[] {
+    if (!this.authed(headers)) throw new WebhookVerificationError('bad_secure_token');
+    let parsed: { error?: unknown; data?: unknown };
+    try {
+      parsed = JSON.parse(rawBody) as { error?: unknown; data?: unknown };
+    } catch {
+      throw new WebhookVerificationError('invalid_json');
+    }
+    // A non-zero error envelope carries no transactions; acknowledge it.
+    if (parsed.error !== undefined && parsed.error !== null && Number(parsed.error) !== 0) return [];
+    if (!Array.isArray(parsed.data)) throw new WebhookVerificationError('missing_data');
+    return parsed.data.map((rawTx, index) => this.normalize(rawTx, rawBody, index));
+  }
+
+  private normalize(rawTx: unknown, rawBody: string, index: number): NormalizedEvent {
+    const tx = (rawTx && typeof rawTx === 'object' ? rawTx : {}) as Record<string, unknown>;
+    const fallbackId = `casso:hubevt_${createHash('sha256').update(`${rawBody}#${index}`).digest('hex').slice(0, 32)}`;
+    const eventId = tx.id !== undefined && tx.id !== null && String(tx.id) !== '' ? `casso:${String(tx.id)}` : fallbackId;
+    const ignored: NormalizedEvent = {
+      providerEventId: eventId,
+      providerRef: '',
+      status: 'pending',
+      amountMinor: '0',
+      currency: 'VND',
+      occurredAt: new Date(),
+    };
+    const rawAmount = typeof tx.amount === 'number' ? tx.amount : Number.parseFloat(String(tx.amount ?? ''));
+    // Only incoming money settles: Casso reports withdrawals as negative amounts.
+    if (!Number.isFinite(rawAmount) || rawAmount <= 0) return ignored;
+    const description = typeof tx.description === 'string' ? tx.description : '';
+    const found = description.toUpperCase().match(/WM[0-9A-F]{10}/);
+    if (!found) return ignored;
+    const when = typeof tx.when === 'string' ? new Date(tx.when.replace(' ', 'T')) : new Date();
+    return {
+      providerEventId: eventId,
+      providerRef: found[0],
+      status: 'settled',
+      amountMinor: String(Math.trunc(rawAmount)),
+      currency: 'VND',
+      occurredAt: Number.isNaN(when.getTime()) ? new Date() : when,
+    };
+  }
+}

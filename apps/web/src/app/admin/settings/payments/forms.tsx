@@ -25,6 +25,7 @@ interface PaymentSettings {
   account_holder: string;
   hub_configured: boolean;
   webhook_url: string;
+  casso_webhook_url: string;
 }
 
 /** Owner-set bank transfer payments. The hub API key is write-only: the
@@ -119,6 +120,8 @@ export function BankTransferForm() {
           <dl className="details">
             <dt>{t('ui.payment_settings.webhook_url')}</dt>
             <dd className="mono">{settings.webhook_url}</dd>
+            <dt>{t('ui.payment_settings.casso_webhook_url')}</dt>
+            <dd className="mono">{settings.casso_webhook_url}</dd>
             <dt>{t('ui.payment_settings.hub_status')}</dt>
             <dd>{settings.hub_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
           </dl>

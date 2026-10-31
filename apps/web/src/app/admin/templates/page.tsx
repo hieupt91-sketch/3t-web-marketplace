@@ -7,6 +7,7 @@ import { EmptyState, ErrorState, Loading, StatusBadge } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { templateTone } from '@/lib/status';
+import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface AdminTemplate {
   id: string;
@@ -26,15 +27,16 @@ function TemplatesInner() {
   const [cursor, setCursor] = useState<string | null>(null);
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
+  const [kind, setKind] = useState<'' | 'static' | 'dynamic'>('');
 
   const load = useCallback(async (after: string | null) => {
-    const res = await api<AdminTemplate[]>(`/admin/templates?limit=50${after ? `&cursor=${encodeURIComponent(after)}` : ''}`);
+    const res = await api<AdminTemplate[]>(`/admin/templates?limit=50${kind ? `&kind=${kind}` : ''}${after ? `&cursor=${encodeURIComponent(after)}` : ''}`);
     if (!res.ok) return setError(res.error);
     const page = (res.raw as { page: { next_cursor: string | null } }).page;
     setRows((prev) => (after ? [...prev, ...res.data] : res.data));
     setCursor(page.next_cursor);
     setLoaded(true);
-  }, []);
+  }, [kind]);
 
   useEffect(() => {
     void load(null);
@@ -47,6 +49,13 @@ function TemplatesInner() {
         {me.permissions.includes('template:import') ? <Link className="button" href="/admin/imports/new">{t('ui.admin.nav.import_new')}</Link> : null}
       </div>
       {error ? <ErrorState error={error} onRetry={() => void load(null)} /> : null}
+      <div className="row" role="group" aria-label={t('ui.catalog.filter_kind')}>
+        {(['', 'static', 'dynamic'] as const).map((k) => (
+          <button key={k || 'all'} type="button" className={`button${kind === k ? '' : ' button--secondary'}`} aria-pressed={kind === k} onClick={() => setKind(k)}>
+            {k === '' ? t('ui.catalog.filter_all') : t(`ui.catalog.kind_${k}`)}
+          </button>
+        ))}
+      </div>
       {!loaded && !error ? <Loading /> : null}
       {loaded && rows.length === 0 ? (
         <EmptyState title={t('ui.admin.templates.empty_title')}>
@@ -59,6 +68,7 @@ function TemplatesInner() {
             <thead>
               <tr>
                 <th scope="col">{t('ui.admin.templates.col_name')}</th>
+                <th scope="col">{t('ui.admin.templates.col_kind')}</th>
                 <th scope="col">{t('ui.admin.templates.col_status')}</th>
                 <th scope="col">{t('ui.admin.templates.col_version')}</th>
                 <th scope="col">{t('ui.admin.templates.col_locales')}</th>
@@ -72,6 +82,13 @@ function TemplatesInner() {
                   <td>
                     <Link href={`/admin/templates/${row.id}`}><strong>{row.titles[locale] ?? row.titles.vi ?? row.slug}</strong></Link>
                     <div className="mono muted">{row.slug}</div>
+                  </td>
+                  <td>
+                    {row.latest_version ? (
+                      <StatusBadge tone={isDynamicAdapter(row.latest_version.adapter) ? 'info' : 'neutral'}>
+                        {isDynamicAdapter(row.latest_version.adapter) ? t('ui.catalog.kind_dynamic') : t('ui.catalog.kind_static')}
+                      </StatusBadge>
+                    ) : '—'}
                   </td>
                   <td><StatusBadge tone={templateTone(row.status)}>{t(`ui.template.status.${row.status}`)}</StatusBadge></td>
                   <td>

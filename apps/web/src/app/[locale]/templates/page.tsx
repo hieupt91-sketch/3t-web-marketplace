@@ -3,12 +3,13 @@ import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
 import { TemplateCard } from '@/components/template-card';
+import { isDynamicAdapter } from '@/lib/template-kind';
 import { DemoCatalog } from '@/components/demo-catalog';
 import { CompareTray } from '@/components/compare-tray';
 import { JsonLd } from '@/components/json-ld';
 import { itemListJsonLd } from '@/lib/seo';
 
-type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string; mode?: string; capability?: string; category?: string; min_price?: string; max_price?: string }> };
+type Props = { params: Promise<{ locale: Locale }>; searchParams: Promise<{ q?: string; cursor?: string; mode?: string; capability?: string; category?: string; min_price?: string; max_price?: string; kind?: string }> };
 
 const MODES = ['selfhost', 'hosted'] as const;
 const CAPABILITIES = ['landing', 'catalog', 'contact', 'admin'] as const;
@@ -24,10 +25,12 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 /** P02 — template library with search and deployment-mode / capability / category / price filters (REQ-01). */
 export default async function Templates({ params, searchParams }: Props) {
   const { locale } = await params;
-  const { q = '', cursor, mode = '', capability = '', category = '', min_price = '', max_price = '' } = await searchParams;
+  const { q = '', cursor, mode = '', capability = '', category = '', min_price = '', max_price = '', kind: rawKind = '' } = await searchParams;
+  const kind = rawKind === 'static' || rawKind === 'dynamic' ? rawKind : '';
   const t = (key: string, p?: Record<string, string>) => translate(locale, key, p);
   const query = new URLSearchParams({ limit: '24' });
   if (q) query.set('q', q);
+  if (kind) query.set('kind', kind);
   if (MODES.includes(mode as (typeof MODES)[number])) query.set('mode', mode);
   if (CAPABILITIES.includes(capability as (typeof CAPABILITIES)[number])) query.set('capability', capability);
   if (category) query.set('category', category);
@@ -48,10 +51,13 @@ export default async function Templates({ params, searchParams }: Props) {
   const chipCodes = categories.ok
     ? [...CATEGORY_ORDER.filter((c) => categories.data.some((x) => x.code === c)), ...categories.data.map((x) => x.code).filter((c) => !CATEGORY_ORDER.includes(c)).sort()]
     : [];
-  const chipHref = (code: string) => `/${locale}/templates?${new URLSearchParams({ ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(code ? { category: code } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}) })}`;
-  const base: Record<string, string> = { ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(category ? { category } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}) };
+  const chipHref = (code: string) => `/${locale}/templates?${new URLSearchParams({ ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(code ? { category: code } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}), ...(kind ? { kind } : {}) })}`;
+  const kindHref = (code: string) => `/${locale}/templates?${new URLSearchParams({ ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(category ? { category } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}), ...(code ? { kind: code } : {}) })}`;
+  const dynamicCount = allForCounts.ok ? allForCounts.data.filter((tpl) => isDynamicAdapter(tpl.adapter)).length : 0;
+  const staticCount = allForCounts.ok ? allForCounts.data.length - dynamicCount : 0;
+  const base: Record<string, string> = { ...(q ? { q } : {}), ...(mode ? { mode } : {}), ...(capability ? { capability } : {}), ...(category ? { category } : {}), ...(min_price ? { min_price } : {}), ...(max_price ? { max_price } : {}), ...(kind ? { kind } : {}) };
   const next = result.ok && result.page?.next_cursor ? `/${locale}/templates?${new URLSearchParams({ ...base, cursor: result.page.next_cursor })}` : null;
-  const hasFilter = q || mode || capability || category || min_price || max_price;
+  const hasFilter = q || mode || capability || category || min_price || max_price || kind;
   return (
     <div className="container stack">
       {result.ok && result.data.length > 0 ? <JsonLd data={itemListJsonLd(result.data, locale)} /> : null}
@@ -60,12 +66,27 @@ export default async function Templates({ params, searchParams }: Props) {
         {mode ? <input type="hidden" name="mode" value={mode} /> : null}
         {capability ? <input type="hidden" name="capability" value={capability} /> : null}
         {category ? <input type="hidden" name="category" value={category} /> : null}
+        {kind ? <input type="hidden" name="kind" value={kind} /> : null}
         {min_price ? <input type="hidden" name="min_price" value={min_price} /> : null}
         {max_price ? <input type="hidden" name="max_price" value={max_price} /> : null}
         <label htmlFor="catalog-search" className="visually-hidden">{t('ui.catalog.search_label')}</label>
         <input id="catalog-search" className="input" type="search" name="q" defaultValue={q} placeholder={t('ui.catalog.search_placeholder')} />
         <button className="button" type="submit">{t('ui.catalog.search_action')}</button>
       </form>
+      <nav className="cat-nav" aria-label={t('ui.catalog.filter_kind')}>
+        <Link className={`cat-chip${kind === '' ? ' cat-chip--active' : ''}`} href={kindHref('')}>
+          {t('ui.catalog.filter_all')}
+          {allForCounts.ok ? <span className="cat-chip__count">{allForCounts.data.length}</span> : null}
+        </Link>
+        <Link className={`cat-chip${kind === 'static' ? ' cat-chip--active' : ''}`} href={kindHref('static')}>
+          {t('ui.catalog.kind_static')}
+          {allForCounts.ok ? <span className="cat-chip__count">{staticCount}</span> : null}
+        </Link>
+        <Link className={`cat-chip${kind === 'dynamic' ? ' cat-chip--active' : ''}`} href={kindHref('dynamic')}>
+          {t('ui.catalog.kind_dynamic')}
+          {allForCounts.ok ? <span className="cat-chip__count">{dynamicCount}</span> : null}
+        </Link>
+      </nav>
       {chipCodes.length > 0 ? (
         <nav className="cat-nav" aria-label={t('ui.catalog.filter_category')}>
           <Link className={`cat-chip${category === '' ? ' cat-chip--active' : ''}`} href={chipHref('')}>
@@ -88,6 +109,7 @@ export default async function Templates({ params, searchParams }: Props) {
           <form className="stack" method="get">
             <input type="hidden" name="q" value={q} />
             {category ? <input type="hidden" name="category" value={category} /> : null}
+            {kind ? <input type="hidden" name="kind" value={kind} /> : null}
           <label className="field" style={{ minWidth: 200 }}>
             <span>{t('ui.catalog.filter_mode')}</span>
             <select className="select" name="mode" defaultValue={mode}>

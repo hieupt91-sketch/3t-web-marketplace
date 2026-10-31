@@ -207,3 +207,39 @@ describe('visibility (hidden flag)', () => {
     expect((await overviewRow(t2.id))?.hidden).toBe(false);
   });
 });
+
+describe('admin template list kind filter (static vs dynamic)', () => {
+  it('separates templates by the latest version runtime adapter', async () => {
+    const stat = await insertTemplate('kind-static-1', {});
+    // A dynamic template: same shape, but its version runs the node-http runtime.
+    const tpl = await ctx.db.query<{ id: string }>(
+      'INSERT INTO templates (slug, owner_id, status) VALUES ($1, $2, $3) RETURNING id',
+      ['kind-dynamic-1', ownerId, 'published'],
+    );
+    const dynId = tpl.rows[0]!.id;
+    const artifact = await ctx.db.query<{ id: string }>(
+      `INSERT INTO artifacts (object_key, sha256, size_bytes, media_type, kind, retention_class)
+       VALUES ('test/kind-dynamic-1', $1, 4, 'application/zip', 'static_site', 'permanent') RETURNING id`,
+      ['c'.repeat(64)],
+    );
+    const version = await ctx.db.query<{ id: string }>(
+      `INSERT INTO template_versions (template_id, semver, schema_version, manifest_json, adapter, source_sha, source_artifact_id, artifact_id, status)
+       VALUES ($1, '1.0.0', 1, '{"adapter":"node-http"}'::jsonb, 'node-http', $2, $3, $3, 'published') RETURNING id`,
+      [dynId, 'c'.repeat(64), artifact.rows[0]!.id],
+    );
+    await ctx.db.query('UPDATE templates SET published_version_id = $2 WHERE id = $1', [dynId, version.rows[0]!.id]);
+
+    const dyn = await get('/api/v1/admin/templates?kind=dynamic&limit=100', ownerCookie);
+    expect(dyn.statusCode, dyn.body).toBe(200);
+    const dynRows = dyn.json().data as { slug: string; latest_version: { adapter: string } | null }[];
+    expect(dynRows.some((r) => r.slug === 'kind-dynamic-1')).toBe(true);
+    expect(dynRows.every((r) => r.latest_version && ['node-http', 'next-standalone'].includes(r.latest_version.adapter))).toBe(true);
+    expect(dynRows.some((r) => r.slug === 'kind-static-1')).toBe(false);
+
+    const statList = await get('/api/v1/admin/templates?kind=static&limit=100', ownerCookie);
+    const statRows = statList.json().data as { slug: string }[];
+    expect(statRows.some((r) => r.slug === 'kind-static-1')).toBe(true);
+    expect(statRows.some((r) => r.slug === 'kind-dynamic-1')).toBe(false);
+    expect(stat.id).toBeTruthy();
+  });
+});

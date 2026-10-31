@@ -5,6 +5,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PoolClient } from '@3t/core';
 import {
   BankTransferProvider,
+  CassoHubProvider,
   MoMoProvider,
   VnPayProvider,
   buildCleanSiteTree,
@@ -919,6 +920,25 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       }
       const outcome = await processPaymentEvent(db, 'bank_transfer', raw, event);
       return reply.status(200).send({ received: true, outcome });
+    }
+    // Casso hub: same bank settings (the owner sets the hub key as Casso's
+    // Security Key), batch payload { error: 0, data: [tx, ...] } authenticated
+    // by the secure-token header. Events settle through the bank_transfer
+    // pipeline; the reply carries success:true for Casso's strict mode.
+    if (providerName === 'casso') {
+      const settings = await loadBankTransferSettings(db);
+      const provider = new CassoHubProvider(settings.hub_api_key);
+      let events: NormalizedEvent[];
+      try {
+        events = provider.verifyWebhookBatch(raw, request.headers as Record<string, string | undefined>);
+      } catch {
+        return reply.status(401).send({ success: false, error: 'invalid secure-token' });
+      }
+      const outcomes: string[] = [];
+      for (const event of events) {
+        outcomes.push(await processPaymentEvent(db, 'bank_transfer', raw, event));
+      }
+      return reply.status(200).send({ success: true, received: true, outcomes });
     }
     if (providerName === 'vnpay') {
       const params: Record<string, string> = {};

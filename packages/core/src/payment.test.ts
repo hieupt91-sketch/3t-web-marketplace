@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BankTransferProvider, MockPaymentProvider, WebhookVerificationError, manualTransferRef, usdAmountFor } from './payment.ts';
+import { BankTransferProvider, CassoHubProvider, MockPaymentProvider, WebhookVerificationError, manualTransferRef, usdAmountFor } from './payment.ts';
 
 const provider = new MockPaymentProvider('test-secret', 'http://localhost:4000');
 
@@ -81,5 +81,48 @@ describe('manual transfer helpers (PayPal / USD)', () => {
     expect(usdAmountFor('12987', 26000)).toBe('0.50'); // 0.4995 -> 0.50
     expect(usdAmountFor('100000000', 25400)).toBe('3937.01');
     expect(usdAmountFor('500000', 0)).toBe('0.00');
+  });
+});
+
+describe('CassoHubProvider', () => {
+  const provider = new CassoHubProvider('casso-secret-1');
+  const auth = { 'secure-token': 'casso-secret-1' };
+
+  it('settles a batch: matching transactions become settled events with namespaced ids', () => {
+    const body = JSON.stringify({
+      error: 0,
+      data: [
+        { id: 6785, tid: 'FT1', description: 'WM3F9A2B7C4D thanh toan don hang', amount: 499000, cusum_balance: 20079000, when: '2026-10-31 09:15:00', bank_sub_acc_id: '0123456789' },
+        { id: 6786, tid: 'FT2', description: 'chuyen khoan thuong', amount: 50000, when: '2026-10-31 09:16:00' },
+      ],
+    });
+    const events = provider.verifyWebhookBatch(body, auth);
+    expect(events).toHaveLength(2);
+    expect(events[0]).toMatchObject({ providerEventId: 'casso:6785', providerRef: 'WM3F9A2B7C4D', status: 'settled', amountMinor: '499000', currency: 'VND' });
+    expect(events[1]).toMatchObject({ providerEventId: 'casso:6786', providerRef: '', status: 'pending' });
+  });
+
+  it('extracts the code case-insensitively and never settles outgoing money', () => {
+    const body = JSON.stringify({
+      error: 0,
+      data: [
+        { id: 6790, description: 'nhan wm3f9a2b7c4d cam on', amount: 1000 },
+        { id: 6791, description: 'WM3F9A2B7C4D rut tien', amount: -499000 },
+      ],
+    });
+    const events = provider.verifyWebhookBatch(body, auth);
+    expect(events[0]).toMatchObject({ providerRef: 'WM3F9A2B7C4D', status: 'settled' });
+    expect(events[1]).toMatchObject({ providerRef: '', status: 'pending' });
+  });
+
+  it('acknowledges a non-zero error envelope with no events', () => {
+    expect(provider.verifyWebhookBatch(JSON.stringify({ error: 1, data: [] }), auth)).toEqual([]);
+  });
+
+  it('rejects a wrong secure token, a missing one, and any token when none is configured', () => {
+    const body = JSON.stringify({ error: 0, data: [{ id: 1, description: 'WM3F9A2B7C4D', amount: 1 }] });
+    expect(() => provider.verifyWebhookBatch(body, { 'secure-token': 'wrong' })).toThrow();
+    expect(() => provider.verifyWebhookBatch(body, {})).toThrow();
+    expect(() => new CassoHubProvider('').verifyWebhookBatch(body, auth)).toThrow();
   });
 });

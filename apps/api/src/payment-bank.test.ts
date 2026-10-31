@@ -202,3 +202,54 @@ describe('bank transfer checkout + hub webhook', () => {
     expect(bogus.statusCode).toBe(409);
   });
 });
+
+describe('casso hub webhook', () => {
+  beforeAll(async () => {
+    await enableBank(true);
+  });
+
+  const cassoPost = (payload: unknown, token: string) =>
+    ctx.app.inject({ method: 'POST', url: '/api/v1/payments/webhooks/casso', headers: { 'secure-token': token }, payload: payload as object });
+
+  it('rejects a wrong secure token and leaves the order unpaid', async () => {
+    const orderId = await newOrder(buyerCookie);
+    const s = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    const code = s.json().data.instructions.content_code as string;
+    const res = await cassoPost({ error: 0, data: [{ id: 88001, description: `${code} thanh toan`, amount: 499000 }] }, 'wrong-token');
+    expect(res.statusCode).toBe(401);
+    expect(res.json().success).toBe(false);
+    expect((await get(`/api/v1/orders/${orderId}`, buyerCookie)).json().data.payment_status).toBe('awaiting_payment');
+  });
+
+  it('settles the order from a Casso batch, ignores unrelated transactions, and is idempotent', async () => {
+    const orderId = await newOrder(buyerCookie);
+    const s = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    const code = s.json().data.instructions.content_code as string;
+    const payload = {
+      error: 0,
+      data: [
+        { id: 88002, tid: 'FT88002', description: `${code} thanh toan don hang`, amount: 499000, cusum_balance: 9000000, when: '2026-10-31 10:00:00', bank_sub_acc_id: '0123456789' },
+        { id: 88003, tid: 'FT88003', description: 'chuyen khoan thuong khong ma', amount: 50000, when: '2026-10-31 10:01:00' },
+      ],
+    };
+    const res = await cassoPost(payload, HUB_KEY);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().success).toBe(true);
+    expect(res.json().outcomes).toEqual(['processed', 'ignored']);
+    expect((await get(`/api/v1/orders/${orderId}`, buyerCookie)).json().data.payment_status).toBe('paid');
+    expect((await get('/api/v1/me/entitlements', buyerCookie)).json().data.length).toBeGreaterThan(0);
+    const before = (await get('/api/v1/me/entitlements', buyerCookie)).json().data.length;
+    const dup = await cassoPost(payload, HUB_KEY);
+    expect(dup.json().outcomes).toEqual(['duplicate', 'duplicate']);
+    expect((await get('/api/v1/me/entitlements', buyerCookie)).json().data.length).toBe(before);
+  });
+
+  it('routes a wrong-amount Casso transaction to reconciliation instead of fulfilling', async () => {
+    const orderId = await newOrder(buyer2Cookie);
+    const s = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyer2Cookie);
+    const code = s.json().data.instructions.content_code as string;
+    const res = await cassoPost({ error: 0, data: [{ id: 88004, description: code, amount: 400000 }] }, HUB_KEY);
+    expect(res.json().outcomes).toEqual(['needs_reconciliation']);
+    expect((await get(`/api/v1/orders/${orderId}`, buyer2Cookie)).json().data.payment_status).toBe('needs_reconciliation');
+  });
+});

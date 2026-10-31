@@ -98,6 +98,11 @@ export default async function TemplateDetail({ params }: Props) {
         </div>
         <aside className="card stack detail-buy">
           <h1 lang={template.resolved_locale} style={{ margin: 0 }}>{template.title}</h1>
+          {template.adapter === 'node-http' || template.adapter === 'next-standalone' ? (
+            <p style={{ margin: 0 }}><span className="badge badge--info">{t('ui.catalog.badge_dynamic')}</span></p>
+          ) : (
+            <p style={{ margin: 0 }}><span className="badge badge--neutral">{t('ui.catalog.kind_static')}</span></p>
+          )}
           {template.translation_status === 'fallback' ? <p className="badge badge--warning">{t('ui.catalog.fallback_vi')}</p> : null}
           {template.summary ? <p lang={template.resolved_locale} style={{ margin: 0 }}>{template.summary}</p> : null}
           {cheapest ? (

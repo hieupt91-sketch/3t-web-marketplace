@@ -10,6 +10,7 @@ import { Alert, ErrorState, FormField, Loading, StatusBadge, fieldErrorFor, useF
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { templateTone } from '@/lib/status';
+import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface Translation {
   locale: Locale;
@@ -417,6 +418,8 @@ function TemplateDetailInner() {
   const canWrite = me.permissions.includes('template:write');
   const canTranslate = me.permissions.includes('translation:write');
   const title = detail.translations.find((tr) => tr.locale === 'vi')?.title ?? detail.slug;
+  // Static vs dynamic, labelled by the published version (fallback: latest).
+  const kindVersion = detail.versions.find((v) => v.id === detail.published_version_id) ?? detail.versions[0];
   const localeStatus = (locale: Locale): LocaleStatus => {
     const tr = detail.translations.find((x) => x.locale === locale);
     return tr ? (tr.status as LocaleStatus) : 'missing';
@@ -428,6 +431,11 @@ function TemplateDetailInner() {
       <div className="row" style={{ justifyContent: 'space-between' }}>
         <h1 style={{ margin: 0 }}>{title}</h1>
         <div className="row">
+          {kindVersion ? (
+            <StatusBadge tone={isDynamicAdapter(kindVersion.adapter) ? 'info' : 'neutral'}>
+              {isDynamicAdapter(kindVersion.adapter) ? t('ui.catalog.kind_dynamic') : t('ui.catalog.kind_static')}
+            </StatusBadge>
+          ) : null}
           <StatusBadge tone={templateTone(detail.status)}>{t(`ui.template.status.${detail.status}`)}</StatusBadge>
           {detail.hidden ? <StatusBadge tone="warning">{t('ui.pricing.hidden_state')}</StatusBadge> : null}
         </div>

@@ -1420,7 +1420,7 @@
   "ui.payment_settings.account_number": "Số tài khoản",
   "ui.payment_settings.account_holder": "Chủ tài khoản",
   "ui.payment_settings.hub_title": "Tự động xác nhận qua hub ngân hàng",
-  "ui.payment_settings.hub_hint": "Đăng ký một dịch vụ hub theo dõi tài khoản ngân hàng (tương thích SePay), trỏ webhook của hub về địa chỉ dưới đây và dán API key của hub vào ô khóa. Có hub thì tiền về là đơn tự hoàn thành; không có hub, bạn xác nhận tay ở trang Đối soát.",
+  "ui.payment_settings.hub_hint": "Đăng ký một dịch vụ hub theo dõi tài khoản ngân hàng — Casso hoặc SePay đều dùng được. Trỏ webhook của hub về đúng địa chỉ của hub đó ở dưới (Casso có địa chỉ riêng) và dùng chung một khóa: dán khóa của hub vào ô khóa bên dưới; riêng với Casso, đặt cùng giá trị này vào ô Security Key của webhook trong Casso. Có hub thì tiền về là đơn tự hoàn thành; không có hub, bạn xác nhận tay ở trang Đối soát.",
   "ui.payment_settings.webhook_url": "Địa chỉ webhook",
   "ui.payment_settings.hub_status": "API key của hub",
   "ui.payment_settings.hub_configured": "Đã cấu hình",
@@ -1549,5 +1549,11 @@
   "ui.admin.nav.group_goods": "Hàng hóa",
   "ui.admin.nav.group_content": "Nội dung",
   "ui.admin.filter_all": "Tất cả",
-  "ui.payment_settings.index_hint": "Mỗi phương thức có trang cài đặt riêng — bật/tắt và cấu hình tách bạch từng phương thức, không trộn lẫn."
+  "ui.payment_settings.index_hint": "Mỗi phương thức có trang cài đặt riêng — bật/tắt và cấu hình tách bạch từng phương thức, không trộn lẫn.",
+  "ui.catalog.filter_kind": "Loại mẫu",
+  "ui.catalog.kind_static": "Mẫu tĩnh",
+  "ui.catalog.kind_dynamic": "Mẫu động",
+  "ui.catalog.badge_dynamic": "Động · Có trang quản trị",
+  "ui.payment_settings.casso_webhook_url": "Địa chỉ webhook Casso",
+  "ui.admin.templates.col_kind": "Loại"
 }

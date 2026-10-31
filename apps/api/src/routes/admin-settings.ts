@@ -327,6 +327,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
         account_holder: s.account_holder,
         hub_configured: s.hub_api_key !== '',
         webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/bank_transfer`,
+        casso_webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/casso`,
       },
     };
   });
@@ -391,6 +392,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
           account_holder: next.account_holder,
           hub_configured: next.hub_api_key !== '',
           webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/bank_transfer`,
+          casso_webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/casso`,
         },
       });
     },
