@@ -88,7 +88,11 @@ const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/payments/reconciliation', labelKey: 'ui.admin.nav.reconciliation', permission: 'payment:read' },
       { href: '/admin/payments/refunds', labelKey: 'ui.admin.nav.refunds', permission: 'payment:read' },
       { href: '/admin/payouts', labelKey: 'ui.admin.payouts', permission: 'payout:read' },
-      { href: '/admin/settings/payments', labelKey: 'ui.admin.nav.payment_settings', permission: 'settings:manage' },
+      { href: '/admin/settings/payments/bank', labelKey: 'ui.checkout.method_bank', permission: 'settings:manage' },
+      { href: '/admin/settings/payments/vnpay', labelKey: 'ui.checkout.method_vnpay', permission: 'settings:manage' },
+      { href: '/admin/settings/payments/momo', labelKey: 'ui.checkout.method_momo', permission: 'settings:manage' },
+      { href: '/admin/settings/payments/paypal', labelKey: 'ui.checkout.method_paypal', permission: 'settings:manage' },
+      { href: '/admin/settings/payments/usd', labelKey: 'ui.checkout.method_usd', permission: 'settings:manage' },
     ],
   },
   {

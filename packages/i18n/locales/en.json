@@ -1547,5 +1547,7 @@
   "ui.home.live_demo": "Live demo",
   "ui.home.view_template": "View this template",
   "ui.admin.nav.group_goods": "Goods",
-  "ui.admin.nav.group_content": "Content"
+  "ui.admin.nav.group_content": "Content",
+  "ui.admin.filter_all": "All",
+  "ui.payment_settings.index_hint": "Each method has its own settings page — enable and configure every method separately, nothing mixed together."
 }

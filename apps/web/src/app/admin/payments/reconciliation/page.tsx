@@ -26,6 +26,7 @@ interface ReconEvent {
 interface PendingTransfer {
   attempt_id: string;
   order_id: string;
+  provider: string;
   content_code: string | null;
   amount_minor: string;
   currency: string;
@@ -33,12 +34,24 @@ interface PendingTransfer {
   created_at: string;
 }
 
+/** Pending manual transfers stay separated per payment method: the queue can
+ *  be filtered so bank transfers, PayPal and USD transfers never mix. */
+const PROVIDER_ORDER = ['bank_transfer', 'paypal', 'usd_transfer', 'vnpay', 'momo'];
+const PROVIDER_LABEL_KEYS: Record<string, string> = {
+  bank_transfer: 'ui.checkout.method_bank',
+  paypal: 'ui.checkout.method_paypal',
+  usd_transfer: 'ui.checkout.method_usd',
+  vnpay: 'ui.checkout.method_vnpay',
+  momo: 'ui.checkout.method_momo',
+};
+
 /** A12 — reconciliation queue. Resolving never edits raw provider events; it audits the decision. */
 function ReconciliationInner() {
   const { t, dt, locale } = useT();
   const [orders, setOrders] = useState<ReconOrder[]>([]);
   const [events, setEvents] = useState<ReconEvent[]>([]);
   const [transfers, setTransfers] = useState<PendingTransfer[]>([]);
+  const [providerFilter, setProviderFilter] = useState<string>('all');
   const [loaded, setLoaded] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
   const [reason, setReason] = useState('');
@@ -73,6 +86,8 @@ function ReconciliationInner() {
 
   if (error && !loaded) return <ErrorState error={error} onRetry={() => void load()} />;
   if (!loaded) return <Loading />;
+  const presentProviders = PROVIDER_ORDER.filter((p) => transfers.some((x) => x.provider === p));
+  const visibleTransfers = providerFilter === 'all' ? transfers : transfers.filter((x) => x.provider === providerFilter);
   return (
     <div className="stack">
       <h1>{t('ui.admin.reconciliation_title')}</h1>
@@ -107,14 +122,26 @@ function ReconciliationInner() {
       )}
       <h2>{t('ui.admin.pending_transfers')}</h2>
       <p className="muted" style={{ margin: 0 }}>{t('ui.admin.pending_transfers_hint')}</p>
-      {transfers.length === 0 ? (
+      {transfers.length > 0 ? (
+        <div className="row" role="group" aria-label={t('ui.admin.pending_transfers')}>
+          <button type="button" className={`button${providerFilter === 'all' ? '' : ' button--secondary'}`} aria-pressed={providerFilter === 'all'} onClick={() => setProviderFilter('all')}>
+            {t('ui.admin.filter_all')}
+          </button>
+          {presentProviders.map((p) => (
+            <button key={p} type="button" className={`button${providerFilter === p ? '' : ' button--secondary'}`} aria-pressed={providerFilter === p} onClick={() => setProviderFilter(p)}>
+              {t(PROVIDER_LABEL_KEYS[p]!)}
+            </button>
+          ))}
+        </div>
+      ) : null}
+      {visibleTransfers.length === 0 ? (
         <EmptyState title={t('ui.admin.pending_transfers_empty')}><p>—</p></EmptyState>
       ) : (
         <div className="table-wrap"><table className="table">
           <thead><tr><th>{t('ui.checkout.transfer_content')}</th><th>{t('ui.checkout.total')}</th><th>{t('ui.admin.buyer')}</th><th></th></tr></thead>
-          <tbody>{transfers.map((p) => (
+          <tbody>{visibleTransfers.map((p) => (
             <tr key={p.attempt_id}>
-              <td className="mono">{p.content_code ?? '—'}</td>
+              <td className="mono">{p.content_code ?? '—'}<br /><span className="muted">{PROVIDER_LABEL_KEYS[p.provider] ? t(PROVIDER_LABEL_KEYS[p.provider]!) : p.provider}</span></td>
               <td className="tabular">{formatMoney({ amount_minor: p.amount_minor, currency: p.currency }, locale)}</td>
               <td>{p.buyer_email}<br /><span className="muted">{dt(p.created_at)}</span></td>
               <td>

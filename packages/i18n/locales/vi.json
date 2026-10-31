@@ -1547,5 +1547,7 @@
   "ui.home.live_demo": "Demo chạy thật",
   "ui.home.view_template": "Xem mẫu này",
   "ui.admin.nav.group_goods": "Hàng hóa",
-  "ui.admin.nav.group_content": "Nội dung"
+  "ui.admin.nav.group_content": "Nội dung",
+  "ui.admin.filter_all": "Tất cả",
+  "ui.payment_settings.index_hint": "Mỗi phương thức có trang cài đặt riêng — bật/tắt và cấu hình tách bạch từng phương thức, không trộn lẫn."
 }
