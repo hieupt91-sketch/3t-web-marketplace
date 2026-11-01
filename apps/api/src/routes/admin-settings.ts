@@ -85,6 +85,63 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  app.get('/settings/hosting-storage', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const { rows } = await db.query<{ value_json: { monthly_per_gb?: number | null; yearly_per_gb?: number | null } }>(
+      "SELECT value_json FROM settings WHERE key = 'hosting.storage_price'",
+    );
+    const raw = rows[0]?.value_json ?? {};
+    return {
+      data: {
+        monthly_per_gb: typeof raw.monthly_per_gb === 'number' ? raw.monthly_per_gb : null,
+        yearly_per_gb: typeof raw.yearly_per_gb === 'number' ? raw.yearly_per_gb : null,
+      },
+    };
+  });
+
+  app.post<{ Body: { monthly_per_gb?: number | null; yearly_per_gb?: number | null } }>(
+    '/settings/hosting-storage',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            monthly_per_gb: { type: ['integer', 'null'] },
+            yearly_per_gb: { type: ['integer', 'null'] },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const monthly = request.body.monthly_per_gb ?? null;
+      const yearly = request.body.yearly_per_gb ?? null;
+      if (monthly !== null && (!Number.isInteger(monthly) || monthly <= 0)) {
+        throw errors.validation([{ field: 'monthly_per_gb', code: 'invalid' }]);
+      }
+      if (yearly !== null && (!Number.isInteger(yearly) || yearly <= 0)) {
+        throw errors.validation([{ field: 'yearly_per_gb', code: 'invalid' }]);
+      }
+      const next = { monthly_per_gb: monthly, yearly_per_gb: yearly };
+      await db.query(
+        `INSERT INTO settings (key, value_json) VALUES ('hosting.storage_price', $1::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+        [JSON.stringify(next)],
+      );
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.hosting_storage_updated',
+        resourceType: 'settings',
+        resourceId: null,
+        traceId: request.id,
+        diff: next,
+      });
+      return { data: next };
+    },
+  );
+
   app.get('/settings/installation-service', async (request) => {
     requirePermission(request, 'settings:manage');
     const { rows } = await db.query<{ value_json: { enabled?: boolean; amount_minor?: number | null } }>(

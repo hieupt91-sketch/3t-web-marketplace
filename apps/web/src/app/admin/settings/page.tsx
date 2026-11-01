@@ -12,6 +12,7 @@ interface PublicConfig {
   contact?: { phone: string | null; zalo: string | null; messenger: string | null; email: string | null };
   subdomain_fee?: { amount_minor: number | null; period: string } | null;
   installation_service?: { available: boolean; amount_minor: number | null };
+  hosting_storage?: { monthly_per_gb: number | null; yearly_per_gb: number | null };
   payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean; paypal?: boolean; usd_transfer?: boolean };
 }
 interface AdsSettings { enabled: boolean; left: { image_url: string }; right: { image_url: string } }
@@ -50,6 +51,7 @@ function SettingsHubInner() {
   const contactCount = [contact.phone, contact.zalo, contact.messenger, contact.email].filter(Boolean).length;
   const fee = cfg.subdomain_fee;
   const svc = cfg.installation_service;
+  const storage = cfg.hosting_storage;
   const pay = cfg.payment ?? {};
   const methods = Object.keys(METHOD_LABEL_KEYS);
   const onMethods = methods.filter((m) => pay[m as keyof typeof pay]);
@@ -101,6 +103,15 @@ function SettingsHubInner() {
           </div>
           <p className="muted" style={{ margin: 0 }}>{t('ui.settings_hub.installation_desc')}</p>
           <p style={{ margin: 0 }}><Link className="button button--secondary" href="/admin/settings/installation-service">{t('ui.settings_hub.open')}</Link></p>
+        </section>
+
+        <section className="card stack">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>{t('ui.admin.nav.hosting_storage')}</h2>
+            {pill(storage?.monthly_per_gb != null || storage?.yearly_per_gb != null, storage?.monthly_per_gb != null ? `${formatMoney({ amount_minor: String(storage.monthly_per_gb), currency: 'VND' }, locale)}/GB` : t('ui.settings_hub.not_set'))}
+          </div>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.settings_hub.storage_desc')}</p>
+          <p style={{ margin: 0 }}><Link className="button button--secondary" href="/admin/settings/hosting-storage">{t('ui.settings_hub.open')}</Link></p>
         </section>
 
         <section className="card stack">

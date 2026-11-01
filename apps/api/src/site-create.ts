@@ -65,7 +65,7 @@ export interface CreateSiteInput {
  * (notFound / conflict) exactly like the POST /sites route always did.
  */
 export async function createSiteInTx(client: QueryClient, input: CreateSiteInput): Promise<{ siteId: string; jobId: string; deploymentId: string }> {
-  const ent = await client.query<{ id: string; user_id: string; template_id: string; version_id: string; mode: string; status: string; instance_limit: number }>(
+  const ent = await client.query<{ id: string; user_id: string; template_id: string; version_id: string; mode: string; status: string; instance_limit: number; storage_gb?: number }>(
     'SELECT * FROM entitlements WHERE id = $1 FOR UPDATE',
     [input.entitlementId],
   );
@@ -91,9 +91,9 @@ export async function createSiteInTx(client: QueryClient, input: CreateSiteInput
   let site: { id: string };
   try {
     const inserted = await client.query<{ id: string }>(
-      `INSERT INTO sites (owner_id, entitlement_id, template_version_id, display_name, subdomain, default_locale, demo_session_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-      [input.ownerId, input.entitlementId, e.version_id, input.displayName, input.subdomain, input.defaultLocale ?? 'vi', demoSessionId],
+      `INSERT INTO sites (owner_id, entitlement_id, template_version_id, display_name, subdomain, default_locale, demo_session_id, storage_quota_gb)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id`,
+      [input.ownerId, input.entitlementId, e.version_id, input.displayName, input.subdomain, input.defaultLocale ?? 'vi', demoSessionId, e.storage_gb ?? 1],
     );
     site = inserted.rows[0]!;
   } catch (error) {

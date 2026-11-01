@@ -121,6 +121,7 @@ const ADMIN_NAV: NavGroup[] = [
       { href: '/admin/settings/contact', labelKey: 'ui.admin.nav.contact_settings', permission: 'settings:manage' },
       { href: '/admin/settings/subdomain-fee', labelKey: 'ui.admin.nav.subdomain_fee_settings', permission: 'settings:manage' },
       { href: '/admin/settings/installation-service', labelKey: 'ui.admin.nav.installation_service', permission: 'settings:manage' },
+      { href: '/admin/settings/hosting-storage', labelKey: 'ui.admin.nav.hosting_storage', permission: 'settings:manage' },
       { href: '/admin/settings/ads', labelKey: 'ui.admin.nav.ads_settings', permission: 'settings:manage' },
     ],
   },

@@ -11,7 +11,7 @@ interface Site {
   id: string; display_name: string; status: string; subdomain: string | null; url: string | null;
   default_locale: string; subscription: { current_period_end: string; status: string } | null;
   deployments: { id: string; operation: string; status: string }[];
-  capabilities?: string[]; domain_paid_until?: string | null;
+  capabilities?: string[]; domain_paid_until?: string | null; storage_quota_gb?: number | null;
 }
 interface AdminSetup { setup_pending: boolean; setup_url: string | null; login_url: string | null; token: string | null }
 
@@ -52,7 +52,7 @@ export default function SiteOverviewPage() {
       <h1>{site.display_name}</h1>
       <p>
         <StatusBadge tone={site.status === 'active' ? 'success' : 'neutral'}>{t(`ui.sites.status.${site.status}`)}</StatusBadge>{' '}
-        <span className="muted">{t('ui.sites.subdomain_label')}: {site.subdomain ?? '—'} · {t('ui.sites.locale')}: {site.default_locale}</span>
+        <span className="muted">{t('ui.sites.subdomain_label')}: {site.subdomain ?? '—'} · {t('ui.sites.locale')}: {site.default_locale}{site.storage_quota_gb ? <> · {t('ui.sites.storage_quota', { gb: String(site.storage_quota_gb) })}</> : null}</span>
       </p>
       {site.url ? <p><Link className="button" href={site.url} target="_blank" rel="noopener">{t('ui.sites.open_site')}</Link> <Link className="button button--secondary" href={`${site.url.replace(/\/$/, '')}/admin`} target="_blank" rel="noopener">{t('ui.sites.open_admin')}</Link></p> : null}
       {(site.capabilities ?? []).includes('admin') ? (

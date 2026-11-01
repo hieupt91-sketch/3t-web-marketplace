@@ -287,3 +287,39 @@ describe('standalone hosting upgrade + standalone domain package', () => {
     expect(staticSite.statusCode).toBe(409);
   });
 });
+
+describe('storage-priced hosting: owner rate per GB x GB bought', () => {
+  it('multiplies the owner rate by the chosen GB for both periods', async () => {
+    await setSetting('hosting.storage_price', { monthly_per_gb: 50000, yearly_per_gb: 500000 });
+    const m = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, storage_gb: 3 }, buyerB.cookie);
+    expect(m.statusCode, m.body).toBe(201);
+    expect(m.json().data.total_minor).toBe('150000');
+    expect(m.json().data.storage_gb).toBe(3);
+    const lines = m.json().data.line_items as { label: string; amount_minor: string }[];
+    expect(lines.some((l) => l.label.endsWith(':first_period') && l.amount_minor === '150000')).toBe(true);
+    const y = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, billing_interval: 'yearly', storage_gb: 2 }, buyerB.cookie);
+    expect(y.statusCode, y.body).toBe(201);
+    expect(y.json().data.total_minor).toBe('1000000');
+  });
+
+  it('records the bought GB on the entitlement at settlement', async () => {
+    const q = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, storage_gb: 4 }, buyerB.cookie);
+    await settleOrder(buyerB.cookie, q.json().data.id, 200000);
+    const ent = await ctx.db.query<{ storage_gb: number }>(
+      'SELECT storage_gb FROM entitlements WHERE user_id = $1 AND mode = \'hosted\' ORDER BY created_at DESC LIMIT 1',
+      [buyerB.id],
+    );
+    expect(ent.rows[0]?.storage_gb).toBe(4);
+  });
+
+  it('refuses extra GB without an owner rate, and storage on self-host', async () => {
+    await ctx.db.query("DELETE FROM settings WHERE key = 'hosting.storage_price'");
+    const noRate = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, storage_gb: 2 }, buyerB.cookie);
+    expect(noRate.statusCode).toBe(422);
+    const flat = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId }, buyerB.cookie);
+    expect(flat.statusCode, flat.body).toBe(201);
+    expect(flat.json().data.total_minor).toBe('499000');
+    const self = await post('/api/v1/quotes', { plan_id: selfhostPlanId, template_id: templateId, storage_gb: 2 }, buyerB.cookie);
+    expect(self.statusCode).toBe(422);
+  });
+});

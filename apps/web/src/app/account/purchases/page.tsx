@@ -12,6 +12,7 @@ interface Entitlement {
   mode: string;
   status: string;
   instance_limit: number;
+  storage_gb?: number;
   updates_until: string | null;
   template: { id: string; slug: string; adapter: string | null };
   version: { id: string; semver: string };
@@ -68,6 +69,7 @@ function PurchasesInner() {
                 <dt>{t('ui.deployment.selfhost')}</dt><dd>{t(`ui.deployment.${e.mode}`)}</dd>
                 <dt>{t('ui.template_edit.version')}</dt><dd className="mono">{e.version.semver}</dd>
                 <dt>{t('ui.plan.instances')}</dt><dd>{e.instance_limit}</dd>
+                {e.mode === 'hosted' && e.storage_gb ? <><dt>{t('ui.purchases.storage')}</dt><dd>{e.storage_gb} GB</dd></> : null}
                 {e.updates_until ? <><dt>{t('ui.plan.updates')}</dt><dd className="tabular">{dt(e.updates_until)}</dd></> : null}
               </dl>
               <Link className="button button--secondary" href={`/account/purchases/${e.id}/downloads`}>{t('ui.account.downloads_title')}</Link>

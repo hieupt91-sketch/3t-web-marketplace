@@ -12,7 +12,7 @@ import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface Plan { id: string; code: string; deployment_mode: string; name: Record<string, string>; prices: { interval: string; amount_minor: string; currency: string }[] }
 interface Template { id: string; slug: string; title: string; adapter: string | null; plans: Plan[] }
-interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string; amount_yearly_minor?: number | null } | null; installation_service?: { available: boolean; amount_minor: number | null } }
+interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string; amount_yearly_minor?: number | null } | null; installation_service?: { available: boolean; amount_minor: number | null }; hosting_storage?: { monthly_per_gb: number | null; yearly_per_gb: number | null } }
 interface SubCheck { available: boolean; reason: string | null; held_by_you?: boolean; reservation_expires_at?: string }
 
 type HoldState =
@@ -47,6 +47,7 @@ function Configure() {
   const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [domainInterval, setDomainInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [installation, setInstallation] = useState(false);
+  const [storageGb, setStorageGb] = useState(1);
 
   useEffect(() => {
     if (!slug) return;
@@ -116,10 +117,6 @@ function Configure() {
   const yearlyPrice = plan?.prices.find((x) => x.interval === 'yearly');
   const hasBothPeriods = Boolean(monthlyPrice && yearlyPrice);
   const chosenRecurring = billingInterval === 'yearly' && yearlyPrice ? yearlyPrice : (monthlyPrice ?? yearlyPrice);
-  const isHosted = plan?.deployment_mode === 'hosted';
-  const name = subdomain.trim().toLowerCase();
-  const nameReady = !isHosted || skipName || (hold?.kind === 'held_you' && heldName === name && name !== '');
-  const baseDomain = config?.site_base_domain ?? 'webmaket.com';
   const feeSetting = config?.subdomain_fee ?? null;
   const currency = config?.currency ?? 'VND';
   const feeMonthly = feeSetting && feeSetting.amount_minor !== null
@@ -134,12 +131,26 @@ function Configure() {
   const svcPrice = svc?.available && svc.amount_minor !== null && svc.amount_minor !== undefined
     ? formatMoney({ amount_minor: String(svc.amount_minor), currency }, locale)
     : null;
+  // Storage-priced hosting: when the owner set a per-GB rate for the
+  // effective period, the buyer picks capacity and pays rate x GB.
+  const effectivePeriod = hasBothPeriods ? billingInterval : (monthlyPrice ? 'monthly' : 'yearly');
+  const storageRate = effectivePeriod === 'yearly' ? config?.hosting_storage?.yearly_per_gb : config?.hosting_storage?.monthly_per_gb;
+  const storageActive = Boolean(plan?.deployment_mode === 'hosted' && typeof storageRate === 'number' && storageRate > 0);
+  const storageTotal = storageActive ? formatMoney({ amount_minor: String((storageRate as number) * storageGb), currency }, locale) : null;
+  const storageRateMoney = storageActive ? formatMoney({ amount_minor: String(storageRate as number), currency }, locale) : null;
+  const rateMonthlyMoney = typeof config?.hosting_storage?.monthly_per_gb === 'number' ? formatMoney({ amount_minor: String(config.hosting_storage.monthly_per_gb), currency }, locale) : null;
+  const rateYearlyMoney = typeof config?.hosting_storage?.yearly_per_gb === 'number' ? formatMoney({ amount_minor: String(config.hosting_storage.yearly_per_gb), currency }, locale) : null;
+  const isHosted = plan?.deployment_mode === 'hosted';
+  const name = subdomain.trim().toLowerCase();
+  const nameReady = !isHosted || skipName || (hold?.kind === 'held_you' && heldName === name && name !== '');
+  const baseDomain = config?.site_base_domain ?? 'webmaket.com';
 
   async function continueToReview() {
     if (!tpl || !selected) return;
     setBusy(true); setError(null);
     const body: Record<string, unknown> = { template_id: tpl.id, plan_id: selected };
     if (isHosted && hasBothPeriods) body.billing_interval = billingInterval;
+    if (isHosted) body.storage_gb = storageGb;
     if (isHosted && upgrade) body.upgrade_entitlement_id = upgrade;
     if (installation && svcPrice) body.installation = true;
     if (isHosted && !skipName) {
@@ -171,7 +182,9 @@ function Configure() {
       <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field"><strong>{t('ui.checkout.choose_plan')}</strong></legend>
         {tpl.plans.map((p) => {
-          const price = p.deployment_mode === 'hosted' && p.id === selected && chosenRecurring ? chosenRecurring : firstCharge(p);
+          const price = p.deployment_mode === 'hosted' && p.id === selected && storageActive
+            ? { interval: effectivePeriod, amount_minor: String((storageRate as number) * storageGb), currency: p.prices[0]?.currency ?? 'VND' }
+            : p.deployment_mode === 'hosted' && p.id === selected && chosenRecurring ? chosenRecurring : firstCharge(p);
           return (
             <label key={p.id} className="card row" style={{ justifyContent: 'space-between', cursor: 'pointer' }}>
               <span className="row">
@@ -188,12 +201,29 @@ function Configure() {
           <strong>{t('ui.checkout.billing_label')}</strong>
           <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
             <input type="radio" name="billing" checked={billingInterval === 'monthly'} onChange={() => setBillingInterval('monthly')} />
-            <span>{t('ui.checkout.billing_monthly')} · <span className="tabular">{monthlyPrice ? formatMoney(monthlyPrice, locale) : ''}</span></span>
+            <span>{t('ui.checkout.billing_monthly')} · <span className="tabular">{storageActive && rateMonthlyMoney ? `${rateMonthlyMoney}/GB` : monthlyPrice ? formatMoney(monthlyPrice, locale) : ''}</span></span>
           </label>
           <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
             <input type="radio" name="billing" checked={billingInterval === 'yearly'} onChange={() => setBillingInterval('yearly')} />
-            <span>{t('ui.checkout.billing_yearly')} · <span className="tabular">{yearlyPrice ? formatMoney(yearlyPrice, locale) : ''}</span></span>
+            <span>{t('ui.checkout.billing_yearly')} · <span className="tabular">{storageActive && rateYearlyMoney ? `${rateYearlyMoney}/GB` : yearlyPrice ? formatMoney(yearlyPrice, locale) : ''}</span></span>
           </label>
+        </div>
+      ) : null}
+      {storageActive ? (
+        <div className="card stack">
+          <strong>{t('ui.checkout.storage_label')}</strong>
+          <div className="row" style={{ alignItems: 'center' }}>
+            {[1, 2, 5, 10].map((gb) => (
+              <button key={gb} type="button" className={storageGb === gb ? 'button' : 'button button--secondary'} onClick={() => setStorageGb(gb)}>{gb} GB</button>
+            ))}
+            <input
+              className="input" type="number" min={1} max={100} value={storageGb} style={{ width: 90 }}
+              onChange={(e) => setStorageGb(Math.max(1, Math.min(100, Math.trunc(Number(e.target.value) || 1))))}
+              aria-label={t('ui.checkout.storage_label')}
+            />
+            <span className="muted">GB</span>
+          </div>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.storage_total', { gb: String(storageGb), rate: storageRateMoney ?? '', total: storageTotal ?? '' })}</p>
         </div>
       ) : null}
       {(() => {

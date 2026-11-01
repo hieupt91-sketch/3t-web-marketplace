@@ -179,7 +179,7 @@ export function usdTransferAvailable(s: UsdTransferSettings): boolean {
  * Compute what a buyer first pays for a plan from its current prices (never from the client):
  * self-host is a single one-time fee; hosting is an optional setup fee plus the first period.
  */
-export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'yearly'): { subtotal: bigint; lines: QuoteLine[] } {
+export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'yearly', storage?: { perGb: number; gb: number }): { subtotal: bigint; lines: QuoteLine[] } {
   const oneTime = plan.prices.find((p) => p.interval === 'one_time');
   const recurring = billingInterval
     ? plan.prices.find((p) => p.interval === billingInterval)
@@ -190,6 +190,18 @@ export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'y
     if (!oneTime) throw errors.conflict('plan.not_purchasable');
     lines.push({ label: plan.code, interval: 'one_time', amount_minor: oneTime.amount_minor });
     subtotal = BigInt(oneTime.amount_minor);
+  } else if (storage) {
+    // Storage-priced hosting (owner sets a per-GB rate): the recurring
+    // charge is rate x GB for the chosen period — the plan's flat
+    // recurring price does not apply while a rate is set.
+    const period = billingInterval ?? (plan.prices.some((p) => p.interval === 'monthly') ? 'monthly' : 'yearly');
+    if (oneTime) {
+      lines.push({ label: `${plan.code}:setup`, interval: 'one_time', amount_minor: oneTime.amount_minor });
+      subtotal += BigInt(oneTime.amount_minor);
+    }
+    const amount = BigInt(Math.trunc(storage.perGb)) * BigInt(storage.gb);
+    lines.push({ label: `${plan.code}:first_period`, interval: period, amount_minor: amount.toString() });
+    subtotal += amount;
   } else {
     if (!recurring) throw errors.conflict(billingInterval ? 'plan.interval_unavailable' : 'plan.not_purchasable');
     if (oneTime) {
@@ -263,7 +275,7 @@ export async function expireStaleOrder(client: PoolClient, orderId: string, trac
  * and have decided the order may move to paid.
  */
 export async function fulfillOrder(client: PoolClient, orderId: string, buyerId: string, traceId: string): Promise<void> {
-  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number; site_request?: SiteRequest; installation?: boolean; domain_fee_paid?: boolean } }>(
+  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number; site_request?: SiteRequest; installation?: boolean; domain_fee_paid?: boolean; storage_gb?: number } }>(
     'SELECT id, template_id, version_id, deployment_mode, snapshot_json FROM order_items WHERE order_id = $1',
     [orderId],
   );
@@ -271,12 +283,12 @@ export async function fulfillOrder(client: PoolClient, orderId: string, buyerId:
     const updatesMonths = item.snapshot_json.updates_months ?? null;
     const instanceLimit = item.snapshot_json.instance_limit ?? 1;
     await client.query(
-      `INSERT INTO entitlements (order_item_id, user_id, template_id, version_id, mode, status, instance_limit, updates_until, runtime_expires_at)
+      `INSERT INTO entitlements (order_item_id, user_id, template_id, version_id, mode, status, instance_limit, updates_until, runtime_expires_at, storage_gb)
        VALUES ($1, $2, $3, $4, $5, 'active', $6,
                CASE WHEN $7::int IS NULL THEN NULL ELSE now() + make_interval(months => $7::int) END,
-               NULL)
+               NULL, $8)
        ON CONFLICT (order_item_id) DO NOTHING`,
-      [item.id, buyerId, item.template_id, item.version_id, item.deployment_mode, instanceLimit, updatesMonths],
+      [item.id, buyerId, item.template_id, item.version_id, item.deployment_mode, instanceLimit, updatesMonths, item.snapshot_json.storage_gb ?? 1],
     );
     // The separate installation/configuration package: no entitlement —
     // it is work for the team, tracked as a service task the buyer can
@@ -524,9 +536,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   }
 
   // POST /quotes — backend prices the plan; the quote is bound to the buyer and expires.
-  app.post<{ Body: { plan_id: string; template_id: string; billing_interval?: 'monthly' | 'yearly'; installation?: boolean; upgrade_entitlement_id?: string; site_request?: { subdomain: string; display_name: string; locale?: 'vi' | 'en'; domain_interval?: 'monthly' | 'yearly' } } }>(
+  app.post<{ Body: { plan_id: string; template_id: string; billing_interval?: 'monthly' | 'yearly'; installation?: boolean; upgrade_entitlement_id?: string; storage_gb?: number; site_request?: { subdomain: string; display_name: string; locale?: 'vi' | 'en'; domain_interval?: 'monthly' | 'yearly' } } }>(
     '/quotes',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] }, domain_interval: { enum: ['monthly', 'yearly'] } } }, billing_interval: { enum: ['monthly', 'yearly'] }, installation: { type: 'boolean' }, upgrade_entitlement_id: { type: 'string', pattern: UUID.source } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] }, domain_interval: { enum: ['monthly', 'yearly'] } } }, billing_interval: { enum: ['monthly', 'yearly'] }, installation: { type: 'boolean' }, upgrade_entitlement_id: { type: 'string', pattern: UUID.source }, storage_gb: { type: 'integer', minimum: 1, maximum: 100 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const found = await loadPlanForPurchase(request.body.template_id, request.body.plan_id);
@@ -553,7 +565,28 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       if (billingInterval && found.plan.deployment_mode !== 'hosted') {
         throw errors.validation([{ field: 'billing_interval', code: 'hosted_only' }]);
       }
-      const charge = computeCharge(found.plan, billingInterval);
+      // Storage-priced hosting: when the owner set a per-GB rate for the
+      // effective period, hosting sells by capacity — rate x GB. Asking
+      // for more than 1 GB without a rate is refused, never silently
+      // charged at a flat price.
+      const storageGb = request.body.storage_gb ?? 1;
+      if (request.body.storage_gb !== undefined && found.plan.deployment_mode !== 'hosted') {
+        throw errors.validation([{ field: 'storage_gb', code: 'hosted_only' }]);
+      }
+      let storage: { perGb: number; gb: number } | undefined;
+      let storageRatePerGb: number | null = null;
+      if (found.plan.deployment_mode === 'hosted') {
+        const rates = (await getSetting(db, 'hosting.storage_price').catch(() => null)) as { monthly_per_gb?: number | null; yearly_per_gb?: number | null } | null;
+        const period = billingInterval ?? (found.plan.prices.some((pr) => pr.interval === 'monthly') ? 'monthly' : 'yearly');
+        const rate = period === 'yearly' ? rates?.yearly_per_gb : rates?.monthly_per_gb;
+        if (typeof rate === 'number' && rate > 0) {
+          storage = { perGb: rate, gb: storageGb };
+          storageRatePerGb = rate;
+        } else if (storageGb > 1) {
+          throw errors.validation([{ field: 'storage_gb', code: 'rate_unset' }]);
+        }
+      }
+      const charge = computeCharge(found.plan, billingInterval, storage);
       const lines: QuoteLine[] = [...charge.lines];
       let subtotal = charge.subtotal;
       // Hosted buyers may choose their subdomain while buying (owner rule
@@ -628,6 +661,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         ...(billingInterval ? { billing_interval: billingInterval } : {}),
         ...(installation ? { installation: true } : {}),
         ...(upgradeEntitlementId ? { upgrade_entitlement_id: upgradeEntitlementId } : {}),
+        storage_gb: storageGb,
+        ...(storageRatePerGb !== null ? { storage_rate_per_gb: storageRatePerGb } : {}),
       };
       const { rows } = await db.query<{ id: string; expires_at: Date }>(
         `INSERT INTO quotes (buyer_id, currency, subtotal_minor, total_minor, snapshot_json, expires_at)
@@ -648,6 +683,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           billing_interval: billingInterval ?? null,
           installation,
           upgrade_entitlement_id: upgradeEntitlementId,
+          storage_gb: storageGb,
           expires_at: rows[0]!.expires_at.toISOString(),
         },
       });
@@ -707,7 +743,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/quotes/:id', async (request) => {
     const auth = requireUser(request);
     assertId(request.params.id);
-    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean }; expires_at: Date }>(
+    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean; storage_gb?: number }; expires_at: Date }>(
       'SELECT buyer_id, currency, subtotal_minor::text, discount_minor::text, tax_minor::text, total_minor::text, snapshot_json, expires_at FROM quotes WHERE id = $1',
       [request.params.id],
     );
@@ -726,6 +762,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         site_request: q.snapshot_json.site_request ?? null,
         billing_interval: q.snapshot_json.billing_interval ?? null,
         installation: q.snapshot_json.installation ?? false,
+        storage_gb: q.snapshot_json.storage_gb ?? 1,
         plan_name: q.snapshot_json.plan_name,
         expires_at: q.expires_at.toISOString(),
         expired: q.expires_at <= new Date(),
@@ -754,7 +791,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           if (!q || q.buyer_id !== auth.userId) throw errors.notFound();
           if (q.expired) throw errors.conflict('quote.expired');
           if (request.body.terms_version !== currentTerms) throw errors.conflict('terms.version_stale');
-          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean; kind?: string; lines?: QuoteLine[] };
+          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean; kind?: string; lines?: QuoteLine[]; storage_gb?: number; storage_rate_per_gb?: number };
           const order = await client.query<{ id: string }>(
             `INSERT INTO orders (buyer_id, quote_id, currency, subtotal_minor, total_minor, locale, terms_version, payment_window_expires_at)
              VALUES ($1, $2, $3, $4, $4, $5, $6, now() + make_interval(mins => $7)) RETURNING id`,
@@ -768,7 +805,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
             await client.query(
               `INSERT INTO order_items (order_id, template_id, version_id, plan_id, deployment_mode, unit_price_minor, snapshot_json)
                VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-              [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, q.total_minor, { plan_name: snap.plan_name, updates_months: (snap.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number }).instance_limit ?? 1, ...(snap.site_request ? { site_request: snap.site_request } : {}), ...(snap.billing_interval ? { billing_interval: snap.billing_interval } : {}), ...(snap.installation ? { installation: true } : {}), ...(snap.lines?.some((l) => l.label === 'subdomain_fee') ? { domain_fee_paid: true } : {}) }],
+              [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, q.total_minor, { plan_name: snap.plan_name, updates_months: (snap.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number }).instance_limit ?? 1, ...(snap.site_request ? { site_request: snap.site_request } : {}), ...(snap.billing_interval ? { billing_interval: snap.billing_interval } : {}), ...(snap.installation ? { installation: true } : {}), ...(snap.lines?.some((l) => l.label === 'subdomain_fee') ? { domain_fee_paid: true } : {}), storage_gb: snap.storage_gb ?? 1, ...(snap.storage_rate_per_gb ? { storage_rate_per_gb: snap.storage_rate_per_gb } : {}) }],
             );
           }
           // The chosen name stays the buyer's while late settlement is
@@ -1290,8 +1327,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/me/entitlements', async (request) => {
     const auth = requireUser(request);
-    const { rows } = await db.query<{ id: string; mode: string; status: string; instance_limit: number; updates_until: Date | null; template_id: string; version_id: string; slug: string; semver: string; adapter: string; created_at: Date; requested_subdomain: string | null; requested_display_name: string | null }>(
-      `SELECT e.id, e.mode, e.status, e.instance_limit, e.updates_until, e.template_id, e.version_id, t.slug, v.semver, v.adapter, e.created_at,
+    const { rows } = await db.query<{ id: string; mode: string; status: string; instance_limit: number; storage_gb: number; updates_until: Date | null; template_id: string; version_id: string; slug: string; semver: string; adapter: string; created_at: Date; requested_subdomain: string | null; requested_display_name: string | null }>(
+      `SELECT e.id, e.mode, e.status, e.instance_limit, e.storage_gb, e.updates_until, e.template_id, e.version_id, t.slug, v.semver, v.adapter, e.created_at,
               oi.snapshot_json -> 'site_request' ->> 'subdomain' AS requested_subdomain,
               oi.snapshot_json -> 'site_request' ->> 'display_name' AS requested_display_name
        FROM entitlements e JOIN templates t ON t.id = e.template_id JOIN template_versions v ON v.id = e.version_id
@@ -1305,6 +1342,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         mode: e.mode,
         status: e.status,
         instance_limit: e.instance_limit,
+        storage_gb: e.storage_gb ?? 1,
         updates_until: e.updates_until?.toISOString() ?? null,
         requested_subdomain: e.requested_subdomain,
         requested_display_name: e.requested_display_name,
