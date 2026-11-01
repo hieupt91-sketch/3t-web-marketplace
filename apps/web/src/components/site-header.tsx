@@ -20,35 +20,41 @@ const CATEGORY_ORDER = ['food', 'beauty', 'realestate', 'business', 'store', 'la
  */
 export interface NavMenuItem { href: string; label: string }
 
-function NavMenu({ href, label, caption, items, footer }: { href: string; label: string; caption: string; items: NavMenuItem[]; footer?: ReactNode }) {
-  const { t } = useT();
-  const [open, setOpen] = useState(false);
+function NavMenu({ id, href, label, caption, items, footer, align, openId, setOpenId }: { id: string; href: string; label: string; caption: string; items: NavMenuItem[]; footer?: ReactNode; align?: 'start' | 'end'; openId: string | null; setOpenId: (id: string | null) => void }) {
+  const open = openId === id;
   const closeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const rootRef = useRef<HTMLSpanElement | null>(null);
+  const openRef = useRef(open);
+  openRef.current = open;
 
   /* Touch has no hover-leave: an outside tap is the only way to close
    * a menu opened by the chevron, so listen for one while open. */
   useEffect(() => {
     if (!open) return;
     const onDown = (e: PointerEvent) => {
-      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpen(false);
+      if (rootRef.current && !rootRef.current.contains(e.target as Node)) setOpenId(null);
     };
     document.addEventListener('pointerdown', onDown);
     return () => document.removeEventListener('pointerdown', onDown);
-  }, [open ]);
+  }, [open, setOpenId]);
 
   const scheduleClose = () => {
-    closeTimer.current = setTimeout(() => setOpen(false), 250);
+    closeTimer.current = setTimeout(() => {
+      /* Only close if the pointer truly left this menu — hovering a
+       * sibling switches openId instantly and this stale timer must
+       * not kill the menu that replaced it (nor lag behind it). */
+      if (openRef.current) setOpenId(null);
+    }, 150);
   };
   const openNow = () => {
     if (closeTimer.current) clearTimeout(closeTimer.current);
-    setOpen(true);
+    setOpenId(id);
   };
 
   return (
     <span
       ref={rootRef}
-      className={`nav-dropdown${open ? ' nav-dropdown--open' : ''}`}
+      className={`nav-dropdown${open ? ' nav-dropdown--open' : ''}${align === 'end' ? ' nav-dropdown--end' : ''}`}
       onPointerEnter={(e) => {
         /* Hover-open only for a real mouse: on touch, the synthetic
          * enter fires right before the tap's click and would instantly
@@ -65,7 +71,7 @@ function NavMenu({ href, label, caption, items, footer }: { href: string; label:
         className="nav-dropdown__toggle"
         aria-expanded={open}
         aria-label={caption}
-        onClick={() => setOpen((v) => !v)}
+        onClick={() => setOpenId(open ? null : id)}
       >
         <svg viewBox="0 0 24 24" aria-hidden="true" width="15" height="15" fill="none" stroke="currentColor" strokeWidth="2.4" strokeLinecap="round" strokeLinejoin="round">
           <path d="m6 9 6 6 6-6" />
@@ -74,7 +80,7 @@ function NavMenu({ href, label, caption, items, footer }: { href: string; label:
       <span className="nav-dropdown__panel" role="menu">
         <span className="nav-dropdown__caption" aria-hidden="true">{caption}</span>
         {items.map((item) => (
-          <Link key={item.href + item.label} href={item.href} className="nav-dropdown__item" onClick={() => setOpen(false)}>
+          <Link key={item.href + item.label} href={item.href} className="nav-dropdown__item" onClick={() => setOpenId(null)}>
             <span className="nav-dropdown__label">{item.label}</span>
           </Link>
         ))}
@@ -89,7 +95,7 @@ function NavMenu({ href, label, caption, items, footer }: { href: string; label:
  * (the catalog fetch decides which categories exist; counts are not
  * displayed, per owner taste).
  */
-function CategoryMenu({ base }: { base: string }) {
+function CategoryMenu({ base, openId, setOpenId }: { base: string; openId: string | null; setOpenId: (id: string | null) => void }) {
   const { t } = useT();
   const [counts, setCounts] = useState<Map<string, number> | null>(null);
 
@@ -118,12 +124,12 @@ function CategoryMenu({ base }: { base: string }) {
     return { href: `${base}/templates?category=${code}`, label: label === `ui.category.${code}` ? code : label };
   });
   items.push({ href: `${base}/templates`, label: t('ui.home.browse_all') });
-  return <NavMenu href={`${base}/templates`} label={t('ui.nav.templates')} caption={t('ui.nav.templates')} items={items} />;
+  return <NavMenu id="templates" href={`${base}/templates`} label={t('ui.nav.templates')} caption={t('ui.nav.templates')} items={items} openId={openId} setOpenId={setOpenId} />;
 }
 
 
 /** "Tài khoản" menu: the account area's own nav, plus sign-out behind a divider. */
-function AccountMenu() {
+function AccountMenu({ openId, setOpenId }: { openId: string | null; setOpenId: (id: string | null) => void }) {
   const { t } = useT();
   const router = useRouter();
   async function logout() {
@@ -133,9 +139,13 @@ function AccountMenu() {
   }
   return (
     <NavMenu
+      id="account"
       href="/account"
       label={t('ui.nav.account')}
       caption={t('ui.nav.account')}
+      align="end"
+      openId={openId}
+      setOpenId={setOpenId}
       items={[
         { href: '/account', label: t('ui.account.nav.overview') },
         { href: '/account/purchases', label: t('ui.account.nav.purchases') },
@@ -175,6 +185,10 @@ function CartIcon() {
 
 export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
   const { t, locale } = useT();
+  /* One open dropdown at a time, coordinated here: opening a menu
+   * closes the previous one in the same frame — no overlapping
+   * panels and no close-delay tail while sweeping the header. */
+  const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const me = useMe();
   const saved = useSaved();
   const base = `/${publicLocale ?? locale}`;
@@ -195,8 +209,11 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
           <input id="header-search" type="search" name="q" placeholder={t('ui.catalog.search_placeholder')} />
         </form>
         <nav className="site-nav" aria-label={t('ui.nav.main')}>
-          <CategoryMenu base={base} />
+          <CategoryMenu base={base} openId={openMenuId} setOpenId={setOpenMenuId} />
           <NavMenu
+            id="plans"
+            openId={openMenuId}
+            setOpenId={setOpenMenuId}
             href={`${base}/plans/compare`}
             label={t('ui.nav.plans')}
             caption={t('ui.nav.plans')}
@@ -207,6 +224,9 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
             ]}
           />
           <NavMenu
+            id="how"
+            openId={openMenuId}
+            setOpenId={setOpenMenuId}
             href={`${base}/how-it-works`}
             label={t('ui.nav.how_it_works')}
             caption={t('ui.nav.how_it_works')}
@@ -221,6 +241,10 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
             <>
               {isStaff ? (
                 <NavMenu
+                  id="admin"
+                  openId={openMenuId}
+                  setOpenId={setOpenMenuId}
+                  align="end"
                   href="/admin"
                   label={t('ui.nav.admin')}
                   caption={t('ui.nav.admin')}
@@ -233,7 +257,7 @@ export function SiteHeader({ publicLocale }: { publicLocale?: 'vi' | 'en' }) {
                   ]}
                 />
               ) : null}
-              <AccountMenu />
+              <AccountMenu openId={openMenuId} setOpenId={setOpenMenuId} />
             </>
           ) : null}
           <span className="header-icons">

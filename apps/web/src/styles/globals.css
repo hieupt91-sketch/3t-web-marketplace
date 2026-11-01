@@ -260,8 +260,10 @@ h3 {
 .nav-dropdown__panel {
   position: absolute;
   top: calc(100% + 8px);
-  left: 50%;
-  translate: -50% 0;
+  /* The panel's edge aligns with its menu's edge (the approved sheet
+   * shows tidy columns under each menu) — a centered panel hung
+   * detached, offset differently under every label. */
+  left: 0;
   z-index: 30;
   /* Closed panels are display:none, not just visibility:hidden — a hidden
    * but rendered panel still widens the page's scrollable overflow on
@@ -278,11 +280,13 @@ h3 {
 }
 .nav-dropdown--open .nav-dropdown__panel {
   display: grid;
-  animation: panel-in var(--motion) ease-out;
+  /* No entrance animation: it read as lag on hover. */
 }
-@keyframes panel-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to { opacity: 1; transform: none; }
+/* Right-side menus (Quản trị, Tài khoản) align the panel to the
+ * menu's right edge so it never nears the viewport edge. */
+.nav-dropdown--end .nav-dropdown__panel {
+  left: auto;
+  right: 0;
 }
 .nav-dropdown__caption {
   padding: 6px 14px 4px;
