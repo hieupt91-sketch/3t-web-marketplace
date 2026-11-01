@@ -1672,5 +1672,17 @@
   "ui.partner.topup_equiv": "Transfer: {amount}",
   "ui.admin.partner_cost": "Partner price (points)",
   "ui.admin.partner_cost_hint": "Points deducted from the partner wallet per wallet sale. Empty = deduct by the policy % cut.",
-  "ui.partner.cost_fixed": "Fixed price"
+  "ui.partner.cost_fixed": "Fixed price",
+  "ui.pricing.partner_title": "Bulk partner price",
+  "ui.pricing.partner_hint": "Pin one fixed points price deducted from partner wallets for many templates at once — uses the scope selected above (all / category / checked templates).",
+  "ui.pricing.partner_points_label": "Partner price (points)",
+  "ui.pricing.partner_apply": "Set partner price",
+  "ui.pricing.partner_clear": "Clear pin",
+  "ui.pricing.partner_scope_note": "Clearing a pin returns to the policy % cut.",
+  "ui.pricing.col_partner_cost": "Partner price (points)",
+  "ui.pricing.partner_cut_fallback": "policy % cut",
+  "ui.pricing.result_partner": "Partner price set for {count} templates ({plans} plans).",
+  "ui.pricing.result_partner_cleared": "Partner price pin cleared for {count} templates ({plans} plans).",
+  "ui.pricing.confirm_all_partner": "Set the partner price to {points} points for all {count} templates?",
+  "ui.pricing.confirm_all_partner_clear": "Clear the partner price pin for all {count} templates?"
 }

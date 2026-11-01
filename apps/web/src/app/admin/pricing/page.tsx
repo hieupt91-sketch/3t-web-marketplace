@@ -20,6 +20,8 @@ interface OverviewRow {
   status: string;
   hidden: boolean;
   current_price_minor: string | null;
+  partner_cost_selfhost: string | null;
+  partner_cost_hosted: string | null;
 }
 interface Category {
   id: string;
@@ -53,6 +55,8 @@ function PricingInner() {
   const [scope, setScope] = useState<ScopeType>('all');
   const [bulkCategory, setBulkCategory] = useState('');
   const [bulkAmount, setBulkAmount] = useState('');
+  const [partnerPoints, setPartnerPoints] = useState('');
+  const [partnerModes, setPartnerModes] = useState<{ selfhost: boolean; hosted: boolean }>({ selfhost: true, hosted: true });
   const [bulkBusy, setBulkBusy] = useState(false);
   const [rowBusy, setRowBusy] = useState<string | null>(null);
   const [invalid, setInvalid] = useState(false);
@@ -121,6 +125,28 @@ function PricingInner() {
     setBulkBusy(false);
     if (!res.ok) return setError(res.error);
     setNotice({ text: t('ui.pricing.result_price', { count: res.data.updated_count }), failures: res.data.failure_count });
+    await load();
+  }
+
+  async function applyBulkPartnerCost(clear: boolean) {
+    const payload = scopePayload();
+    if (!payload) return;
+    const modes = [partnerModes.selfhost ? 'selfhost' : null, partnerModes.hosted ? 'hosted' : null].filter(Boolean) as string[];
+    if (modes.length === 0) return;
+    const value = partnerPoints.replace(/\D/g, '');
+    if (!clear && !validAmount(value)) return setInvalid(true);
+    setInvalid(false);
+    if (payload.type === 'all' && !window.confirm(t(clear ? 'ui.pricing.confirm_all_partner_clear' : 'ui.pricing.confirm_all_partner', { points: value, count: rows.length }))) return;
+    setNotice(null);
+    setError(null);
+    setBulkBusy(true);
+    const res = await api<BulkResult & { plans_updated: number }>('/admin/templates/bulk-partner-cost', {
+      method: 'POST',
+      body: { cost_points: clear ? null : Number(value), modes, scope: payload },
+    });
+    setBulkBusy(false);
+    if (!res.ok) return setError(res.error);
+    setNotice({ text: t(clear ? 'ui.pricing.result_partner_cleared' : 'ui.pricing.result_partner', { count: res.data.updated_count, plans: res.data.plans_updated }), failures: res.data.failure_count });
     await load();
   }
 
@@ -205,6 +231,38 @@ function PricingInner() {
               </button>
             </div>
           </section>
+          <section className="card stack">
+            <h2 style={{ marginTop: 0 }}>{t('ui.pricing.partner_title')}</h2>
+            <p className="muted" style={{ margin: 0 }}>{t('ui.pricing.partner_hint')}</p>
+            <div className="row" style={{ alignItems: 'flex-end', flexWrap: 'wrap' }}>
+              <label className="field">
+                <span>{t('ui.pricing.partner_points_label')}</span>
+                <input
+                  className="input tabular"
+                  inputMode="numeric"
+                  value={partnerPoints}
+                  onChange={(e) => setPartnerPoints(e.target.value.replace(/\D/g, ''))}
+                  disabled={bulkBusy}
+                  autoComplete="off"
+                />
+              </label>
+              <label className="row" style={{ alignItems: 'center' }}>
+                <input type="checkbox" checked={partnerModes.selfhost} onChange={(e) => setPartnerModes((m) => ({ ...m, selfhost: e.target.checked }))} disabled={bulkBusy} />
+                <span>{t('ui.deployment.selfhost')}</span>
+              </label>
+              <label className="row" style={{ alignItems: 'center' }}>
+                <input type="checkbox" checked={partnerModes.hosted} onChange={(e) => setPartnerModes((m) => ({ ...m, hosted: e.target.checked }))} disabled={bulkBusy} />
+                <span>{t('ui.deployment.hosted')}</span>
+              </label>
+              <button type="button" className="button" disabled={bulkBusy || !payloadReady || (!partnerModes.selfhost && !partnerModes.hosted)} onClick={() => void applyBulkPartnerCost(false)}>
+                {t('ui.pricing.partner_apply')}
+              </button>
+              <button type="button" className="button button--secondary" disabled={bulkBusy || !payloadReady || (!partnerModes.selfhost && !partnerModes.hosted)} onClick={() => void applyBulkPartnerCost(true)}>
+                {t('ui.pricing.partner_clear')}
+              </button>
+              <span className="muted">{t('ui.pricing.partner_scope_note')}</span>
+            </div>
+          </section>
           <div className="row" role="group" aria-label={t('ui.catalog.filter_kind')}>
             {(['', 'static', 'dynamic'] as const).map((k) => (
               <button key={k || 'all'} type="button" className={`button${kindFilter === k ? '' : ' button--secondary'}`} aria-pressed={kindFilter === k} onClick={() => setKindFilter(k)}>
@@ -222,6 +280,7 @@ function PricingInner() {
                   <th scope="col">{t('ui.pricing.col_category')}</th>
                   <th scope="col">{t('ui.admin.templates.col_status')}</th>
                   <th scope="col">{t('ui.pricing.col_price')}</th>
+                  <th scope="col">{t('ui.pricing.col_partner_cost')}</th>
                   <th scope="col">{t('ui.pricing.col_new_price')}</th>
                   <th scope="col">{t('ui.pricing.col_visibility')}</th>
                 </tr>
@@ -255,6 +314,16 @@ function PricingInner() {
                       {row.current_price_minor
                         ? formatMoney({ amount_minor: row.current_price_minor, currency: 'VND' }, locale)
                         : <span className="muted">{t('ui.admin.templates.price_unset')}</span>}
+                    </td>
+                    <td className="tabular">
+                      {row.partner_cost_selfhost || row.partner_cost_hosted ? (
+                        <div className="stack" style={{ gap: 2 }}>
+                          {row.partner_cost_selfhost ? <span>{t('ui.deployment.selfhost')}: <strong>{row.partner_cost_selfhost}</strong></span> : null}
+                          {row.partner_cost_hosted ? <span>{t('ui.deployment.hosted')}: <strong>{row.partner_cost_hosted}</strong></span> : null}
+                        </div>
+                      ) : (
+                        <span className="muted">{t('ui.pricing.partner_cut_fallback')}</span>
+                      )}
                     </td>
                     <td>
                       <div className="row">

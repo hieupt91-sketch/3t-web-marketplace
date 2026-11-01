@@ -497,6 +497,7 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     const { rows } = await db.query<{
       id: string; slug: string; title_vi: string | null; category_id: string | null; category_code: string | null;
       status: string; hidden: boolean; current_price_minor: string | null; adapter: string | null;
+      partner_cost_selfhost: string | null; partner_cost_hosted: string | null;
     }>(
       `SELECT t.id, t.slug, tt.title AS title_vi, t.category_id, c.code AS category_code, t.status, t.hidden,
               (SELECT v.adapter FROM template_versions v WHERE v.template_id = t.id ORDER BY v.created_at DESC LIMIT 1) AS adapter,
@@ -505,7 +506,13 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
                 WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'selfhost'
                   AND pp.currency = $1 AND pp.interval = 'one_time'
                   AND pp.effective_from <= now() AND (pp.effective_to IS NULL OR pp.effective_to > now())
-                ORDER BY pp.amount_minor ASC LIMIT 1) AS current_price_minor
+                ORDER BY pp.amount_minor ASC LIMIT 1) AS current_price_minor,
+              (SELECT pc.cost_points::text FROM plans p JOIN plan_partner_costs pc ON pc.plan_id = p.id
+                WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'selfhost'
+                ORDER BY pc.cost_points ASC LIMIT 1) AS partner_cost_selfhost,
+              (SELECT pc.cost_points::text FROM plans p JOIN plan_partner_costs pc ON pc.plan_id = p.id
+                WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'hosted'
+                ORDER BY pc.cost_points ASC LIMIT 1) AS partner_cost_hosted
          FROM templates t
          LEFT JOIN template_categories c ON c.id = t.category_id
          LEFT JOIN template_translations tt ON tt.template_id = t.id AND tt.locale = $2
@@ -538,6 +545,52 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       const ids = await resolveBulkScope(request.body.scope);
       const result = await runBulk(ids, (client, id) => applyQuickPrice(client, id, amount, auth.userId, request.id));
       return { data: { amount_minor: amount, currency: PLATFORM_CURRENCY, ...result } };
+    },
+  );
+
+  // v31: bulk partner price — pin (or clear) the fixed wallet-deduction
+  // price for the active plans of every template in scope, per deployment
+  // mode. Same scope shape as bulk-price; per-template transactions.
+  app.post<{ Body: { cost_points: number | null; modes: string[]; scope: BulkScopeInput } }>(
+    '/templates/bulk-partner-cost',
+    {
+      schema: {
+        body: {
+          type: 'object', additionalProperties: false, required: ['cost_points', 'modes', 'scope'],
+          properties: {
+            cost_points: { type: ['integer', 'null'], minimum: 1, maximum: 100000000 },
+            modes: { type: 'array', items: { enum: ['selfhost', 'hosted'] }, minItems: 1, maxItems: 2 },
+            scope: bulkScopeSchema,
+          },
+        },
+      },
+    },
+    async (request) => {
+      const auth = requirePermission(request, 'pricing:write');
+      const modes = [...new Set(request.body.modes)];
+      if (modes.length === 0) throw errors.validation([{ field: 'modes', code: 'required' }]);
+      const ids = await resolveBulkScope(request.body.scope);
+      let plansUpdated = 0;
+      const result = await runBulk(ids, async (client, templateId) => {
+        const plans = await client.query<{ id: string }>(
+          "SELECT id FROM plans WHERE template_id = $1 AND status = 'active' AND deployment_mode = ANY($2::text[])",
+          [templateId, modes],
+        );
+        for (const plan of plans.rows) {
+          if (request.body.cost_points === null) {
+            await client.query('DELETE FROM plan_partner_costs WHERE plan_id = $1', [plan.id]);
+          } else {
+            await client.query(
+              `INSERT INTO plan_partner_costs (plan_id, cost_points) VALUES ($1, $2)
+               ON CONFLICT (plan_id) DO UPDATE SET cost_points = EXCLUDED.cost_points`,
+              [plan.id, request.body.cost_points],
+            );
+          }
+          plansUpdated += 1;
+        }
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'plan.partner_cost_bulk', resourceType: 'template', resourceId: templateId, traceId: request.id });
+      });
+      return { data: { cost_points: request.body.cost_points, modes, plans_updated: plansUpdated, ...result } };
     },
   );
 

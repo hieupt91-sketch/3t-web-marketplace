@@ -1672,5 +1672,17 @@
   "ui.partner.topup_equiv": "Chuyển khoản: {amount}",
   "ui.admin.partner_cost": "Giá cho CTV (điểm)",
   "ui.admin.partner_cost_hint": "Số điểm trừ vào ví CTV mỗi đơn bán qua ví. Để trống = trừ theo % cắt trong chính sách CTV.",
-  "ui.partner.cost_fixed": "Giá cố định"
+  "ui.partner.cost_fixed": "Giá cố định",
+  "ui.pricing.partner_title": "Giá cho CTV hàng loạt",
+  "ui.pricing.partner_hint": "Ghim một giá điểm cố định trừ vào ví CTV cho nhiều mẫu cùng lúc — dùng chung phạm vi đã chọn ở trên (toàn bộ / danh mục / các mẫu đã tick).",
+  "ui.pricing.partner_points_label": "Giá CTV (điểm)",
+  "ui.pricing.partner_apply": "Đặt giá CTV",
+  "ui.pricing.partner_clear": "Xoá ghim",
+  "ui.pricing.partner_scope_note": "Xoá ghim = quay về trừ theo % cắt trong chính sách CTV.",
+  "ui.pricing.col_partner_cost": "Giá CTV (điểm)",
+  "ui.pricing.partner_cut_fallback": "theo % cắt",
+  "ui.pricing.result_partner": "Đã đặt giá CTV cho {count} mẫu ({plans} gói).",
+  "ui.pricing.result_partner_cleared": "Đã xoá ghim giá CTV cho {count} mẫu ({plans} gói).",
+  "ui.pricing.confirm_all_partner": "Đặt giá CTV {points} điểm cho toàn bộ {count} mẫu?",
+  "ui.pricing.confirm_all_partner_clear": "Xoá ghim giá CTV của toàn bộ {count} mẫu?"
 }

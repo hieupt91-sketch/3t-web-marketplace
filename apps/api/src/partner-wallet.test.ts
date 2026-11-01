@@ -263,6 +263,21 @@ describe('partner wallet', () => {
     expect(sale.json().data.cost_points).toBe('50');
     expect(sale.json().data.cost_source).toBe('fixed');
     expect(sale.json().data.wallet_balance_points).toBe('80');
+    // v31 bulk: pin by id scope, clear by bulk, hosted mode does not touch selfhost.
+    const bulkSet = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: 42, modes: ['selfhost'], scope: { type: 'ids', template_ids: [templateId] } }, ownerCookie);
+    expect(bulkSet.statusCode, bulkSet.body).toBe(200);
+    expect(bulkSet.json().data.updated_count).toBe(1);
+    expect(bulkSet.json().data.plans_updated).toBeGreaterThanOrEqual(1);
+    const pinned = await ctx.db.query("SELECT cost_points::text AS c FROM plan_partner_costs WHERE plan_id = $1", [planId]);
+    expect(pinned.rows[0].c).toBe('42');
+    const badModes = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: 42, modes: [], scope: { type: 'all' } }, ownerCookie);
+    expect(badModes.statusCode).toBe(422);
+    const buyerBulk = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: 42, modes: ['selfhost'], scope: { type: 'all' } }, partnerCookie);
+    expect(buyerBulk.statusCode).toBe(403);
+    const bulkClear = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: null, modes: ['selfhost', 'hosted'], scope: { type: 'all' } }, ownerCookie);
+    expect(bulkClear.statusCode, bulkClear.body).toBe(200);
+    const gone = await ctx.db.query('SELECT 1 FROM plan_partner_costs WHERE plan_id = $1', [planId]);
+    expect(gone.rowCount).toBe(0);
     const clear = await post(`/api/v1/admin/plans/${planId}/partner-cost`, { cost_points: null }, ownerCookie);
     expect(clear.statusCode, clear.body).toBe(200);
     const list2 = await get('/api/v1/partner/prices', partnerCookie);
