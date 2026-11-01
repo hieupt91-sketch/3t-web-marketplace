@@ -1679,5 +1679,9 @@
   "ui.admin.policy.category_pct": "% chiết khấu của ngành",
   "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 tháng = {total} /năm",
   "ui.home.static_title": "Mẫu tĩnh — nhẹ, tải về là chạy",
-  "ui.home.static_body": "Mẫu HTML thuần, không cần máy chủ riêng: tải về, thay nội dung, đưa lên hosting miễn phí là chạy."
+  "ui.home.static_body": "Mẫu HTML thuần, không cần máy chủ riêng: tải về, thay nội dung, đưa lên hosting miễn phí là chạy.",
+  "ui.nav.how_steps": "4 bước tới website của bạn",
+  "ui.nav.help_center": "Trung tâm trợ giúp",
+  "ui.nav.admin_overview": "Tổng quan quản trị",
+  "ui.nav.settings": "Cài đặt"
 }

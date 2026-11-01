@@ -1679,5 +1679,9 @@
   "ui.admin.policy.category_pct": "Category discount %",
   "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 months = {total} /year",
   "ui.home.static_title": "Static templates — light, download and go",
-  "ui.home.static_body": "Pure HTML templates, no server needed: download, swap in your content, put them on free hosting and they run."
+  "ui.home.static_body": "Pure HTML templates, no server needed: download, swap in your content, put them on free hosting and they run.",
+  "ui.nav.how_steps": "4 steps to your website",
+  "ui.nav.help_center": "Help center",
+  "ui.nav.admin_overview": "Admin overview",
+  "ui.nav.settings": "Settings"
 }

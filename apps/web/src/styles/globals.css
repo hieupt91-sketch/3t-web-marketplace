@@ -284,6 +284,39 @@ h3 {
   from { opacity: 0; transform: translateY(6px); }
   to { opacity: 1; transform: none; }
 }
+.nav-dropdown__caption {
+  padding: 6px 14px 4px;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--color-text-muted);
+}
+.site-nav button.nav-dropdown__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-width: 0;
+  min-height: 48px;
+  padding: 10px 14px;
+  border: 0;
+  border-radius: 10px;
+  background: none;
+  font: inherit;
+  font-weight: 600;
+  text-align: left;
+  cursor: pointer;
+}
+.site-nav button.nav-dropdown__item:hover {
+  background: var(--color-bg-accent);
+  color: var(--color-primary);
+}
+.site-nav .nav-dropdown__item--divider {
+  margin-top: 4px;
+  border-top: 1px solid var(--color-border);
+  border-radius: 0 0 10px 10px;
+}
 .site-nav a.nav-dropdown__item {
   display: flex;
   align-items: center;
