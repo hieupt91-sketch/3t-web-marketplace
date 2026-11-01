@@ -241,6 +241,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     return {
       data: {
         brand: { name: 'webmaket' },
+        site_base_domain: config.siteBaseDomain,
         default_locale: DEFAULT_LOCALE,
         locales: LOCALES.filter((l) => l.enabled).map((l) => ({ code: l.code, display_name: l.displayNameNative, direction: l.direction })),
         currency: config.currency,

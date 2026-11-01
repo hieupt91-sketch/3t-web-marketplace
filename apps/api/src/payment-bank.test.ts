@@ -253,3 +253,102 @@ describe('casso hub webhook', () => {
     expect((await get(`/api/v1/orders/${orderId}`, buyer2Cookie)).json().data.payment_status).toBe('needs_reconciliation');
   });
 });
+
+describe('bank transfer VietQR', () => {
+  it('omits qr_payload until the owner sets a bank BIN, then embeds it in the session', async () => {
+    // Settings currently saved by the earlier describes have no BIN.
+    const plainOrder = await newOrder(buyerCookie);
+    const plain = await post(`/api/v1/orders/${plainOrder}/payment-sessions`, {}, buyerCookie);
+    expect(plain.statusCode, plain.body).toBe(201);
+    expect(plain.json().data.instructions.qr_payload).toBeUndefined();
+
+    const saved = await post('/api/v1/admin/settings/payment', {
+      enabled: true, bank_name: 'Vietcombank', bank_bin: '970436',
+      account_number: '0123 456 789', account_holder: 'WEBMAKET TEST',
+    }, ownerCookie);
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.json().data.bank_bin).toBe('970436');
+
+    const badBin = await post('/api/v1/admin/settings/payment', {
+      enabled: true, bank_name: 'Vietcombank', bank_bin: '9704',
+      account_number: '0123456789', account_holder: 'WEBMAKET TEST',
+    }, ownerCookie);
+    expect(badBin.statusCode).toBe(422);
+
+    const orderId = await newOrder(buyerCookie);
+    const res = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    expect(res.statusCode, res.body).toBe(201);
+    const ins = res.json().data.instructions;
+    expect(typeof ins.qr_payload).toBe('string');
+    expect(ins.qr_payload).toContain('970436');
+    expect(ins.qr_payload).toContain('0123456789');
+    expect(ins.qr_payload).toContain(ins.content_code);
+    expect(ins.qr_payload.startsWith('000201010212')).toBe(true);
+
+    // The attempts read (what the pay page polls) carries it too.
+    const attempts = await get(`/api/v1/orders/${orderId}/payment-attempts`, buyerCookie);
+    const bankAttempt = (attempts.json().data as { provider: string; instructions?: { qr_payload?: string } }[]).find((a) => a.provider === 'bank_transfer');
+    expect(bankAttempt?.instructions?.qr_payload).toBe(ins.qr_payload);
+  });
+});
+
+describe('payment window expiry (owner rule 2026-11-01)', () => {
+  const backdateWindow = (orderId: string) =>
+    ctx.db.query("UPDATE orders SET payment_window_expires_at = now() - interval '1 minute' WHERE id = $1", [orderId]);
+  const hubSettle = (id: number, code: string, amount: number) => ctx.app.inject({
+    method: 'POST',
+    url: '/api/v1/payments/webhooks/bank_transfer',
+    headers: { authorization: `Apikey ${HUB_KEY}` },
+    payload: { id, code, transferType: 'in', transferAmount: amount },
+  });
+
+  it('expires an unpaid order past its window: recorded state, attempts expired, no new session', async () => {
+    await enableBank(true);
+    const orderId = await newOrder(buyerCookie);
+    const s = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    expect(s.statusCode, s.body).toBe(201);
+    await backdateWindow(orderId);
+    const again = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    expect(again.statusCode).toBe(409);
+    expect(again.json().error.code).toBe('order.payment_expired');
+    const order = await get(`/api/v1/orders/${orderId}`, buyerCookie);
+    expect(order.json().data.payment_status).toBe('expired');
+    const attempts = await get(`/api/v1/orders/${orderId}/payment-attempts`, buyerCookie);
+    expect(attempts.json().data[0].status).toBe('expired');
+  });
+
+  it('routes late hub money on an expired order to reconciliation; staff resolve-paid fulfils it', async () => {
+    const orderId = await newOrder(buyerCookie);
+    const s = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    const code = s.json().data.instructions.content_code as string;
+    await backdateWindow(orderId);
+    expect((await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie)).statusCode).toBe(409);
+    const hook = await hubSettle(991001, code, 499000);
+    expect(hook.statusCode, hook.body).toBe(200);
+    expect(hook.json().outcome).toBe('needs_reconciliation');
+    const order = await get(`/api/v1/orders/${orderId}`, buyerCookie);
+    expect(order.json().data.payment_status).toBe('needs_reconciliation');
+    const ents = await ctx.db.query("SELECT count(*) AS n FROM entitlements e JOIN order_items oi ON oi.id = e.order_item_id WHERE oi.order_id = $1", [orderId]);
+    expect(ents.rows[0].n).toBe('0');
+    const resolve = await post(`/api/v1/admin/reconciliation/orders/${orderId}/resolve`, { resolution: 'paid', reason: 'Tiền đến sau hạn, đã kiểm tra sao kê' }, ownerCookie);
+    expect(resolve.statusCode, resolve.body).toBe(200);
+    const after = await get(`/api/v1/orders/${orderId}`, buyerCookie);
+    expect(after.json().data.payment_status).toBe('paid');
+    const ents2 = await ctx.db.query("SELECT count(*) AS n FROM entitlements e JOIN order_items oi ON oi.id = e.order_item_id WHERE oi.order_id = $1", [orderId]);
+    expect(ents2.rows[0].n).toBe('1');
+  });
+
+  it('staff manual confirmation revives an expired order (the admin confirmation is authoritative)', async () => {
+    const orderId = await newOrder(buyerCookie);
+    await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie);
+    const attempts = await get(`/api/v1/orders/${orderId}/payment-attempts`, buyerCookie);
+    const attemptId = (attempts.json().data as { id: string }[])[0]!.id;
+    await backdateWindow(orderId);
+    expect((await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, buyerCookie)).statusCode).toBe(409);
+    const confirm = await post(`/api/v1/admin/payments/attempts/${attemptId}/confirm`, { note: 'Đã thấy tiền trong tài khoản' }, ownerCookie);
+    expect(confirm.statusCode, confirm.body).toBe(200);
+    expect(confirm.json().data.outcome).toBe('processed');
+    const order = await get(`/api/v1/orders/${orderId}`, buyerCookie);
+    expect(order.json().data.payment_status).toBe('paid');
+  });
+});

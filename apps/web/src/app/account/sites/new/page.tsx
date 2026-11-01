@@ -6,7 +6,7 @@ import { ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
-interface Entitlement { id: string; mode: string; status: string; instance_limit: number; template: { slug: string }; version: { semver: string } }
+interface Entitlement { id: string; mode: string; status: string; instance_limit: number; requested_subdomain?: string | null; requested_display_name?: string | null; template: { slug: string }; version: { semver: string } }
 interface SubCheck { available: boolean; reason: string | null; held_by_you?: boolean; reservation_expires_at?: string }
 
 type HoldState =
@@ -91,6 +91,16 @@ export default function NewSitePage() {
       else setError(res.error);
     });
   }, []);
+  // Bought with the domain chosen at checkout? Prefill the name the
+  // buyer already picked (their auto-created first site may exist too —
+  // this wizard then serves the entitlement's remaining instances).
+  useEffect(() => {
+    const ent = (ents ?? []).find((e) => e.id === entitlementId);
+    if (!ent) return;
+    if (ent.requested_subdomain) setSubdomain((prev) => prev || ent.requested_subdomain!);
+    if (ent.requested_display_name) setDisplayName((prev) => prev || ent.requested_display_name!);
+  }, [entitlementId, ents]);
+
   const submit = (event: FormEvent) => {
     event.preventDefault();
     setBusy(true);

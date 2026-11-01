@@ -1,16 +1,19 @@
 'use client';
 
+import Link from 'next/link';
 import { useParams, useRouter } from 'next/navigation';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { formatMoney } from '@3t/i18n';
 import { AuthGate } from '@/components/auth-gate';
+import { QrImage } from '@/components/qr-image';
 import { Alert, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
-interface Order { id: string; payment_status: string; total_minor: string; currency: string }
+interface Order { id: string; payment_status: string; total_minor: string; currency: string; payment_window_expires_at: string | null }
 interface TransferInstructions {
-  content_code: string;
+  content_code?: string;
+  qr_payload?: string;
   amount_minor: string;
   currency: string;
   bank_name?: string;
@@ -63,14 +66,15 @@ function Pay() {
 
   const startSession = useCallback(async (provider?: string) => {
     const res = await api<Session>(`/orders/${id}/payment-sessions`, { method: 'POST', body: provider ? { provider } : {} });
-    if (!res.ok) { setError(res.error); return; }
-    setSession(res.data);
-    // Gateways take the buyer to their own pay page; settlement still
-    // arrives server-to-server and the result page picks it up.
-    if ((res.data.provider === 'vnpay' || res.data.provider === 'momo') && res.data.pay_url) {
-      window.location.assign(res.data.pay_url);
+    if (!res.ok) {
+      // The 15-minute window just lapsed: the server expired the order;
+      // reloading it flips this page to the clear expired state.
+      if (res.error.code === 'order.payment_expired') { setError(null); void loadOrder(); return; }
+      setError(res.error);
+      return;
     }
-  }, [id]);
+    setSession(res.data);
+  }, [id, loadOrder]);
 
   useEffect(() => {
     void (async () => {
@@ -98,12 +102,30 @@ function Pay() {
   // Manual transfers settle server-side (hub report or staff
   // confirmation); poll quietly so the buyer lands on the result page
   // once the settlement lands.
-  const transferPending = session !== null && MANUAL_PROVIDERS.includes(session.provider) && order?.payment_status === 'awaiting_payment';
+  const transferPending = session !== null && (MANUAL_PROVIDERS.includes(session.provider) || session.provider === 'vnpay' || session.provider === 'momo') && order?.payment_status === 'awaiting_payment';
   useEffect(() => {
     if (!transferPending) return;
     const timer = setInterval(() => { void loadOrder(); }, 10_000);
     return () => clearInterval(timer);
   }, [transferPending, loadOrder]);
+
+  const [secondsLeft, setSecondsLeft] = useState<number | null>(null);
+  const zeroFired = useRef(false);
+  useEffect(() => {
+    const exp = order?.payment_window_expires_at;
+    if (!exp || order?.payment_status !== 'awaiting_payment') { setSecondsLeft(null); return; }
+    const target = new Date(exp).getTime();
+    const tick = () => setSecondsLeft(Math.max(0, Math.round((target - Date.now()) / 1000)));
+    tick();
+    const timer = setInterval(tick, 1000);
+    return () => clearInterval(timer);
+  }, [order?.payment_window_expires_at, order?.payment_status]);
+  useEffect(() => {
+    if (secondsLeft === 0 && !zeroFired.current) { zeroFired.current = true; void loadOrder(); }
+  }, [secondsLeft, loadOrder]);
+  const countdownNote = secondsLeft !== null && order?.payment_status === 'awaiting_payment' ? (
+    <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.time_left', { time: `${Math.floor(secondsLeft / 60)}:${String(secondsLeft % 60).padStart(2, '0')}` })}</p>
+  ) : null;
 
   async function confirmSandbox() {
     if (!session) return;
@@ -122,6 +144,21 @@ function Pay() {
   if (error && !order) return <ErrorState error={error} onRetry={() => void loadOrder()} />;
   if (!order) return <Loading />;
   if (order.payment_status !== 'awaiting_payment') {
+    if (order.payment_status === 'expired' || order.payment_status === 'cancelled') {
+      return (
+        <div className="stack">
+          <h1>{t('ui.checkout.expired_title')}</h1>
+          <Alert tone="warning"><p>{t('ui.checkout.expired_body')}</p></Alert>
+          <div className="row">
+            <Link className="button" href={`/${locale}/templates`}>{t('ui.checkout.buy_again')}</Link>
+            <Link href={`/checkout/orders/${id}/result`}>{t('ui.checkout.see_result')}</Link>
+          </div>
+        </div>
+      );
+    }
+    if (order.payment_status === 'needs_reconciliation') {
+      return <Alert tone="warning"><p>{t('ui.checkout.reconciliation_body')}</p><p><a className="button" href={`/checkout/orders/${id}/result`}>{t('ui.checkout.see_result')}</a></p></Alert>;
+    }
     return <Alert tone="info"><p>{t('ui.checkout.not_payable')}</p><p><a className="button" href={`/checkout/orders/${id}/result`}>{t('ui.checkout.see_result')}</a></p></Alert>;
   }
 
@@ -144,6 +181,7 @@ function Pay() {
               ))}
             </div>
           </fieldset>
+          {countdownNote}
           {error ? <ErrorState error={error} /> : null}
           <div className="row">
             <button type="button" className="button" disabled={busy || !chosenMethod} onClick={() => { setBusy(true); void startSession(chosenMethod).then(() => setBusy(false)); }}>
@@ -158,13 +196,21 @@ function Pay() {
   if (!session) return <Loading />;
 
   if (session.provider === 'vnpay' || session.provider === 'momo') {
+    const momoQr = session.provider === 'momo' ? session.instructions?.qr_payload : undefined;
     return (
       <div className="stack">
-        <h1>{t('ui.checkout.redirecting_title')}</h1>
-        <Alert tone="info">
-          <p>{t('ui.checkout.redirecting_note')}</p>
-          <p><a className="button" href={session.pay_url}>{t('ui.checkout.redirect_manual')}</a></p>
-        </Alert>
+        <h1>{t(METHOD_KEYS[session.provider]!.name)}</h1>
+        <div className="card stack" style={{ alignItems: 'center', textAlign: 'center' }}>
+          <QrImage payload={momoQr ?? session.pay_url} />
+          <p className="muted" style={{ margin: 0 }}>{t(momoQr ? 'ui.checkout.qr_momo_hint' : 'ui.checkout.qr_gateway_hint')}</p>
+        </div>
+        {countdownNote}
+        <div className="row">
+          <a className="button" href={session.pay_url}>{t('ui.checkout.gateway_continue')}</a>
+          <button type="button" className="button button--secondary" onClick={() => void loadOrder()}>{t('ui.checkout.check_status')}</button>
+        </div>
+        <Alert tone="info"><p>{t('ui.checkout.redirecting_note')}</p></Alert>
+        {error ? <ErrorState error={error} /> : null}
       </div>
     );
   }
@@ -175,6 +221,13 @@ function Pay() {
       <div className="stack">
         <h1>{t('ui.checkout.transfer_title')}</h1>
         <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.transfer_intro')}</p>
+        {ins.qr_payload ? (
+          <div className="card stack" style={{ alignItems: 'center', textAlign: 'center' }}>
+            <QrImage payload={ins.qr_payload} />
+            <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.qr_bank_hint')}</p>
+          </div>
+        ) : null}
+        {countdownNote}
         <div className="card stack">
           <dl className="details">
             <dt>{t('ui.checkout.transfer_bank')}</dt><dd>{ins.bank_name}</dd>

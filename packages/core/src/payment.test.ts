@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BankTransferProvider, CassoHubProvider, MockPaymentProvider, WebhookVerificationError, manualTransferRef, usdAmountFor } from './payment.ts';
+import { BankTransferProvider, CassoHubProvider, MockPaymentProvider, WebhookVerificationError, buildVietQrPayload, manualTransferRef, usdAmountFor } from './payment.ts';
 
 const provider = new MockPaymentProvider('test-secret', 'http://localhost:4000');
 
@@ -124,5 +124,48 @@ describe('CassoHubProvider', () => {
     expect(() => provider.verifyWebhookBatch(body, { 'secure-token': 'wrong' })).toThrow();
     expect(() => provider.verifyWebhookBatch(body, {})).toThrow();
     expect(() => new CassoHubProvider('').verifyWebhookBatch(body, auth)).toThrow();
+  });
+});
+
+describe('buildVietQrPayload', () => {
+  const parse = (s: string) => {
+    const out: Record<string, string> = {};
+    let i = 0;
+    while (i < s.length) {
+      const id = s.slice(i, i + 2);
+      const len = Number(s.slice(i + 2, i + 4));
+      out[id] = s.slice(i + 4, i + 4 + len);
+      i += 4 + len;
+    }
+    return out;
+  };
+
+  it('builds a spec-shaped dynamic VietQR payload with amount and content code', () => {
+    const p = buildVietQrPayload({ bankBin: '970436', accountNumber: '0123456789', amountMinor: '199999', content: 'WMABCDEF1234' });
+    const top = parse(p);
+    expect(top['00']).toBe('01');
+    expect(top['01']).toBe('12');
+    expect(top['53']).toBe('704');
+    expect(top['54']).toBe('199999');
+    expect(top['58']).toBe('VN');
+    const merchant = parse(top['38']!);
+    expect(merchant['00']).toBe('A000000727');
+    expect(merchant['02']).toBe('QRIBFTTA');
+    const beneficiary = parse(merchant['01']!);
+    expect(beneficiary['00']).toBe('970436');
+    expect(beneficiary['01']).toBe('0123456789');
+    const additional = parse(top['62']!);
+    expect(additional['01']).toBe('WMABCDEF1234');
+    // CRC-16/CCITT recomputed via the table-driven form (independent path).
+    const table: number[] = [];
+    for (let n = 0; n < 256; n++) {
+      let c = n << 8;
+      for (let k = 0; k < 8; k++) c = c & 0x8000 ? (c << 1) ^ 0x1021 : c << 1;
+      table[n] = c & 0xffff;
+    }
+    let crc = 0xffff;
+    const body = p.slice(0, -4);
+    for (let i = 0; i < body.length; i++) crc = ((crc << 8) ^ table[((crc >> 8) ^ body.charCodeAt(i)) & 0xff]!) & 0xffff;
+    expect(p.slice(-4)).toBe(crc.toString(16).toUpperCase().padStart(4, '0'));
   });
 });

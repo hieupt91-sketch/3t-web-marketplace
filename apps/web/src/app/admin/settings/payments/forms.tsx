@@ -5,6 +5,7 @@ import { useEffect, useState, type FormEvent } from 'react';
 import { Alert, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
+import { VN_BANKS } from '@/lib/vn-banks';
 
 /** Back link shared by the per-method payment settings pages: each method
  *  has its OWN page (bank / vnpay / momo / paypal / usd) under the payments
@@ -21,6 +22,7 @@ export function PaymentSettingsBackLink() {
 interface PaymentSettings {
   enabled: boolean;
   bank_name: string;
+  bank_bin: string;
   account_number: string;
   account_holder: string;
   hub_configured: boolean;
@@ -36,6 +38,7 @@ export function BankTransferForm() {
   const [settings, setSettings] = useState<PaymentSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [bankName, setBankName] = useState('');
+  const [bankBin, setBankBin] = useState('');
   const [accountNumber, setAccountNumber] = useState('');
   const [accountHolder, setAccountHolder] = useState('');
   const [hubKey, setHubKey] = useState('');
@@ -50,6 +53,7 @@ export function BankTransferForm() {
         setSettings(res.data);
         setEnabled(res.data.enabled);
         setBankName(res.data.bank_name);
+        setBankBin(res.data.bank_bin ?? '');
         setAccountNumber(res.data.account_number);
         setAccountHolder(res.data.account_holder);
       } else setError(res.error);
@@ -70,6 +74,7 @@ export function BankTransferForm() {
     const body: Record<string, unknown> = {
       enabled,
       bank_name: bankName,
+      bank_bin: bankBin,
       account_number: accountNumber,
       account_holder: accountHolder,
     };
@@ -103,8 +108,29 @@ export function BankTransferForm() {
           <span>{t('ui.payment_settings.enabled')}</span>
         </label>
         <label className="field">
+          <span>{t('ui.payment_settings.bank_select')}</span>
+          <select
+            className="select"
+            value={VN_BANKS.some((b) => b.bin === bankBin) ? bankBin : ''}
+            onChange={(e) => {
+              const bank = VN_BANKS.find((b) => b.bin === e.target.value);
+              setBankBin(e.target.value);
+              if (bank) setBankName(bank.name);
+            }}
+            disabled={busy}
+          >
+            <option value="">{t('ui.payment_settings.bank_other')}</option>
+            {VN_BANKS.map((b) => <option key={b.bin} value={b.bin}>{b.name} ({b.bin})</option>)}
+          </select>
+          <span className="field__hint">{t('ui.payment_settings.bank_bin_hint')}</span>
+        </label>
+        <label className="field">
           <span>{t('ui.payment_settings.bank_name')}</span>
           <input className="input" value={bankName} onChange={(e) => setBankName(e.target.value)} disabled={busy} autoComplete="off" />
+        </label>
+        <label className="field">
+          <span>{t('ui.payment_settings.bank_bin')}</span>
+          <input className="input mono" value={bankBin} onChange={(e) => setBankBin(e.target.value.replace(/[^0-9]/g, '').slice(0, 6))} disabled={busy} autoComplete="off" inputMode="numeric" maxLength={6} />
         </label>
         <label className="field">
           <span>{t('ui.payment_settings.account_number')}</span>

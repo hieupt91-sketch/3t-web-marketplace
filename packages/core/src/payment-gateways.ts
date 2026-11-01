@@ -137,6 +137,16 @@ const MOMO_HOST = { sandbox: 'https://test-payment.momo.vn', production: 'https:
  * the HTTP call itself. Amounts are plain dong, matching the platform's
  * VND minor unit 1:1.
  */
+/**
+ * The useful bits of a MoMo create-payment response: the hosted pay URL
+ * plus MoMo's own QR payload (qrCodeUrl), which the MoMo app scans
+ * directly. Returns null when the create did not succeed.
+ */
+export function parseMoMoCreateResponse(json: Record<string, unknown>): { payUrl: string; qrPayload: string | null } | null {
+  if (json.resultCode !== 0 || typeof json.payUrl !== 'string' || json.payUrl === '') return null;
+  return { payUrl: json.payUrl, qrPayload: typeof json.qrCodeUrl === 'string' && json.qrCodeUrl !== '' ? json.qrCodeUrl : null };
+}
+
 export class MoMoProvider {
   readonly name = 'momo';
   readonly sandbox: boolean;

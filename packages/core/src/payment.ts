@@ -55,6 +55,47 @@ export class WebhookVerificationError extends Error {}
  * Sandbox provider. Settlement is produced by signing an event with a shared secret, so the real
  * webhook verification path (HMAC + timestamp + dedupe) is exercised end to end in tests and dev.
  */
+/** One EMVCo TLV field: 2-digit id + 2-digit length + value. */
+function emvField(id: string, value: string): string {
+  return id + String(value.length).padStart(2, '0') + value;
+}
+
+/** CRC-16/CCITT-FALSE (poly 0x1021, init 0xFFFF) as 4 uppercase hex chars. */
+function crc16Ccitt(input: string): string {
+  let crc = 0xffff;
+  for (let i = 0; i < input.length; i++) {
+    crc ^= input.charCodeAt(i) << 8;
+    for (let bit = 0; bit < 8; bit++) crc = crc & 0x8000 ? (crc << 1) ^ 0x1021 : crc << 1;
+    crc &= 0xffff;
+  }
+  return crc.toString(16).toUpperCase().padStart(4, '0');
+}
+
+/**
+ * VietQR payload (NAPAS/EMVCo) for a transfer to a bank account, with the
+ * amount and the order content code baked in: the buyer's banking app fills
+ * both from the scan, so the incoming transfer carries the exact amount and
+ * the content code the hub (Casso/SePay) matches on. The merchant account
+ * block is the standard VietQR shape: AID A000000727, the beneficiary
+ * sub-block (bank BIN + account number), service QRIBFTTA (account transfer
+ * with amount). The content code rides in additional-data field 62/01 (bill
+ * number), which banking apps surface as the transfer description.
+ */
+export function buildVietQrPayload(input: { bankBin: string; accountNumber: string; amountMinor: string; content: string }): string {
+  const beneficiary = emvField('00', input.bankBin) + emvField('01', input.accountNumber);
+  const merchantAccount = emvField('00', 'A000000727') + emvField('01', beneficiary) + emvField('02', 'QRIBFTTA');
+  const body =
+    emvField('00', '01') +
+    emvField('01', '12') +
+    emvField('38', merchantAccount) +
+    emvField('53', '704') +
+    emvField('54', input.amountMinor) +
+    emvField('58', 'VN') +
+    emvField('62', emvField('01', input.content)) +
+    '6304';
+  return body + crc16Ccitt(body);
+}
+
 export class MockPaymentProvider implements PaymentProvider {
   readonly name = 'mock';
   readonly sandbox = true;

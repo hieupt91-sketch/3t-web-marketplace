@@ -9,14 +9,12 @@ import { enqueueJob, isUniqueViolation, tx, validateDynamicContent, writeAudit }
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { errors } from '../errors.ts';
+import { RESERVED_SUBDOMAINS as RESERVED, SUBDOMAIN_RE, createSiteInTx, currentHold, enqueueSiteJob } from '../site-create.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function assertId(id: string) {
   if (!UUID.test(id)) throw errors.notFound();
 }
-
-const SUBDOMAIN_RE = /^[a-z0-9][a-z0-9-]{2,39}$/;
-const RESERVED = new Set(['admin', 'api', 'app', 'www', 'support', 'billing', 'static', 'preview', 'demo', 'mail', 'ftp', 'ns1', 'ns2', 'portal', 'account', 'auth', 'login', 'checkout', 'cdn', 'assets', 'root', 'system']);
 
 interface SiteView {
   id: string;
@@ -57,17 +55,6 @@ async function loadSiteForUser(db: { query: <T>(sql: string, params: unknown[]) 
   return row;
 }
 
-async function enqueueSiteJob(db: Parameters<typeof enqueueJob>[0], type: string, siteId: string, payload: Record<string, unknown>, ownerId: string) {
-  const { job } = await enqueueJob(db, {
-    type,
-    dedupeKey: `${type}:${siteId}:${Date.now()}:${randomBytes(4).toString('hex')}`,
-    payload: { site_id: siteId, ...payload },
-    resourceType: 'site',
-    resourceId: siteId,
-    ownerId,
-  });
-  return job;
-}
 
 /**
  * M5 hosting (docs/02 §5, docs/05 C05–C12/C15).
@@ -79,15 +66,6 @@ async function enqueueSiteJob(db: Parameters<typeof enqueueJob>[0], type: string
 export async function siteRoutes(app: FastifyInstance): Promise<void> {
   const { db, store, config } = app.deps;
 
-  // ---- Subdomain reservations (docs/12 DEP-06) ----
-  // A hold is a short-lived, non-binding claim on a name while the owner
-  // finishes deploying. It never charges the subdomain fee (the fee stays
-  // an owner-set admin value confirmed at handover) and it never creates
-  // a site. Expiry is lazy on every read path; the worker sweeps rows in
-  // bulk. The TTL comes from the 'subdomain.reservation' platform setting
-  // (migration 0025 seeds 15 minutes; owner-tunable in admin settings).
-  interface HoldRow { id: string; user_id: string; expires_at: Date }
-
   async function reservationTtlMinutes(): Promise<number> {
     const { rows } = await db.query<{ value_json: { ttl_minutes?: number } }>(
       "SELECT value_json FROM settings WHERE key = 'subdomain.reservation'",
@@ -96,20 +74,13 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
     return Number.isInteger(ttl) && ttl! >= 1 && ttl! <= 1440 ? ttl! : 15;
   }
 
-  /** The active hold for a name, lazily expiring it when its TTL has passed. */
-  async function currentHold(client: { query: <T>(sql: string, params: unknown[]) => Promise<{ rows: T[] }> }, subdomain: string): Promise<HoldRow | null> {
-    const { rows } = await client.query<HoldRow>(
-      "SELECT id, user_id, expires_at FROM subdomain_reservations WHERE subdomain = $1 AND status = 'active'",
-      [subdomain],
-    );
-    const hold = rows[0];
-    if (!hold) return null;
-    if (new Date(hold.expires_at).getTime() <= Date.now()) {
-      await client.query("UPDATE subdomain_reservations SET status = 'expired' WHERE id = $1 AND status = 'active'", [hold.id]);
-      return null;
-    }
-    return hold;
-  }
+  // ---- Subdomain reservations (docs/12 DEP-06) ----
+  // A hold is a short-lived, non-binding claim on a name while the owner
+  // finishes deploying. It never charges the subdomain fee (the fee stays
+  // an owner-set admin value confirmed at handover) and it never creates
+  // a site. Expiry is lazy on every read path; the worker sweeps rows in
+  // bulk. The TTL comes from the 'subdomain.reservation' platform setting
+  // (migration 0025 seeds 15 minutes; owner-tunable in admin settings).
 
   app.post<{ Body: { entitlement_id: string; display_name: string; subdomain: string; default_locale?: 'vi' | 'en'; demo_session_id?: string } }>(
     '/sites',
@@ -120,55 +91,19 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       assertId(body.entitlement_id);
       if (body.demo_session_id) assertId(body.demo_session_id);
       if (!SUBDOMAIN_RE.test(body.subdomain) || RESERVED.has(body.subdomain)) throw errors.validation([{ field: 'subdomain', code: 'invalid' }]);
-      const created = await tx(db, async (client) => {
-        // Lock the entitlement row: two concurrent creates for one slot cannot
-        // both pass the quota check (AT-22).
-        const ent = await client.query<{ id: string; user_id: string; template_id: string; version_id: string; mode: string; status: string; instance_limit: number }>(
-          'SELECT * FROM entitlements WHERE id = $1 FOR UPDATE',
-          [body.entitlement_id],
-        );
-        const e = ent.rows[0];
-        if (!e || e.user_id !== auth.userId) throw errors.notFound();
-        if (e.mode !== 'hosted' || e.status !== 'active') throw errors.conflict('site.entitlement_not_hosted');
-        const used = await client.query<{ n: string }>(
-          "SELECT count(*) AS n FROM sites WHERE entitlement_id = $1 AND status NOT IN ('purged')",
-          [body.entitlement_id],
-        );
-        if (Number(used.rows[0]!.n) >= e.instance_limit) throw errors.conflict('site.quota_exceeded');
-        let demoSessionId: string | null = null;
-        if (body.demo_session_id) {
-          const demo = await client.query<{ version_id: string; status: string }>('SELECT version_id, status FROM demo_sessions WHERE id = $1', [body.demo_session_id]);
-          if (!demo.rows[0] || demo.rows[0]!.status !== 'active' || demo.rows[0]!.version_id !== e.version_id) throw errors.conflict('site.demo_mismatch');
-          demoSessionId = body.demo_session_id;
-        }
-        // DEP-06: a live hold by another customer blocks the create even
-        // when both customers passed the availability check earlier
-        // (UX-12); the creator's own hold is consumed below.
-        const hold = await currentHold(client, body.subdomain);
-        if (hold && hold.user_id !== auth.userId) throw errors.conflict('site.subdomain_held');
-        let site;
-        try {
-          const inserted = await client.query<{ id: string }>(
-            `INSERT INTO sites (owner_id, entitlement_id, template_version_id, display_name, subdomain, default_locale, demo_session_id)
-             VALUES ($1, $2, $3, $4, $5, $6, $7) RETURNING id`,
-            [auth.userId, body.entitlement_id, e.version_id, body.display_name, body.subdomain, body.default_locale ?? 'vi', demoSessionId],
-          );
-          site = inserted.rows[0]!;
-        } catch (error) {
-          if (isUniqueViolation(error)) throw errors.conflict('site.subdomain_taken');
-          throw error;
-        }
-        await client.query("INSERT INTO site_members (site_id, user_id, role) VALUES ($1, $2, 'owner')", [site.id, auth.userId]);
-        if (hold) await client.query("UPDATE subdomain_reservations SET status = 'consumed' WHERE id = $1 AND status = 'active'", [hold.id]);
-        const job = await enqueueSiteJob(client, 'site.provision', site.id, {}, auth.userId);
-        const dep = await client.query<{ id: string }>(
-          "INSERT INTO deployments (site_id, version_id, artifact_id, operation, status, job_id) SELECT $1, $2, artifact_id, 'provision', 'pending', $3 FROM template_versions WHERE id = $2 RETURNING id",
-          [site.id, e.version_id, job.id],
-        );
-        await client.query("UPDATE jobs SET payload_json = payload_json || $2::jsonb WHERE id = $1", [job.id, JSON.stringify({ deployment_id: dep.rows[0]!.id })]);
-        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'site.created', resourceType: 'site', resourceId: site.id, traceId: request.id, diff: { subdomain: body.subdomain } });
-        return { siteId: site.id, jobId: job.id, deploymentId: dep.rows[0]!.id };
-      });
+      const created = await tx(db, async (client) =>
+        createSiteInTx(client, {
+          ownerId: auth.userId,
+          entitlementId: body.entitlement_id,
+          displayName: body.display_name,
+          subdomain: body.subdomain,
+          defaultLocale: body.default_locale,
+          demoSessionId: body.demo_session_id ?? null,
+          traceId: request.id,
+          actorType: 'user',
+          actorId: auth.userId,
+        }),
+      );
       return reply.status(201).send({ data: { id: created.siteId, status: 'creating', job_id: created.jobId, deployment_id: created.deploymentId, progress_url: `/api/v1/jobs/${created.jobId}` } });
     },
   );

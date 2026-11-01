@@ -92,7 +92,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     passwordHashCost: Number(env('PASSWORD_HASH_COST', '131072')),
     currency: env('PLATFORM_CURRENCY', 'VND'),
     mockPaymentSecret: env('MOCK_PAYMENT_SECRET', mode === 'production' ? undefined : 'dev-mock-payment-secret'),
-    paymentWindowMinutes: Number(env('PAYMENT_WINDOW_MINUTES', '30')),
+    paymentWindowMinutes: Number(env('PAYMENT_WINDOW_MINUTES', '15')),
     githubApiBaseUrl: env('GITHUB_API_BASE_URL', 'https://api.github.com'),
     githubWebhookSecret: env('GITHUB_WEBHOOK_SECRET', ''),
     demoMaxActiveSessions: Number(env('DEMO_MAX_ACTIVE_SESSIONS', '20')),

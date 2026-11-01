@@ -1,6 +1,6 @@
 import { createHmac } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
-import { MoMoProvider, VnPayProvider } from './payment-gateways.ts';
+import { MoMoProvider, VnPayProvider, parseMoMoCreateResponse } from './payment-gateways.ts';
 
 /** Independent re-implementations of the vendors' documented signing
  *  schemes, so the providers are checked against the spec, not themselves. */
@@ -102,5 +102,18 @@ describe('MoMoProvider', () => {
     const body = JSON.parse(momoIpn()) as Record<string, unknown>;
     body.signature = momoSign('accessKey=AKTEST123&amount=1', 'WRONGSECRET');
     expect(() => momo.verifyIpn(JSON.stringify(body))).toThrow();
+  });
+});
+
+describe('parseMoMoCreateResponse', () => {
+  it('extracts the pay URL and the native QR payload', () => {
+    expect(parseMoMoCreateResponse({ resultCode: 0, payUrl: 'https://payment.momo.vn/pay/abc', qrCodeUrl: '00020101021226...' }))
+      .toEqual({ payUrl: 'https://payment.momo.vn/pay/abc', qrPayload: '00020101021226...' });
+  });
+  it('tolerates a missing QR payload and rejects failures', () => {
+    expect(parseMoMoCreateResponse({ resultCode: 0, payUrl: 'https://payment.momo.vn/pay/abc' }))
+      .toEqual({ payUrl: 'https://payment.momo.vn/pay/abc', qrPayload: null });
+    expect(parseMoMoCreateResponse({ resultCode: 1006, payUrl: 'https://payment.momo.vn/pay/abc' })).toBeNull();
+    expect(parseMoMoCreateResponse({ resultCode: 0 })).toBeNull();
   });
 });

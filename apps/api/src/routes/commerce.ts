@@ -10,9 +10,12 @@ import {
   VnPayProvider,
   buildCleanSiteTree,
   buildSelfhostBundle,
+  buildVietQrPayload,
+  parseMoMoCreateResponse,
   emitEvent,
   getSetting,
   hashToken,
+  isUniqueViolation,
   loadActivePlans,
   manualTransferRef,
   randomToken,
@@ -26,6 +29,7 @@ import {
 import { requireUser } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
 import { accrueOrderCommission, reverseOrderCommission } from '../lib/partner-ledger.ts';
+import { RESERVED_SUBDOMAINS, SUBDOMAIN_RE, createSiteInTx, currentHold } from '../site-create.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
@@ -47,6 +51,8 @@ interface QuoteLine {
 export interface BankTransferSettings {
   enabled: boolean;
   bank_name: string;
+  /** NAPAS bank BIN (6 digits). When set, checkout shows a VietQR code. */
+  bank_bin: string;
   account_number: string;
   account_holder: string;
   hub_api_key: string;
@@ -58,6 +64,7 @@ export async function loadBankTransferSettings(db: Db): Promise<BankTransferSett
   return {
     enabled: raw?.enabled === true,
     bank_name: typeof raw?.bank_name === 'string' ? raw.bank_name : '',
+    bank_bin: typeof raw?.bank_bin === 'string' ? raw.bank_bin : '',
     account_number: typeof raw?.account_number === 'string' ? raw.account_number : '',
     account_holder: typeof raw?.account_holder === 'string' ? raw.account_holder : '',
     hub_api_key: typeof raw?.hub_api_key === 'string' ? raw.hub_api_key : '',
@@ -193,13 +200,38 @@ export function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: Quot
   return { subtotal, lines };
 }
 
+/** A hosted purchase's site wish, captured at quote time: the buyer picked
+ *  the subdomain (and site name) while buying, so fulfilment can create
+ *  the site the moment the order is paid. */
+export interface SiteRequest { subdomain: string; display_name: string; locale: 'vi' | 'en' }
+
+/**
+ * Move an awaiting_payment order past its payment window to 'expired':
+ * pending attempts expire with it and the transition is audited, so
+ * "cancelled / not received" is always a recorded state, never limbo.
+ * Caller holds the transaction; returns true when it transitioned.
+ */
+export async function expireStaleOrder(client: PoolClient, orderId: string, traceId: string): Promise<boolean> {
+  const { rows } = await client.query<{ status: string; payment_window_expires_at: Date | null }>(
+    'SELECT status, payment_window_expires_at FROM orders WHERE id = $1 FOR UPDATE',
+    [orderId],
+  );
+  const o = rows[0];
+  if (!o || o.status !== 'awaiting_payment' || !o.payment_window_expires_at || o.payment_window_expires_at > new Date()) return false;
+  await client.query("UPDATE orders SET status = 'expired', row_version = row_version + 1 WHERE id = $1", [orderId]);
+  await client.query("UPDATE payment_attempts SET status = 'expired' WHERE order_id = $1 AND status = 'pending'", [orderId]);
+  await emitEvent(client, 'order.expired', 'order', orderId, { order_id: orderId, reason: 'payment_window' });
+  await writeAudit(client, { actorType: 'system', actorId: null, action: 'order.expired', resourceType: 'order', resourceId: orderId, traceId, diff: { reason: 'payment_window' } });
+  return true;
+}
+
 /**
  * Fulfil a paid order: one entitlement per order item (unique per item, invariant §6.3),
  * order marked paid, outbox event + audit. Callers must already hold the order row lock
  * and have decided the order may move to paid.
  */
 export async function fulfillOrder(client: PoolClient, orderId: string, buyerId: string, traceId: string): Promise<void> {
-  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number } }>(
+  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number; site_request?: SiteRequest } }>(
     'SELECT id, template_id, version_id, deployment_mode, snapshot_json FROM order_items WHERE order_id = $1',
     [orderId],
   );
@@ -214,6 +246,37 @@ export async function fulfillOrder(client: PoolClient, orderId: string, buyerId:
        ON CONFLICT (order_item_id) DO NOTHING`,
       [item.id, buyerId, item.template_id, item.version_id, item.deployment_mode, instanceLimit, updatesMonths],
     );
+    // Hosted purchase that already chose its domain at checkout: create
+    // the site right away so the buyer just logs in and it runs.
+    // Best-effort by design \u2014 a name lost in the meantime (or any other
+    // create conflict) must never claw back a paid entitlement; the buyer
+    // then picks a name in the setup wizard instead. The SAVEPOINT keeps
+    // a failed attempt out of the fulfilment transaction.
+    const siteRequest = item.snapshot_json.site_request;
+    if (item.deployment_mode === 'hosted' && siteRequest) {
+      const ent = await client.query<{ id: string }>('SELECT id FROM entitlements WHERE order_item_id = $1', [item.id]);
+      const entitlementId = ent.rows[0]?.id;
+      if (entitlementId) {
+        await client.query('SAVEPOINT auto_site');
+        try {
+          await createSiteInTx(client, {
+            ownerId: buyerId,
+            entitlementId,
+            displayName: siteRequest.display_name,
+            subdomain: siteRequest.subdomain,
+            defaultLocale: siteRequest.locale,
+            traceId,
+            actorType: 'system',
+            actorId: null,
+            via: 'checkout',
+          });
+          await client.query('RELEASE SAVEPOINT auto_site');
+        } catch {
+          await client.query('ROLLBACK TO SAVEPOINT auto_site');
+          await client.query('RELEASE SAVEPOINT auto_site');
+        }
+      }
+    }
   }
   await client.query("UPDATE orders SET status = 'paid', paid_at = now(), row_version = row_version + 1 WHERE id = $1", [orderId]);
   await emitEvent(client, 'order.paid', 'order', orderId, { order_id: orderId, buyer_id: buyerId });
@@ -362,14 +425,24 @@ export async function processPaymentEvent(db: Db, provider: string, rawBody: str
     // Amount/currency must match the obligation; a mismatch goes to reconciliation, never auto-fulfilled.
     if (event.currency !== o.currency || BigInt(event.amountMinor) !== BigInt(o.total_minor)) {
       await client.query("UPDATE payment_attempts SET status = 'settled', settled_at = now() WHERE id = $1", [pa.id]);
-      await client.query("UPDATE orders SET status = 'needs_reconciliation', row_version = row_version + 1 WHERE id = $1 AND status = 'awaiting_payment'", [o.id]);
+      await client.query("UPDATE orders SET status = 'needs_reconciliation', row_version = row_version + 1 WHERE id = $1 AND status IN ('awaiting_payment', 'expired')", [o.id]);
       await client.query("UPDATE payment_events SET processing_status = 'needs_reconciliation' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
       return 'needs_reconciliation';
     }
 
     await client.query("UPDATE payment_attempts SET status = 'settled', settled_at = now() WHERE id = $1", [pa.id]);
+    // Money for an EXPIRED order: an admin's manual confirmation is
+    // authoritative and revives the order into fulfilment; an automatic
+    // hub/IPN report goes to reconciliation instead \u2014 a person decides
+    // whether late money fulfils or is refunded, never a silent drop.
+    const isManualConfirm = event.providerEventId.startsWith('manual_');
+    if (o.status === 'expired' && !isManualConfirm) {
+      await client.query("UPDATE orders SET status = 'needs_reconciliation', row_version = row_version + 1 WHERE id = $1 AND status = 'expired'", [o.id]);
+      await client.query("UPDATE payment_events SET processing_status = 'needs_reconciliation' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
+      return 'needs_reconciliation';
+    }
     // A late event on an already-paid order is acknowledged without regressing state.
-    if (o.status !== 'awaiting_payment') {
+    if (o.status !== 'awaiting_payment' && o.status !== 'expired') {
       await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
       return 'processed';
     }
@@ -395,14 +468,56 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   }
 
   // POST /quotes — backend prices the plan; the quote is bound to the buyer and expires.
-  app.post<{ Body: { plan_id: string; template_id: string } }>(
+  app.post<{ Body: { plan_id: string; template_id: string; site_request?: { subdomain: string; display_name: string; locale?: 'vi' | 'en' } } }>(
     '/quotes',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] } } } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const found = await loadPlanForPurchase(request.body.template_id, request.body.plan_id);
       if (!found) throw errors.notFound();
-      const { subtotal, lines } = computeCharge(found.plan);
+      const charge = computeCharge(found.plan);
+      const lines: QuoteLine[] = [...charge.lines];
+      let subtotal = charge.subtotal;
+      // Hosted buyers may choose their subdomain while buying (owner rule
+      // 2026-11-01): the name is held for them through checkout, the
+      // owner-set subdomain fee joins the SAME total when configured, and
+      // fulfilment creates the site the moment the order is paid.
+      let siteRequest: SiteRequest | null = null;
+      if (request.body.site_request) {
+        if (found.plan.deployment_mode !== 'hosted') throw errors.validation([{ field: 'site_request', code: 'hosted_only' }]);
+        const subdomain = request.body.site_request.subdomain.trim().toLowerCase();
+        const displayName = request.body.site_request.display_name.trim();
+        if (!SUBDOMAIN_RE.test(subdomain) || RESERVED_SUBDOMAINS.has(subdomain)) throw errors.validation([{ field: 'site_request.subdomain', code: 'invalid' }]);
+        if (!displayName) throw errors.validation([{ field: 'site_request.display_name', code: 'required' }]);
+        siteRequest = { subdomain, display_name: displayName, locale: request.body.site_request.locale === 'en' ? 'en' : 'vi' };
+        const ttlRaw = (await getSetting(db, 'subdomain.reservation').catch(() => null)) as { ttl_minutes?: number } | null;
+        const ttl = Number.isInteger(ttlRaw?.ttl_minutes) && ttlRaw!.ttl_minutes! >= 1 && ttlRaw!.ttl_minutes! <= 1440 ? ttlRaw!.ttl_minutes! : 15;
+        await tx(db, async (client) => {
+          const taken = await client.query('SELECT 1 FROM sites WHERE subdomain = $1 LIMIT 1', [subdomain]);
+          if (taken.rows.length > 0) throw errors.conflict('site.subdomain_taken');
+          const hold = await currentHold(client, subdomain);
+          if (hold && hold.user_id !== auth.userId) throw errors.conflict('site.subdomain_held');
+          if (hold) {
+            await client.query('UPDATE subdomain_reservations SET expires_at = now() + make_interval(mins => $2) WHERE id = $1', [hold.id, ttl]);
+          } else {
+            try {
+              await client.query(
+                'INSERT INTO subdomain_reservations (subdomain, user_id, entitlement_id, expires_at) VALUES ($1, $2, NULL, now() + make_interval(mins => $3))',
+                [subdomain, auth.userId, ttl],
+              );
+            } catch (error) {
+              if (isUniqueViolation(error)) throw errors.conflict('site.subdomain_held');
+              throw error;
+            }
+          }
+        });
+        const feeRaw = (await getSetting(db, 'subdomain.fee').catch(() => null)) as { amount_minor?: number | null; period?: string } | null;
+        if (feeRaw && typeof feeRaw.amount_minor === 'number' && feeRaw.amount_minor > 0) {
+          const fee = BigInt(Math.trunc(feeRaw.amount_minor));
+          lines.push({ label: 'subdomain_fee', interval: feeRaw.period === 'monthly' ? 'monthly' : 'one_time', amount_minor: fee.toString() });
+          subtotal += fee;
+        }
+      }
       const snapshot = {
         template_id: request.body.template_id,
         version_id: found.versionId,
@@ -412,6 +527,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         deployment_mode: found.plan.deployment_mode,
         lines,
         limits: found.plan.limits,
+        ...(siteRequest ? { site_request: siteRequest } : {}),
       };
       const { rows } = await db.query<{ id: string; expires_at: Date }>(
         `INSERT INTO quotes (buyer_id, currency, subtotal_minor, total_minor, snapshot_json, expires_at)
@@ -428,6 +544,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           total_minor: subtotal.toString(),
           line_items: lines,
           deployment_mode: found.plan.deployment_mode,
+          site_request: siteRequest,
           expires_at: rows[0]!.expires_at.toISOString(),
         },
       });
@@ -437,7 +554,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/quotes/:id', async (request) => {
     const auth = requireUser(request);
     assertId(request.params.id);
-    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string> }; expires_at: Date }>(
+    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string>; site_request?: SiteRequest }; expires_at: Date }>(
       'SELECT buyer_id, currency, subtotal_minor::text, discount_minor::text, tax_minor::text, total_minor::text, snapshot_json, expires_at FROM quotes WHERE id = $1',
       [request.params.id],
     );
@@ -453,6 +570,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         total_minor: q.total_minor,
         line_items: q.snapshot_json.lines,
         deployment_mode: q.snapshot_json.deployment_mode,
+        site_request: q.snapshot_json.site_request ?? null,
         plan_name: q.snapshot_json.plan_name,
         expires_at: q.expires_at.toISOString(),
         expired: q.expires_at <= new Date(),
@@ -481,7 +599,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           if (!q || q.buyer_id !== auth.userId) throw errors.notFound();
           if (q.expired) throw errors.conflict('quote.expired');
           if (request.body.terms_version !== currentTerms) throw errors.conflict('terms.version_stale');
-          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown> };
+          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest };
           const order = await client.query<{ id: string }>(
             `INSERT INTO orders (buyer_id, quote_id, currency, subtotal_minor, total_minor, locale, terms_version, payment_window_expires_at)
              VALUES ($1, $2, $3, $4, $4, $5, $6, now() + make_interval(mins => $7)) RETURNING id`,
@@ -491,8 +609,19 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           await client.query(
             `INSERT INTO order_items (order_id, template_id, version_id, plan_id, deployment_mode, unit_price_minor, snapshot_json)
              VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, q.total_minor, { plan_name: snap.plan_name, updates_months: (snap.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number }).instance_limit ?? 1 }],
+            [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, q.total_minor, { plan_name: snap.plan_name, updates_months: (snap.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number }).instance_limit ?? 1, ...(snap.site_request ? { site_request: snap.site_request } : {}) }],
           );
+          // The chosen name stays the buyer's while late settlement is
+          // still plausible: stretch their hold to 24h from the order.
+          // The order itself still auto-expires at its payment window;
+          // an admin confirmation inside this horizon revives it and
+          // fulfilment claims the name then.
+          if (snap.site_request) {
+            await client.query(
+              "UPDATE subdomain_reservations SET expires_at = GREATEST(expires_at, now() + interval '24 hours') WHERE subdomain = $1 AND user_id = $2 AND status = 'active'",
+              [snap.site_request.subdomain, auth.userId],
+            );
+          }
           await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'order.created', resourceType: 'order', resourceId: orderId, traceId: request.id });
           return { status: 201, body: { data: { id: orderId, status: 'awaiting_payment', total_minor: q.total_minor, currency: q.currency } } };
         },
@@ -562,6 +691,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const o = rows[0];
     if (!o || o.buyer_id !== auth.userId) throw errors.notFound();
     if (o.status !== 'awaiting_payment') throw errors.conflict('order.not_payable');
+    // Lazy expiry (the worker sweep does the same in bulk): past the
+    // payment window the order is expired on the spot, with the clear
+    // recorded state, and no new session may be opened on it.
+    const stale = await tx(db, async (client) => expireStaleOrder(client, o.id, request.id));
+    if (stale) throw errors.conflict('order.payment_expired');
     const bankSettings = await loadBankTransferSettings(db);
     const bankAvailable = bankTransferAvailable(bankSettings);
     const vnpaySettings = await loadVnPaySettings(db);
@@ -583,6 +717,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       // (astronomically unlikely) collision instead of failing the checkout.
       for (let attemptNo = 0; attemptNo < 3; attemptNo++) {
         const session = provider.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt });
+        // VietQR when the owner picked their bank (BIN set): the buyer's
+        // banking app fills amount + content code from the scan.
+        const qrPayload = /^[0-9]{6}$/.test(bankSettings.bank_bin)
+          ? buildVietQrPayload({ bankBin: bankSettings.bank_bin, accountNumber: bankSettings.account_number, amountMinor: o.total_minor, content: session.providerRef })
+          : null;
         const instructions = {
           bank_name: bankSettings.bank_name,
           account_number: bankSettings.account_number,
@@ -590,6 +729,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           content_code: session.providerRef,
           amount_minor: o.total_minor,
           currency: o.currency,
+          ...(qrPayload ? { qr_payload: qrPayload } : {}),
         };
         try {
           await db.query(
@@ -625,6 +765,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         ipnUrl: `${config.portalOrigin}/api/v1/payments/webhooks/momo`,
       });
       let payUrl: string | null = null;
+      let qrPayload: string | null = null;
       try {
         const res = await fetch(provider.createEndpoint, {
           method: 'POST',
@@ -632,17 +773,29 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           body: JSON.stringify(body),
           signal: AbortSignal.timeout(10_000),
         });
-        const json = (await res.json()) as { resultCode?: number; payUrl?: string };
-        if (json.resultCode === 0 && typeof json.payUrl === 'string') payUrl = json.payUrl;
+        const parsed = parseMoMoCreateResponse((await res.json()) as Record<string, unknown>);
+        if (parsed) {
+          payUrl = parsed.payUrl;
+          qrPayload = parsed.qrPayload;
+        }
       } catch {
         payUrl = null;
       }
       if (!payUrl) throw errors.conflict('payment.method_unavailable', true);
-      await db.query(
-        "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, 'momo', $2, $3, $4, 'pending')",
-        [o.id, orderRef, o.total_minor, o.currency],
-      );
-      return reply.status(201).send({ data: { provider: 'momo', sandbox: momoSettings.sandbox, provider_ref: orderRef, pay_url: payUrl, expires_at: expiresAt.toISOString() } });
+      // MoMo answers with its own scannable QR payload: persist it on the
+      // attempt so the pay page renders the QR automatically.
+      if (qrPayload) {
+        await db.query(
+          "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json) VALUES ($1, 'momo', $2, $3, $4, 'pending', $5::jsonb)",
+          [o.id, orderRef, o.total_minor, o.currency, JSON.stringify({ qr_payload: qrPayload })],
+        );
+      } else {
+        await db.query(
+          "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, 'momo', $2, $3, $4, 'pending')",
+          [o.id, orderRef, o.total_minor, o.currency],
+        );
+      }
+      return reply.status(201).send({ data: { provider: 'momo', sandbox: momoSettings.sandbox, provider_ref: orderRef, pay_url: payUrl, expires_at: expiresAt.toISOString(), ...(qrPayload ? { instructions: { qr_payload: qrPayload } } : {}) } });
     }
     if (chosen === 'paypal') {
       if (!paypalAvailable) throw errors.conflict('payment.method_unavailable');
@@ -735,7 +888,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       'SELECT id, provider, provider_ref, amount_minor::text, currency, status, created_at, instructions_json FROM payment_attempts WHERE order_id = $1 ORDER BY created_at DESC',
       [request.params.id],
     );
-    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' || r.provider === 'paypal' || r.provider === 'usd_transfer' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
+    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' || r.provider === 'paypal' || r.provider === 'usd_transfer' || r.provider === 'momo' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
   });
 
   // Buyer requests a refund (B05). Amount must not exceed the not-yet-refunded remainder;
@@ -975,9 +1128,12 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/me/entitlements', async (request) => {
     const auth = requireUser(request);
-    const { rows } = await db.query<{ id: string; mode: string; status: string; instance_limit: number; updates_until: Date | null; template_id: string; version_id: string; slug: string; semver: string; adapter: string; created_at: Date }>(
-      `SELECT e.id, e.mode, e.status, e.instance_limit, e.updates_until, e.template_id, e.version_id, t.slug, v.semver, v.adapter, e.created_at
+    const { rows } = await db.query<{ id: string; mode: string; status: string; instance_limit: number; updates_until: Date | null; template_id: string; version_id: string; slug: string; semver: string; adapter: string; created_at: Date; requested_subdomain: string | null; requested_display_name: string | null }>(
+      `SELECT e.id, e.mode, e.status, e.instance_limit, e.updates_until, e.template_id, e.version_id, t.slug, v.semver, v.adapter, e.created_at,
+              oi.snapshot_json -> 'site_request' ->> 'subdomain' AS requested_subdomain,
+              oi.snapshot_json -> 'site_request' ->> 'display_name' AS requested_display_name
        FROM entitlements e JOIN templates t ON t.id = e.template_id JOIN template_versions v ON v.id = e.version_id
+       LEFT JOIN order_items oi ON oi.id = e.order_item_id
        WHERE e.user_id = $1 ORDER BY e.created_at DESC`,
       [auth.userId],
     );
@@ -988,6 +1144,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         status: e.status,
         instance_limit: e.instance_limit,
         updates_until: e.updates_until?.toISOString() ?? null,
+        requested_subdomain: e.requested_subdomain,
+        requested_display_name: e.requested_display_name,
         template: { id: e.template_id, slug: e.slug, adapter: e.adapter },
         version: { id: e.version_id, semver: e.semver },
         created_at: e.created_at.toISOString(),

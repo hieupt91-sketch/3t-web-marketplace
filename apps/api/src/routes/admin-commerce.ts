@@ -71,7 +71,7 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
       const attempt = rows[0];
       if (!attempt) throw errors.notFound();
       if (!['bank_transfer', 'paypal', 'usd_transfer'].includes(attempt.provider) || !attempt.provider_ref) throw errors.conflict('payment.not_confirmable');
-      if (attempt.status !== 'pending') throw errors.conflict('payment.not_pending');
+      if (attempt.status !== 'pending' && attempt.status !== 'expired') throw errors.conflict('payment.not_pending');
       const raw = JSON.stringify({ manual: true, attempt_id: attempt.id, confirmed_by: auth.userId });
       const outcome = await processPaymentEvent(db, attempt.provider, raw, {
         providerEventId: `manual_${randomUUID()}`,

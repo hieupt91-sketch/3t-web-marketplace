@@ -323,6 +323,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
       data: {
         enabled: s.enabled,
         bank_name: s.bank_name,
+        bank_bin: s.bank_bin,
         account_number: s.account_number,
         account_holder: s.account_holder,
         hub_configured: s.hub_api_key !== '',
@@ -332,7 +333,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
     };
   });
 
-  app.post<{ Body: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; hub_api_key?: string } }>(
+  app.post<{ Body: { enabled?: boolean; bank_name?: string; bank_bin?: string; account_number?: string; account_holder?: string; hub_api_key?: string } }>(
     '/settings/payment',
     {
       schema: {
@@ -342,6 +343,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
           properties: {
             enabled: { type: 'boolean' },
             bank_name: { type: 'string', maxLength: 120 },
+            bank_bin: { type: 'string', maxLength: 6 },
             account_number: { type: 'string', maxLength: 40 },
             account_holder: { type: 'string', maxLength: 120 },
             hub_api_key: { type: 'string', maxLength: 200 },
@@ -353,9 +355,14 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
       const auth = requirePermission(request, 'settings:manage');
       const current = await loadBankTransferSettings(db);
       const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
+      const bankBin = clean(request.body.bank_bin).replace(/\s+/g, '');
+      if (bankBin !== '' && !/^[0-9]{6}$/.test(bankBin)) {
+        throw errors.validation([{ field: 'bank_bin', code: 'invalid' }]);
+      }
       const next = {
         enabled: request.body.enabled === true,
         bank_name: clean(request.body.bank_name),
+        bank_bin: bankBin,
         account_number: clean(request.body.account_number).replace(/\s+/g, ''),
         account_holder: clean(request.body.account_holder),
         hub_api_key: typeof request.body.hub_api_key === 'string' && request.body.hub_api_key.trim() !== ''
@@ -388,6 +395,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
         data: {
           enabled: next.enabled,
           bank_name: next.bank_name,
+          bank_bin: next.bank_bin,
           account_number: next.account_number,
           account_holder: next.account_holder,
           hub_configured: next.hub_api_key !== '',
