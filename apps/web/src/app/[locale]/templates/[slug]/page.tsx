@@ -55,7 +55,11 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
 export default async function TemplateDetail({ params }: Props) {
   const { locale, slug } = await params;
   const t = (key: string, p?: Record<string, string>) => translate(locale, key, p);
-  const result = await fetchPublic<TemplateSummary & { plans: PublicPlan[] }>(`/templates/${encodeURIComponent(slug)}`, locale);
+  const [result, config] = await Promise.all([
+    fetchPublic<TemplateSummary & { plans: PublicPlan[] }>(`/templates/${encodeURIComponent(slug)}`, locale),
+    fetchPublic<{ hosting_storage?: { per_gb_minor: number | null } }>('/config/public', locale),
+  ]);
+  const storagePerGb = config.ok ? config.data.hosting_storage?.per_gb_minor ?? null : null;
   if (!result.ok) {
     if (result.status === 404) notFound();
     return (
@@ -116,7 +120,7 @@ export default async function TemplateDetail({ params }: Props) {
           ) : (
             <>
               <div className="stack">
-                {template.plans.map((plan) => <PriceBreakdown key={plan.id} plan={plan} locale={locale} />)}
+                {template.plans.map((plan) => <PriceBreakdown key={plan.id} plan={plan} locale={locale} storagePerGb={storagePerGb} />)}
               </div>
               <div className="row">
                 <Link className="button" href={`/checkout/configure?template=${template.slug}`}>{t('ui.detail.choose_plan')}</Link>

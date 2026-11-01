@@ -18,11 +18,17 @@ export interface Plan {
   prices: Price[];
 }
 
-/** PriceBreakdown (docs/05 §3): one-time vs recurring shown separately; hosting fees never hidden. */
-export function PriceBreakdown({ plan, locale }: { plan: Plan; locale: Locale }) {
+/** PriceBreakdown (docs/05 §3): one-time vs recurring shown separately; hosting fees never hidden.
+ *  When the owner prices hosting by storage (v33), a hosted plan's recurring
+ *  row shows the per-GB rate instead of the plan's flat price — the flat
+ *  price is NOT what checkout charges while a rate is set. */
+export function PriceBreakdown({ plan, locale, storagePerGb }: { plan: Plan; locale: Locale; storagePerGb?: number | null }) {
   const { t } = useT();
   const oneTime = plan.prices.find((p) => p.interval === 'one_time');
   const recurring = plan.prices.find((p) => p.interval === 'monthly' || p.interval === 'yearly');
+  const storageRate = plan.deployment_mode === 'hosted' && typeof storagePerGb === 'number' && storagePerGb > 0
+    ? { amount_minor: String(storagePerGb), currency: plan.prices[0]?.currency ?? 'VND' }
+    : null;
   return (
     <div className="card stack">
       <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -36,7 +42,12 @@ export function PriceBreakdown({ plan, locale }: { plan: Plan; locale: Locale })
             <dd className="tabular"><strong>{formatMoney(oneTime, locale)}</strong></dd>
           </>
         ) : null}
-        {recurring ? (
+        {storageRate ? (
+          <>
+            <dt>{t('ui.checkout.storage_label')}</dt>
+            <dd className="tabular"><strong>{formatMoney(storageRate, locale)}</strong> / GB / {t('ui.price.per_monthly')}</dd>
+          </>
+        ) : recurring ? (
           <>
             <dt>{t(`ui.price.${recurring.interval}`)}</dt>
             <dd className="tabular"><strong>{formatMoney(recurring, locale)}</strong> / {t(`ui.price.per_${recurring.interval}`)}</dd>

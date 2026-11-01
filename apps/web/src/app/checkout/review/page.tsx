@@ -9,7 +9,7 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import type { Me } from '@/lib/use-me';
 
-interface Quote extends QuoteLike { id: string; deployment_mode: string; plan_name: Record<string, string>; expired: boolean; site_request?: { subdomain: string; display_name: string } | null }
+interface Quote extends QuoteLike { id: string; deployment_mode: string; plan_name: Record<string, string>; expired: boolean; storage_gb?: number; site_request?: { subdomain: string; display_name: string } | null }
 
 function Review({ me }: { me: Me }) {
   const { t, locale } = useT();
@@ -46,6 +46,9 @@ function Review({ me }: { me: Me }) {
       <div className="card stack">
         <h2 style={{ marginTop: 0 }}>{quote.plan_name[locale] ?? quote.plan_name.vi}</h2>
         <p className="muted">{t(`ui.deployment.${quote.deployment_mode}`)}</p>
+        {quote.deployment_mode === 'hosted' && quote.storage_gb ? (
+          <p style={{ margin: 0 }}>{t('ui.checkout.storage_label')}: <strong>{quote.storage_gb} GB</strong></p>
+        ) : null}
         {quote.site_request ? (
           <p style={{ margin: 0 }}>{t('ui.checkout.review_site', { name: quote.site_request.display_name, domain: `${quote.site_request.subdomain}.webmaket.com` })}</p>
         ) : null}

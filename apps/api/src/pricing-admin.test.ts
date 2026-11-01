@@ -152,6 +152,53 @@ describe('bulk price (POST /admin/templates/bulk-price)', () => {
     expect(res.json().error.code).toBe('bulk.scope_empty');
   });
 
+  it('kind scope prices only templates of that kind (latest-version adapter)', async () => {
+    // Static: published version on the static-html adapter + a priced plan.
+    const stat = await insertTemplate('kind-bulk-static', { published: true, withPlanPrice: '222000' });
+    // Dynamic: same plan shape, but the published version runs node-http.
+    const dtpl = await ctx.db.query<{ id: string }>(
+      'INSERT INTO templates (slug, owner_id, status) VALUES ($1, $2, $3) RETURNING id',
+      ['kind-bulk-dynamic', ownerId, 'published'],
+    );
+    const dynId = dtpl.rows[0]!.id;
+    await ctx.db.query(
+      "INSERT INTO template_translations (template_id, locale, title, slug, status) VALUES ($1, 'vi', $2, $3, 'published')",
+      [dynId, 'Mẫu kind-bulk-dynamic', 'kind-bulk-dynamic'],
+    );
+    const plan = await ctx.db.query<{ id: string }>(
+      `INSERT INTO plans (template_id, code, deployment_mode, name_json, limits_json, status)
+       VALUES ($1, 'selfhost', 'selfhost', $2, '{}'::jsonb, 'active') RETURNING id`,
+      [dynId, { vi: 'Gói tự triển khai', en: 'Self-host package' }],
+    );
+    await ctx.db.query(
+      `INSERT INTO plan_prices (plan_id, currency, amount_minor, interval, effective_from)
+       VALUES ($1, 'VND', '111000', 'one_time', now() - interval '1 day')`,
+      [plan.rows[0]!.id],
+    );
+    const artifact = await ctx.db.query<{ id: string }>(
+      `INSERT INTO artifacts (object_key, sha256, size_bytes, media_type, kind, retention_class)
+       VALUES ('test/kind-bulk-dynamic', $1, 4, 'application/zip', 'static_site', 'permanent') RETURNING id`,
+      ['d'.repeat(64)],
+    );
+    const version = await ctx.db.query<{ id: string }>(
+      `INSERT INTO template_versions (template_id, semver, schema_version, manifest_json, adapter, source_sha, source_artifact_id, artifact_id, status)
+       VALUES ($1, '1.0.0', 1, '{}'::jsonb, 'node-http', $2, $3, $3, 'published') RETURNING id`,
+      [dynId, 'd'.repeat(64), artifact.rows[0]!.id],
+    );
+    await ctx.db.query('UPDATE templates SET published_version_id = $2 WHERE id = $1', [dynId, version.rows[0]!.id]);
+
+    const res = await send('POST', '/api/v1/admin/templates/bulk-price', { amount_minor: '310000', scope: { type: 'kind', kind: 'dynamic' } }, ownerCookie);
+    expect(res.statusCode, res.body).toBe(200);
+    expect((await overviewRow(dynId))?.current_price_minor).toBe('310000');
+    expect((await overviewRow(stat.id))?.current_price_minor).toBe('222000');
+
+    const vis = await send('POST', '/api/v1/admin/templates/bulk-visibility', { hidden: true, scope: { type: 'kind', kind: 'static' } }, ownerCookie);
+    expect(vis.statusCode, vis.body).toBe(200);
+    expect((await overviewRow(stat.id))?.hidden).toBe(true);
+    expect((await overviewRow(dynId))?.hidden).toBe(false);
+    await send('POST', '/api/v1/admin/templates/bulk-visibility', { hidden: false, scope: { type: 'kind', kind: 'static' } }, ownerCookie);
+  });
+
   it('reports unknown ids as per-template failures in ids scope', async () => {
     const known = await insertTemplate('bulk-ids1');
     const bogus = '123e4567-e89b-42d3-a456-426614174000';

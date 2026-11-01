@@ -20,20 +20,27 @@ export async function generateMetadata({ params, searchParams }: Props): Promise
   };
 }
 
-function priceCell(plan: PublicPlan, locale: Locale): string {
+function priceCell(plan: PublicPlan, locale: Locale, storagePerGb?: number | null): string {
   const t = (k: string, p?: Record<string, string>) => translate(locale, k, p);
   const one = plan.prices.find((p) => p.interval === 'one_time');
   const rec = plan.prices.find((p) => p.interval !== 'one_time');
   const parts: string[] = [];
   if (one) parts.push(`${formatMoney(one, locale)} ${plan.deployment_mode === 'hosted' ? t('ui.price.setup') : t('ui.price.one_time')}`);
-  if (rec) parts.push(`${formatMoney(rec, locale)}/${t(`ui.price.per_${rec.interval}`)}`);
+  if (plan.deployment_mode === 'hosted' && typeof storagePerGb === 'number' && storagePerGb > 0) {
+    // Storage-priced hosting (v33): checkout charges rate x GB, not the flat price.
+    parts.push(`${formatMoney({ amount_minor: String(storagePerGb), currency: plan.prices[0]?.currency ?? 'VND' }, locale)}/GB/${t('ui.price.per_monthly')}`);
+  } else if (rec) parts.push(`${formatMoney(rec, locale)}/${t(`ui.price.per_${rec.interval}`)}`);
   return parts.join(' + ') || '—';
 }
 
 /** P04 — per-template plan comparison. Rows state who does what per mode; no ambiguous checkboxes for source. */
 async function TemplateCompare({ locale, slug }: { locale: Locale; slug: string }) {
   const t = (k: string, p?: Record<string, string>) => translate(locale, k, p);
-  const result = await fetchPublic<TemplateSummary & { plans: PublicPlan[] }>(`/templates/${encodeURIComponent(slug)}`, locale);
+  const [result, cfg] = await Promise.all([
+    fetchPublic<TemplateSummary & { plans: PublicPlan[] }>(`/templates/${encodeURIComponent(slug)}`, locale),
+    fetchPublic<PublicConfigShape>('/config/public', locale),
+  ]);
+  const storagePerGb = cfg.ok ? cfg.data.hosting_storage?.per_gb_minor ?? null : null;
   if (!result.ok) {
     if (result.status === 404) notFound();
     return <div className="container"><div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div></div>;
@@ -41,7 +48,7 @@ async function TemplateCompare({ locale, slug }: { locale: Locale; slug: string 
   const plans = result.data.plans;
   const rows: { label: string; value: (p: PublicPlan) => string }[] = [
     { label: t('ui.compare.mode'), value: (p) => t(`ui.deployment.${p.deployment_mode}`) },
-    { label: t('ui.compare.price'), value: (p) => priceCell(p, locale) },
+    { label: t('ui.compare.price'), value: (p) => priceCell(p, locale, storagePerGb) },
     { label: t('ui.compare.who_hosts'), value: (p) => (p.deployment_mode === 'hosted' ? t('ui.compare.host_3t') : t('ui.compare.host_you')) },
     { label: t('ui.compare.source'), value: (p) => (p.deployment_mode === 'selfhost' ? t('ui.compare.source_yes') : t('ui.compare.source_no')) },
     { label: t('ui.plan.instances'), value: (p) => (typeof p.limits.instance_limit === 'number' ? String(p.limits.instance_limit) : '—') },
@@ -87,6 +94,7 @@ async function TemplateCompare({ locale, slug }: { locale: Locale; slug: string 
 
 interface PublicConfigShape {
   subdomain_fee: { amount_minor: number | null; period: string } | null;
+  hosting_storage?: { per_gb_minor: number | null };
   currency: string;
 }
 
@@ -118,6 +126,10 @@ async function GeneralCompare({ locale }: { locale: Locale }) {
   const templates = list.ok ? list.data : [];
   const selfPrice = cheapestPrice(templates, 'selfhost', ['one_time']);
   const hostPrice = cheapestPrice(templates, 'hosted', ['monthly', 'yearly']);
+  const storagePerGb = config.ok ? config.data.hosting_storage?.per_gb_minor ?? null : null;
+  const hostRateText = typeof storagePerGb === 'number' && storagePerGb > 0 && list.ok
+    ? `${formatMoney({ amount_minor: String(storagePerGb), currency: config.ok ? config.data.currency : 'VND' }, locale)}/GB/${t('ui.price.per_monthly')}`
+    : null;
   const priceText = (price: ModePrice | null, recurring: boolean): string => {
     // A failed catalog read is not "not on sale": show a neutral dash instead of a claim.
     if (!list.ok) return '—';
@@ -139,7 +151,7 @@ async function GeneralCompare({ locale }: { locale: Locale }) {
     { label: t('ui.plans.row_source'), hosted: t('ui.plans.hosted_source'), selfhost: t('ui.plans.selfhost_source') },
     { label: t('ui.plans.row_subdomain'), hosted: `${t('ui.plans.hosted_subdomain')} ${feeText}`, selfhost: t('ui.plans.selfhost_subdomain') },
     { label: t('ui.plans.row_domain'), hosted: t('ui.plans.hosted_domain'), selfhost: t('ui.plans.selfhost_domain') },
-    { label: t('ui.compare.price'), hosted: priceText(hostPrice, true), selfhost: priceText(selfPrice, false) },
+    { label: t('ui.compare.price'), hosted: hostRateText ?? priceText(hostPrice, true), selfhost: priceText(selfPrice, false) },
     { label: t('ui.plans.row_expiry'), hosted: t('ui.plans.hosted_expiry'), selfhost: t('ui.plans.selfhost_expiry') },
     { label: t('ui.plans.row_support'), hosted: t('ui.plans.support_value'), selfhost: t('ui.plans.support_value') },
   ];
@@ -148,8 +160,8 @@ async function GeneralCompare({ locale }: { locale: Locale }) {
       mode: 'hosted',
       title: t('ui.plans.hosted_title'),
       tagline: t('ui.plans.hosted_for'),
-      price: !list.ok ? null : hostPrice ? t('ui.plans.price_from', { price: priceText(hostPrice, true) }) : t('ui.plans.not_selling'),
-      cta: list.ok && hostPrice ? { href: `/${locale}/templates?mode=hosted`, label: t('ui.plans.cta_hosted') } : null,
+      price: !list.ok ? null : hostRateText ? t('ui.plans.price_from', { price: hostRateText }) : hostPrice ? t('ui.plans.price_from', { price: priceText(hostPrice, true) }) : t('ui.plans.not_selling'),
+      cta: list.ok && (hostPrice || hostRateText) ? { href: `/${locale}/templates?mode=hosted`, label: t('ui.plans.cta_hosted') } : null,
     },
     {
       mode: 'selfhost',
