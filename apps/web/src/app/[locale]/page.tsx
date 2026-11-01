@@ -2,7 +2,6 @@ import type { Metadata } from 'next';
 import Link from 'next/link';
 import { translate, type Locale } from '@3t/i18n';
 import { fetchPublic, type TemplateSummary } from '@/lib/api-server';
-import { isDynamicAdapter } from '@/lib/template-kind';
 import { TemplateCard } from '@/components/template-card';
 import { TemplateFinder } from '@/components/template-finder';
 import { DemoCatalog } from '@/components/demo-catalog';
@@ -34,33 +33,86 @@ function TrustIcon({ kind }: { kind: 'eye' | 'bolt' | 'headset' }) {
 export default async function Home({ params }: Params) {
   const { locale } = await params;
   const t = (key: string, params?: Record<string, string>) => translate(locale, key, params);
-  const catalog = await fetchPublic<TemplateSummary[]>('/templates?limit=100', locale);
+  // The catalog holds two kinds of templates (static / dynamic) and the API
+  // caps one page at 100 rows, so the homepage loads each kind separately:
+  // a single combined fetch would silently drop half the catalog and every
+  // count below would be wrong.
+  const [staticRes, dynamicRes] = await Promise.all([
+    fetchPublic<TemplateSummary[]>('/templates?limit=100&kind=static', locale),
+    fetchPublic<TemplateSummary[]>('/templates?limit=100&kind=dynamic', locale),
+  ]);
+  const staticItems = staticRes.ok ? staticRes.data : [];
+  const dynamicItems = dynamicRes.ok ? dynamicRes.data : [];
+  const catalogItems = [...dynamicItems, ...staticItems];
+  const catalogOk = staticRes.ok || dynamicRes.ok;
   // The storefront groups templates by category (owner request): one section
   // per category with a link into the filtered library.
   const CATEGORY_ORDER = ['food', 'beauty', 'realestate', 'business', 'store', 'landing', 'portfolio', 'blog', 'website'];
   const byCategory = new Map<string, TemplateSummary[]>();
-  if (catalog.ok) {
-    for (const tpl of catalog.data) {
-      const code = tpl.category ?? 'website';
-      const list = byCategory.get(code) ?? [];
-      list.push(tpl);
-      byCategory.set(code, list);
-    }
+  for (const tpl of catalogItems) {
+    const code = tpl.category ?? 'website';
+    const list = byCategory.get(code) ?? [];
+    list.push(tpl);
+    byCategory.set(code, list);
   }
   const categoryCodes = [
     ...CATEGORY_ORDER.filter((c) => byCategory.has(c)),
     ...[...byCategory.keys()].filter((c) => !CATEGORY_ORDER.includes(c)).sort(),
   ];
-  // Dynamic templates get their own showcase section above the category
-  // sections: the static/dynamic split is structural on the homepage too,
-  // not just a badge (owner: the two kinds must be visibly separate).
-  const dynamicItems = catalog.ok ? catalog.data.filter((tpl) => isDynamicAdapter(tpl.adapter)) : [];
+  // Each kind gets its own showcase shelf above the category sections: the
+  // static/dynamic split is structural on the homepage, not just a badge
+  // (owner: the two kinds must be visibly separate). Picks rotate across
+  // the categories so a shelf represents the whole catalog, and a template
+  // shown on a shelf is left out of its category row below — nothing
+  // appears twice on the homepage.
+  const showcasePicks = (items: TemplateSummary[], count: number): TemplateSummary[] => {
+    const groups = CATEGORY_ORDER.map((code) => items.filter((tpl) => (tpl.category ?? 'website') === code));
+    const picks: TemplateSummary[] = [];
+    for (let round = 0; picks.length < count; round += 1) {
+      let progressed = false;
+      for (const group of groups) {
+        const item = group[round];
+        if (item) {
+          picks.push(item);
+          progressed = true;
+          if (picks.length >= count) break;
+        }
+      }
+      if (!progressed) break;
+    }
+    return picks;
+  };
+  const dynamicPicks = showcasePicks(dynamicItems, 8);
+  const staticPicks = showcasePicks(staticItems, 8);
+  const showcasedIds = new Set([...dynamicPicks, ...staticPicks].map((tpl) => tpl.id));
+  const cards = (list: TemplateSummary[]) => list.map((template) => <TemplateCard key={template.id} template={template} locale={locale} />);
+  const kindShelf = (shelf: { id: string; title: string; body?: string; picks: TemplateSummary[]; total: number; href: string; reverse: boolean }) => (
+    <section className="stack cat-section" id={shelf.id}>
+      <div className="row cat-section__head">
+        <h2 style={{ margin: 0 }}>{shelf.title}</h2>
+        <span className="badge">{t('ui.home.template_count', { count: String(shelf.total) })}</span>
+        <span className="cat-section__spacer" />
+        <Link href={shelf.href}>{t('ui.home.view_all')}</Link>
+      </div>
+      {shelf.body ? <p className="muted" style={{ margin: 0 }}>{shelf.body}</p> : null}
+      {shelf.picks.length >= 2 ? (
+        <CategoryMarquee reverse={shelf.reverse} durationSeconds={Math.max(30, shelf.picks.length * 7)}>
+          <div className="marquee__group">{cards(shelf.picks)}</div>
+          <div className="marquee__group" aria-hidden="true" inert>
+            {cards(shelf.picks)}
+          </div>
+        </CategoryMarquee>
+      ) : (
+        <div className="grid-cards">{cards(shelf.picks)}</div>
+      )}
+    </section>
+  );
   // Hero banner: a curated set of the strongest, highest-resolution
   // covers. Many catalog covers are small portrait stock that upscale
   // into mush in a wide frame, so the banner picks come first when the
   // catalog has them; any remaining slots fill from the catalog order.
   const HERO_PICKS = ['biet-thu-nghi-duong', 'blog-am-thuc', 'noi-that', 'spa-lam-dep', 'nuoc-ep-sinh-to'];
-  const photoPool = catalog.ok ? catalog.data.filter((x) => x.preview_image) : [];
+  const photoPool = catalogItems.filter((x) => x.preview_image);
   const heroSlides: HeroSlide[] = [];
   {
     const bySlug = new Map(photoPool.map((x) => [x.slug, x] as const));
@@ -102,36 +154,40 @@ export default async function Home({ params }: Params) {
       </section>
       <div className="container stack">
         <TemplateFinder />
-        {!catalog.ok ? (
+        {!catalogOk ? (
           <section className="stack">
             <div className="alert alert--error" role="alert"><p>{t('ui.catalog.unavailable')}</p></div>
           </section>
-        ) : catalog.data.length === 0 ? (
+        ) : catalogItems.length === 0 ? (
           <section className="stack">
             <div className="card"><p style={{ margin: 0 }}>{t('ui.catalog.empty_catalog')}</p></div>
             <DemoCatalog locale={locale} />
           </section>
         ) : (
           <>
-          {dynamicItems.length > 0 ? (
-            <section className="stack cat-section" id="cat-dynamic">
-              <div className="row cat-section__head">
-                <h2 style={{ margin: 0 }}>{t('ui.home.dynamic_title')}</h2>
-                <span className="badge">{t('ui.home.template_count', { count: String(dynamicItems.length) })}</span>
-                <span className="cat-section__spacer" />
-                <Link href={`/${locale}/templates?kind=dynamic`}>{t('ui.home.view_all')}</Link>
-              </div>
-              <p className="muted" style={{ margin: 0 }}>{t('ui.home.dynamic_body')}</p>
-              <div className="grid-cards">
-                {dynamicItems.slice(0, 4).map((template) => <TemplateCard key={template.id} template={template} locale={locale} />)}
-              </div>
-            </section>
-          ) : null}
+          {dynamicItems.length > 0 ? kindShelf({
+            id: 'cat-dynamic',
+            title: t('ui.home.dynamic_title'),
+            body: t('ui.home.dynamic_body'),
+            picks: dynamicPicks,
+            total: dynamicItems.length,
+            href: `/${locale}/templates?kind=dynamic`,
+            reverse: false,
+          }) : null}
+          {staticItems.length > 0 ? kindShelf({
+            id: 'cat-static',
+            title: t('ui.home.static_title'),
+            body: t('ui.home.static_body'),
+            picks: staticPicks,
+            total: staticItems.length,
+            href: `/${locale}/templates?kind=static`,
+            reverse: true,
+          }) : null}
           {categoryCodes.map((code, sectionIndex) => {
             const label = t(`ui.category.${code}`);
             const items = byCategory.get(code)!;
-            const shown = items.slice(0, 8);
-            const cards = (list: TemplateSummary[]) => list.map((template) => <TemplateCard key={template.id} template={template} locale={locale} />);
+            const shown = items.filter((tpl) => !showcasedIds.has(tpl.id)).slice(0, 8);
+            if (shown.length === 0) return null;
             return (
               <section className="stack cat-section" id={`cat-${code}`} key={code}>
                 <div className="row cat-section__head">

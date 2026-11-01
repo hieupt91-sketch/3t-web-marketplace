@@ -1677,5 +1677,7 @@
   "ui.admin.policy.category_hint": "When a category has its own %, wallet sales of templates in it deduct at that rate; empty = the policy's global cut. Applies to every partner.",
   "ui.partner.cost_category": "Category rate",
   "ui.admin.policy.category_pct": "Category discount %",
-  "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 months = {total} /year"
+  "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 months = {total} /year",
+  "ui.home.static_title": "Static templates — light, download and go",
+  "ui.home.static_body": "Pure HTML templates, no server needed: download, swap in your content, put them on free hosting and they run."
 }

@@ -1677,5 +1677,7 @@
   "ui.admin.policy.category_hint": "Ngành nào có % riêng thì đơn của mẫu thuộc ngành đó trừ ví theo % này; để trống = dùng % cắt toàn sàn của chính sách. Áp dụng cho mọi CTV.",
   "ui.partner.cost_category": "Theo ngành hàng",
   "ui.admin.policy.category_pct": "% chiết khấu của ngành",
-  "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 tháng = {total} /năm"
+  "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 tháng = {total} /năm",
+  "ui.home.static_title": "Mẫu tĩnh — nhẹ, tải về là chạy",
+  "ui.home.static_body": "Mẫu HTML thuần, không cần máy chủ riêng: tải về, thay nội dung, đưa lên hosting miễn phí là chạy."
 }
