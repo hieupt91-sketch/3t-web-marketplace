@@ -204,17 +204,16 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       messenger: contactRaw.messenger?.trim() || null,
       email: contactRaw.email?.trim() || null,
     };
-    const feeRow = await db.query<{ value_json: { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null } }>("SELECT value_json FROM settings WHERE key = 'subdomain.fee'");
+    const feeRow = await db.query<{ value_json: { amount_minor?: number | null; period?: string } }>("SELECT value_json FROM settings WHERE key = 'subdomain.fee'");
     const svcRow = await db.query<{ value_json: { enabled?: boolean; amount_minor?: number | null } }>("SELECT value_json FROM settings WHERE key = 'service.installation'");
-    const storageRow = await db.query<{ value_json: { monthly_per_gb?: number | null; yearly_per_gb?: number | null } }>("SELECT value_json FROM settings WHERE key = 'hosting.storage_price'");
+    const storageRow = await db.query<{ value_json: { per_gb_minor?: number | null; monthly_per_gb?: number | null } }>("SELECT value_json FROM settings WHERE key = 'hosting.storage_price'");
     const feeRaw = feeRow.rows[0]?.value_json;
     const subdomain_fee = feeRaw
-      ? { amount_minor: typeof feeRaw.amount_minor === 'number' ? feeRaw.amount_minor : null, period: feeRaw.period === 'monthly' ? 'monthly' : 'once', amount_yearly_minor: typeof feeRaw.amount_yearly_minor === 'number' ? feeRaw.amount_yearly_minor : null }
+      ? { amount_minor: typeof feeRaw.amount_minor === 'number' ? feeRaw.amount_minor : null, period: feeRaw.period === 'monthly' ? 'monthly' : 'once' }
       : null;
     const storageRaw = storageRow.rows[0]?.value_json;
     const hosting_storage = {
-      monthly_per_gb: typeof storageRaw?.monthly_per_gb === 'number' ? storageRaw.monthly_per_gb : null,
-      yearly_per_gb: typeof storageRaw?.yearly_per_gb === 'number' ? storageRaw.yearly_per_gb : null,
+      per_gb_minor: typeof storageRaw?.per_gb_minor === 'number' ? storageRaw.per_gb_minor : typeof storageRaw?.monthly_per_gb === 'number' ? storageRaw.monthly_per_gb : null,
     };
     const svcRaw = svcRow.rows[0]?.value_json;
     const installation_service = {

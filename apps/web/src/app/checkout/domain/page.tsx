@@ -10,7 +10,7 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
 interface SiteLite { id: string; display_name: string; subdomain: string | null; domain_paid_until?: string | null }
-interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string; amount_yearly_minor?: number | null } | null }
+interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string } | null }
 
 /** The domain package on its own: buy or renew just the name for a site
  *  that already exists. Prices come only from the owner's settings; a
@@ -38,9 +38,9 @@ function DomainBuy() {
 
   const fee = config.subdomain_fee;
   const baseDomain = config.site_base_domain ?? 'webmaket.com';
-  const hasYearly = fee?.period === 'monthly' && typeof fee.amount_yearly_minor === 'number' && fee.amount_yearly_minor > 0;
+  const hasYearly = fee?.period === 'monthly' && typeof fee.amount_minor === 'number' && fee.amount_minor > 0;
   const monthlyMoney = fee && fee.amount_minor !== null ? formatMoney({ amount_minor: String(fee.amount_minor), currency: config.currency ?? 'VND' }, locale) : null;
-  const yearlyMoney = fee && typeof fee.amount_yearly_minor === 'number' ? formatMoney({ amount_minor: String(fee.amount_yearly_minor), currency: config.currency ?? 'VND' }, locale) : null;
+  const yearlyMoney = fee && typeof fee.amount_minor === 'number' ? formatMoney({ amount_minor: String(fee.amount_minor * 12), currency: config.currency ?? 'VND' }, locale) : null;
   const feeMissing = !fee || fee.amount_minor === null;
 
   async function buy() {

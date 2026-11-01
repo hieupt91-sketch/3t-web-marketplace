@@ -1608,8 +1608,6 @@
   "ui.sites.domain_pkg_forever": "Domain fee paid once — no renewal needed.",
   "ui.sites.domain_pkg_buy": "Buy domain package",
   "ui.sites.domain_pkg_renew": "Renew domain package",
-  "ui.subdomain_fee.amount_yearly": "Yearly price (optional)",
-  "ui.subdomain_fee.amount_yearly_hint": "Leave empty to skip the yearly period. Applies only when the fee period is monthly — buyers then choose monthly or yearly.",
   "ui.admin.nav.installation_service": "Installation package",
   "ui.admin.nav.service_tasks": "Service tasks",
   "ui.admin.installation.title": "Installation package",
@@ -1630,12 +1628,11 @@
   "ui.admin.tasks.complete": "Mark done",
   "ui.settings_hub.installation_desc": "The installation & setup service package, sold separately to website buyers.",
   "ui.checkout.storage_label": "Storage capacity",
-  "ui.checkout.storage_total": "{gb} GB × {rate}/GB = {total}",
+  "ui.checkout.storage_total": "{gb} GB × {rate}/GB = {total} /month",
   "ui.admin.nav.hosting_storage": "Hosting storage price",
   "ui.admin.storage.title": "Hosting storage price",
-  "ui.admin.storage.hint": "Price 1 GB of storage. Buyers pick their GB at checkout — the hosting charge is the 1 GB rate × GB. Leave a period empty to keep that period on the plan's flat price.",
+  "ui.admin.storage.hint": "Set ONE price for 1 GB per month. Buyers pick the GB count and a monthly or yearly period — the total multiplies automatically (a year = 12 months). Leave empty to use the plan's flat price.",
   "ui.admin.storage.monthly": "Price per GB / month (VND)",
-  "ui.admin.storage.yearly": "Price per GB / year (VND)",
   "ui.admin.storage.saved": "Storage prices saved.",
   "ui.admin.storage.invalid": "Prices must be positive integers, or empty.",
   "ui.settings_hub.storage_desc": "Hosting storage sold by the GB.",
@@ -1679,5 +1676,6 @@
   "ui.admin.policy.category_title": "Discount by category",
   "ui.admin.policy.category_hint": "When a category has its own %, wallet sales of templates in it deduct at that rate; empty = the policy's global cut. Applies to every partner.",
   "ui.partner.cost_category": "Category rate",
-  "ui.admin.policy.category_pct": "Category discount %"
+  "ui.admin.policy.category_pct": "Category discount %",
+  "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 months = {total} /year"
 }

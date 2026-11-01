@@ -1608,8 +1608,6 @@
   "ui.sites.domain_pkg_forever": "Đã trả phí tên miền một lần — không cần gia hạn.",
   "ui.sites.domain_pkg_buy": "Mua gói tên miền",
   "ui.sites.domain_pkg_renew": "Gia hạn gói tên miền",
-  "ui.subdomain_fee.amount_yearly": "Giá theo năm (tùy chọn)",
-  "ui.subdomain_fee.amount_yearly_hint": "Để trống nếu không bán kỳ năm. Chỉ áp dụng khi kỳ thu phí là theo tháng — khách được chọn trả theo tháng hoặc theo năm.",
   "ui.admin.nav.installation_service": "Gói cấu hình cài đặt",
   "ui.admin.nav.service_tasks": "Việc dịch vụ",
   "ui.admin.installation.title": "Gói cấu hình cài đặt",
@@ -1630,12 +1628,11 @@
   "ui.admin.tasks.complete": "Đánh dấu hoàn tất",
   "ui.settings_hub.installation_desc": "Gói dịch vụ cấu hình cài đặt bán riêng cho khách mua web.",
   "ui.checkout.storage_label": "Dung lượng lưu trữ",
-  "ui.checkout.storage_total": "{gb} GB × {rate}/GB = {total}",
+  "ui.checkout.storage_total": "{gb} GB × {rate}/GB = {total} /tháng",
   "ui.admin.nav.hosting_storage": "Giá lưu trữ hosting",
   "ui.admin.storage.title": "Giá lưu trữ hosting",
-  "ui.admin.storage.hint": "Đặt giá cho 1 GB lưu trữ. Khách chọn số GB khi mua hosting — tiền = giá 1 GB × số GB. Để trống kỳ nào, kỳ đó tính theo giá gói như cũ.",
+  "ui.admin.storage.hint": "Đặt MỘT giá cho 1 GB theo tháng. Khách chọn số GB và kỳ tháng hoặc năm khi mua — tiền tự nhân lên (theo năm = 12 tháng). Để trống thì tính theo giá gói như cũ.",
   "ui.admin.storage.monthly": "Giá 1 GB / tháng (VND)",
-  "ui.admin.storage.yearly": "Giá 1 GB / năm (VND)",
   "ui.admin.storage.saved": "Đã lưu giá lưu trữ.",
   "ui.admin.storage.invalid": "Giá phải là số nguyên dương, hoặc để trống.",
   "ui.settings_hub.storage_desc": "Giá bán lưu trữ hosting theo GB.",
@@ -1679,5 +1676,6 @@
   "ui.admin.policy.category_title": "Chiết khấu theo ngành hàng",
   "ui.admin.policy.category_hint": "Ngành nào có % riêng thì đơn của mẫu thuộc ngành đó trừ ví theo % này; để trống = dùng % cắt toàn sàn của chính sách. Áp dụng cho mọi CTV.",
   "ui.partner.cost_category": "Theo ngành hàng",
-  "ui.admin.policy.category_pct": "% chiết khấu của ngành"
+  "ui.admin.policy.category_pct": "% chiết khấu của ngành",
+  "ui.checkout.storage_total_yearly": "{gb} GB × {rate}/GB × 12 tháng = {total} /năm"
 }

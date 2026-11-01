@@ -6,16 +6,16 @@ import { Alert, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
-interface Rates { monthly_per_gb: number | null; yearly_per_gb: number | null }
+interface Rates { per_gb_minor: number | null }
 
-/** Storage-priced hosting: the owner prices 1 GB per period; buyers pick
- *  how many GB they need and pay rate x GB. An empty period falls back
- *  to the plan's flat price. */
+/** Storage-priced hosting (v33): the owner sets ONE price for 1 GB per
+ *  month. Buyers pick GB and a monthly/yearly period; the total
+ *  multiplies automatically (a year = 12 months). Empty = the plan's
+ *  flat price applies as before. */
 function HostingStorageInner() {
   const { t } = useT();
   const [rates, setRates] = useState<Rates | null>(null);
   const [monthly, setMonthly] = useState('');
-  const [yearly, setYearly] = useState('');
   const [error, setError] = useState<ApiError | null>(null);
   const [formError, setFormError] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -25,8 +25,7 @@ function HostingStorageInner() {
     void api<Rates>('/admin/settings/hosting-storage').then((res) => {
       if (res.ok) {
         setRates(res.data);
-        setMonthly(res.data.monthly_per_gb === null ? '' : String(res.data.monthly_per_gb));
-        setYearly(res.data.yearly_per_gb === null ? '' : String(res.data.yearly_per_gb));
+        setMonthly(res.data.per_gb_minor === null ? '' : String(res.data.per_gb_minor));
       } else setError(res.error);
     });
   }, []);
@@ -43,14 +42,13 @@ function HostingStorageInner() {
     setFormError(false);
     setSaved(false);
     setError(null);
-    const monthly_per_gb = parse(monthly);
-    const yearly_per_gb = parse(yearly);
-    if (monthly_per_gb === undefined || yearly_per_gb === undefined) {
+    const per_gb_minor = parse(monthly);
+    if (per_gb_minor === undefined) {
       setFormError(true);
       return;
     }
     setBusy(true);
-    const res = await api<Rates>('/admin/settings/hosting-storage', { method: 'POST', body: { monthly_per_gb, yearly_per_gb } });
+    const res = await api<Rates>('/admin/settings/hosting-storage', { method: 'POST', body: { per_gb_minor } });
     setBusy(false);
     if (!res.ok) setError(res.error);
     else {
@@ -73,10 +71,6 @@ function HostingStorageInner() {
         <label className="field">
           <span>{t('ui.admin.storage.monthly')}</span>
           <input className="input" type="number" value={monthly} onChange={(e) => setMonthly(e.target.value)} disabled={busy} autoComplete="off" />
-        </label>
-        <label className="field">
-          <span>{t('ui.admin.storage.yearly')}</span>
-          <input className="input" type="number" value={yearly} onChange={(e) => setYearly(e.target.value)} disabled={busy} autoComplete="off" />
         </label>
         <div className="row">
           <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>

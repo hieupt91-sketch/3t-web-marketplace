@@ -92,23 +92,23 @@ describe('2. subdomain fee', () => {
   it('returns unset defaults and no public fee', async () => {
     const res = await get('/api/v1/admin/settings/subdomain-fee', ownerCookie);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json().data).toEqual({ amount_minor: null, period: 'once', amount_yearly_minor: null });
+    expect(res.json().data).toEqual({ amount_minor: null, period: 'once' });
     // Migration 0016 seeds the fee row with a null amount ("not published
     // yet"), so the public view exposes the shape with amount_minor null
     // rather than a null fee object.
     const pub = await get('/api/v1/config/public');
-    expect(pub.json().data.subdomain_fee).toEqual({ amount_minor: null, period: 'once', amount_yearly_minor: null });
+    expect(pub.json().data.subdomain_fee).toEqual({ amount_minor: null, period: 'once' });
   });
 
   it('rejects non-positive amounts with 422', async () => {
     const neg = await post('/api/v1/admin/settings/subdomain-fee', { amount_minor: -5000, period: 'monthly' }, ownerCookie);
     expect(neg.statusCode, neg.body).toBe(422);
-    const zeroYearly = await post('/api/v1/admin/settings/subdomain-fee', { amount_yearly_minor: 0 }, ownerCookie);
-    expect(zeroYearly.statusCode, zeroYearly.body).toBe(422);
+    const zero = await post('/api/v1/admin/settings/subdomain-fee', { amount_minor: 0 }, ownerCookie);
+    expect(zero.statusCode, zero.body).toBe(422);
   });
 
-  it('saves monthly + yearly, reads back, and propagates', async () => {
-    const value = { amount_minor: 10000, period: 'monthly', amount_yearly_minor: 100000 };
+  it('saves the monthly fee, reads back, and propagates', async () => {
+    const value = { amount_minor: 10000, period: 'monthly' };
     const saved = await post('/api/v1/admin/settings/subdomain-fee', value, ownerCookie);
     expect(saved.statusCode, saved.body).toBe(200);
     expect(saved.json().data).toEqual(value);
@@ -177,18 +177,18 @@ describe('5. hosting storage price (per GB)', () => {
   it('returns unset defaults', async () => {
     const res = await get('/api/v1/admin/settings/hosting-storage', ownerCookie);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json().data).toEqual({ monthly_per_gb: null, yearly_per_gb: null });
+    expect(res.json().data).toEqual({ per_gb_minor: null });
   });
 
   it('rejects zero and negative rates with 422', async () => {
-    const zero = await post('/api/v1/admin/settings/hosting-storage', { monthly_per_gb: 0 }, ownerCookie);
+    const zero = await post('/api/v1/admin/settings/hosting-storage', { per_gb_minor: 0 }, ownerCookie);
     expect(zero.statusCode, zero.body).toBe(422);
-    const neg = await post('/api/v1/admin/settings/hosting-storage', { yearly_per_gb: -100 }, ownerCookie);
+    const neg = await post('/api/v1/admin/settings/hosting-storage', { per_gb_minor: -100 }, ownerCookie);
     expect(neg.statusCode, neg.body).toBe(422);
   });
 
-  it('saves both rates, reads back, and propagates', async () => {
-    const value = { monthly_per_gb: 50000, yearly_per_gb: 500000 };
+  it('saves the single per-GB rate, reads back, and propagates', async () => {
+    const value = { per_gb_minor: 50000 };
     const saved = await post('/api/v1/admin/settings/hosting-storage', value, ownerCookie);
     expect(saved.statusCode, saved.body).toBe(200);
     expect(saved.json().data).toEqual(value);

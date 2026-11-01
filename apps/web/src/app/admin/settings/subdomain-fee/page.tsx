@@ -6,7 +6,7 @@ import { Alert, ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
-interface Fee { amount_minor: number | null; period: 'once' | 'monthly'; amount_yearly_minor?: number | null }
+interface Fee { amount_minor: number | null; period: 'once' | 'monthly' }
 
 /** Owner-set subdomain fee (setup wizard reads it from /config/public).
  *  Empty amount = fee not published yet; the wizard then falls back to
@@ -16,7 +16,6 @@ function SubdomainFeeInner() {
   const { t } = useT();
   const [fee, setFee] = useState<Fee | null>(null);
   const [amount, setAmount] = useState('');
-  const [yearly, setYearly] = useState('');
   const [period, setPeriod] = useState<'once' | 'monthly'>('once');
   const [error, setError] = useState<ApiError | null>(null);
   const [formError, setFormError] = useState(false);
@@ -28,7 +27,6 @@ function SubdomainFeeInner() {
       if (res.ok) {
         setFee(res.data);
         setAmount(res.data.amount_minor === null ? '' : String(res.data.amount_minor));
-        setYearly(res.data.amount_yearly_minor == null ? '' : String(res.data.amount_yearly_minor));
         setPeriod(res.data.period);
       } else setError(res.error);
     });
@@ -49,17 +47,7 @@ function SubdomainFeeInner() {
       }
       amount_minor = n;
     }
-    let amount_yearly_minor: number | null = null;
-    if (yearly.trim() !== '') {
-      const n = Number(yearly);
-      if (!Number.isInteger(n) || n <= 0) {
-        setFormError(true);
-        return;
-      }
-      amount_yearly_minor = n;
-    }
-    setBusy(true);
-    const res = await api<Fee>('/admin/settings/subdomain-fee', { method: 'POST', body: { amount_minor, period, amount_yearly_minor } });
+    const res = await api<Fee>('/admin/settings/subdomain-fee', { method: 'POST', body: { amount_minor, period } });
     setBusy(false);
     if (!res.ok) setError(res.error);
     else {
@@ -91,18 +79,7 @@ function SubdomainFeeInner() {
             autoComplete="off"
           />
         </label>
-        <label className="field">
-          <span>{t('ui.subdomain_fee.amount_yearly')}</span>
-          <input
-            className="input"
-            type="number"
-            value={yearly}
-            onChange={(e) => setYearly(e.target.value)}
-            disabled={busy}
-            autoComplete="off"
-          />
-          <span className="field__hint">{t('ui.subdomain_fee.amount_yearly_hint')}</span>
-        </label>
+        
         <fieldset>
           <legend>{t('ui.subdomain_fee.period')}</legend>
           <div className="row">

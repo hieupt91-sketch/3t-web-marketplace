@@ -180,7 +180,7 @@ export function usdTransferAvailable(s: UsdTransferSettings): boolean {
  * Compute what a buyer first pays for a plan from its current prices (never from the client):
  * self-host is a single one-time fee; hosting is an optional setup fee plus the first period.
  */
-export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'yearly', storage?: { perGb: number; gb: number }): { subtotal: bigint; lines: QuoteLine[] } {
+export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'yearly', storage?: { perGb: number; gb: number; months: number }): { subtotal: bigint; lines: QuoteLine[] } {
   const oneTime = plan.prices.find((p) => p.interval === 'one_time');
   const recurring = billingInterval
     ? plan.prices.find((p) => p.interval === billingInterval)
@@ -192,15 +192,16 @@ export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'y
     lines.push({ label: plan.code, interval: 'one_time', amount_minor: oneTime.amount_minor });
     subtotal = BigInt(oneTime.amount_minor);
   } else if (storage) {
-    // Storage-priced hosting (owner sets a per-GB rate): the recurring
-    // charge is rate x GB for the chosen period — the plan's flat
+    // Storage-priced hosting (v33: the owner sets ONE per-GB monthly
+    // rate): the recurring charge is rate x GB x months — a yearly pick
+    // is simply 12 months multiplied automatically. The plan's flat
     // recurring price does not apply while a rate is set.
     const period = billingInterval ?? (plan.prices.some((p) => p.interval === 'monthly') ? 'monthly' : 'yearly');
     if (oneTime) {
       lines.push({ label: `${plan.code}:setup`, interval: 'one_time', amount_minor: oneTime.amount_minor });
       subtotal += BigInt(oneTime.amount_minor);
     }
-    const amount = BigInt(Math.trunc(storage.perGb)) * BigInt(storage.gb);
+    const amount = BigInt(Math.trunc(storage.perGb)) * BigInt(storage.gb) * BigInt(storage.months);
     lines.push({ label: `${plan.code}:first_period`, interval: period, amount_minor: amount.toString() });
     subtotal += amount;
   } else {
@@ -220,17 +221,16 @@ export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'y
  *  the site the moment the order is paid. */
 export interface SiteRequest { subdomain: string; display_name: string; locale: 'vi' | 'en'; domain_interval?: 'once' | 'monthly' | 'yearly' }
 
-interface SubdomainFeeSetting { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null }
+interface SubdomainFeeSetting { amount_minor?: number | null; period?: string }
 
 /** The domain package's price line for a buyer-chosen period, from the
  *  OWNER's fee settings only. Returns null when no fee is configured. */
 export function domainFeeLine(feeRaw: SubdomainFeeSetting | null, wantYearly: boolean): { line: QuoteLine; interval: 'once' | 'monthly' | 'yearly' } | null {
   if (!feeRaw || typeof feeRaw.amount_minor !== 'number' || feeRaw.amount_minor <= 0) return null;
   if (feeRaw.period === 'monthly' && wantYearly) {
-    if (typeof feeRaw.amount_yearly_minor !== 'number' || feeRaw.amount_yearly_minor <= 0) {
-      throw errors.validation([{ field: 'site_request.domain_interval', code: 'unavailable' }]);
-    }
-    return { line: { label: 'subdomain_fee', interval: 'yearly', amount_minor: String(Math.trunc(feeRaw.amount_yearly_minor)) }, interval: 'yearly' };
+    // v33: one owner-set monthly fee; a yearly pick is 12 months
+    // multiplied automatically — there is no separate yearly price.
+    return { line: { label: 'subdomain_fee', interval: 'yearly', amount_minor: String(Math.trunc(feeRaw.amount_minor) * 12) }, interval: 'yearly' };
   }
   if (feeRaw.period === 'monthly') {
     return { line: { label: 'subdomain_fee', interval: 'monthly', amount_minor: String(Math.trunc(feeRaw.amount_minor)) }, interval: 'monthly' };
@@ -590,22 +590,24 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       if (billingInterval && found.plan.deployment_mode !== 'hosted') {
         throw errors.validation([{ field: 'billing_interval', code: 'hosted_only' }]);
       }
-      // Storage-priced hosting: when the owner set a per-GB rate for the
-      // effective period, hosting sells by capacity — rate x GB. Asking
-      // for more than 1 GB without a rate is refused, never silently
-      // charged at a flat price.
+      // Storage-priced hosting: the owner sets ONE per-GB monthly rate;
+      // the buyer picks GB and a period, and the total multiplies
+      // automatically (yearly = 12 months). Asking for more than 1 GB
+      // without a rate is refused, never silently charged flat.
       const storageGb = request.body.storage_gb ?? 1;
       if (request.body.storage_gb !== undefined && found.plan.deployment_mode !== 'hosted') {
         throw errors.validation([{ field: 'storage_gb', code: 'hosted_only' }]);
       }
-      let storage: { perGb: number; gb: number } | undefined;
+      let storage: { perGb: number; gb: number; months: number } | undefined;
       let storageRatePerGb: number | null = null;
       if (found.plan.deployment_mode === 'hosted') {
-        const rates = (await getSetting(db, 'hosting.storage_price').catch(() => null)) as { monthly_per_gb?: number | null; yearly_per_gb?: number | null } | null;
+        const rates = (await getSetting(db, 'hosting.storage_price').catch(() => null)) as { per_gb_minor?: number | null; monthly_per_gb?: number | null } | null;
         const period = billingInterval ?? (found.plan.prices.some((pr) => pr.interval === 'monthly') ? 'monthly' : 'yearly');
-        const rate = period === 'yearly' ? rates?.yearly_per_gb : rates?.monthly_per_gb;
+        // Legacy fallback: values saved before v33 stored the monthly
+        // rate under monthly_per_gb; per_gb_minor is the canonical key.
+        const rate = rates?.per_gb_minor ?? rates?.monthly_per_gb;
         if (typeof rate === 'number' && rate > 0) {
-          storage = { perGb: rate, gb: storageGb };
+          storage = { perGb: rate, gb: storageGb, months: period === 'yearly' ? 12 : 1 };
           storageRatePerGb = rate;
         } else if (storageGb > 1) {
           throw errors.validation([{ field: 'storage_gb', code: 'rate_unset' }]);

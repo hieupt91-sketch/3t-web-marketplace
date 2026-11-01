@@ -143,22 +143,23 @@ describe('hosting package: monthly or yearly at the buyer choice', () => {
 });
 
 describe('domain package periods', () => {
-  it('charges the yearly domain price when chosen, monthly by default', async () => {
-    await setSetting('subdomain.fee', { amount_minor: 10000, period: 'monthly', amount_yearly_minor: 100000 });
+  it('charges the yearly domain fee as 12 x the monthly fee, monthly by default', async () => {
+    await setSetting('subdomain.fee', { amount_minor: 10000, period: 'monthly' });
     const yearly = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, site_request: { subdomain: 'pkg-nam-1', display_name: 'Năm', domain_interval: 'yearly' } }, buyerA.cookie);
     expect(yearly.statusCode, yearly.body).toBe(201);
-    expect(yearly.json().data.total_minor).toBe('599000');
+    expect(yearly.json().data.total_minor).toBe('619000');
     const lines = yearly.json().data.line_items as { label: string; interval: string; amount_minor: string }[];
-    expect(lines.some((l) => l.label === 'subdomain_fee' && l.interval === 'yearly' && l.amount_minor === '100000')).toBe(true);
+    expect(lines.some((l) => l.label === 'subdomain_fee' && l.interval === 'yearly' && l.amount_minor === '120000')).toBe(true);
     const monthly = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, site_request: { subdomain: 'pkg-thang-1', display_name: 'Tháng' } }, buyerA.cookie);
     expect(monthly.json().data.total_minor).toBe('509000');
   });
 
-  it('refuses a yearly domain pick when the owner set no yearly price', async () => {
+  it('a yearly domain pick needs no separate yearly price (auto x12)', async () => {
     await setSetting('subdomain.fee', { amount_minor: 10000, period: 'monthly' });
     const q = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, site_request: { subdomain: 'pkg-nam-2', display_name: 'Năm 2', domain_interval: 'yearly' } }, buyerA.cookie);
-    expect(q.statusCode).toBe(422);
-    await setSetting('subdomain.fee', { amount_minor: 10000, period: 'monthly', amount_yearly_minor: 100000 });
+    expect(q.statusCode, q.body).toBe(201);
+    const lines = q.json().data.line_items as { label: string; amount_minor: string }[];
+    expect(lines.some((l) => l.label === 'subdomain_fee' && l.amount_minor === '120000')).toBe(true);
   });
 });
 
@@ -166,9 +167,9 @@ describe('buying hosting + domain together still auto-creates the site', () => {
   it('creates the site on settlement and records the domain paid period', async () => {
     const q = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, site_request: { subdomain: 'pkg-ca-2', display_name: 'Cả Hai', domain_interval: 'yearly' } }, buyerB.cookie);
     expect(q.statusCode, q.body).toBe(201);
-    // 499000 hosting (monthly) + 100000 domain (yearly) in ONE total.
-    expect(q.json().data.total_minor).toBe('599000');
-    await settleOrder(buyerB.cookie, q.json().data.id, 599000);
+    // 499000 hosting (monthly) + 120000 domain (yearly = 10000 x 12) in ONE total.
+    expect(q.json().data.total_minor).toBe('619000');
+    await settleOrder(buyerB.cookie, q.json().data.id, 619000);
     const site = await ctx.db.query<{ days: number }>(
       "SELECT EXTRACT(EPOCH FROM (domain_paid_until - now())) / 86400 AS days FROM sites WHERE subdomain = 'pkg-ca-2'",
     );
@@ -251,8 +252,8 @@ describe('standalone hosting upgrade + standalone domain package', () => {
 
     const yq = await post('/api/v1/quotes/domain-package', { site_id: siteId, domain_interval: 'yearly' }, buyerA.cookie);
     expect(yq.statusCode, yq.body).toBe(201);
-    expect(yq.json().data.total_minor).toBe('100000');
-    await settleOrder(buyerA.cookie, yq.json().data.id, 100000);
+    expect(yq.json().data.total_minor).toBe('120000'); // yearly = monthly fee x 12, automatic
+    await settleOrder(buyerA.cookie, yq.json().data.id, 120000);
     const afterYearly = await ctx.db.query<{ days: number }>(
       'SELECT EXTRACT(EPOCH FROM (domain_paid_until - now())) / 86400 AS days FROM sites WHERE id = $1',
       [siteId],
@@ -288,9 +289,9 @@ describe('standalone hosting upgrade + standalone domain package', () => {
   });
 });
 
-describe('storage-priced hosting: owner rate per GB x GB bought', () => {
-  it('multiplies the owner rate by the chosen GB for both periods', async () => {
-    await setSetting('hosting.storage_price', { monthly_per_gb: 50000, yearly_per_gb: 500000 });
+describe('storage-priced hosting: one owner rate per GB, total multiplies automatically', () => {
+  it('multiplies the owner rate by the chosen GB; yearly = 12 months', async () => {
+    await setSetting('hosting.storage_price', { per_gb_minor: 50000 });
     const m = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, storage_gb: 3 }, buyerB.cookie);
     expect(m.statusCode, m.body).toBe(201);
     expect(m.json().data.total_minor).toBe('150000');
@@ -299,7 +300,7 @@ describe('storage-priced hosting: owner rate per GB x GB bought', () => {
     expect(lines.some((l) => l.label.endsWith(':first_period') && l.amount_minor === '150000')).toBe(true);
     const y = await post('/api/v1/quotes', { plan_id: hostedPlanId, template_id: templateId, billing_interval: 'yearly', storage_gb: 2 }, buyerB.cookie);
     expect(y.statusCode, y.body).toBe(201);
-    expect(y.json().data.total_minor).toBe('1000000');
+    expect(y.json().data.total_minor).toBe('1200000'); // 50000 x 2 GB x 12 months
   });
 
   it('records the bought GB on the entitlement at settlement', async () => {

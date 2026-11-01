@@ -87,19 +87,19 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/settings/hosting-storage', async (request) => {
     requirePermission(request, 'settings:manage');
-    const { rows } = await db.query<{ value_json: { monthly_per_gb?: number | null; yearly_per_gb?: number | null } }>(
+    const { rows } = await db.query<{ value_json: { per_gb_minor?: number | null; monthly_per_gb?: number | null } }>(
       "SELECT value_json FROM settings WHERE key = 'hosting.storage_price'",
     );
     const raw = rows[0]?.value_json ?? {};
+    // v33: ONE per-GB monthly rate (legacy monthly_per_gb still reads).
     return {
       data: {
-        monthly_per_gb: typeof raw.monthly_per_gb === 'number' ? raw.monthly_per_gb : null,
-        yearly_per_gb: typeof raw.yearly_per_gb === 'number' ? raw.yearly_per_gb : null,
+        per_gb_minor: typeof raw.per_gb_minor === 'number' ? raw.per_gb_minor : typeof raw.monthly_per_gb === 'number' ? raw.monthly_per_gb : null,
       },
     };
   });
 
-  app.post<{ Body: { monthly_per_gb?: number | null; yearly_per_gb?: number | null } }>(
+  app.post<{ Body: { per_gb_minor?: number | null } }>(
     '/settings/hosting-storage',
     {
       schema: {
@@ -107,23 +107,18 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
           type: 'object',
           additionalProperties: false,
           properties: {
-            monthly_per_gb: { type: ['integer', 'null'] },
-            yearly_per_gb: { type: ['integer', 'null'] },
+            per_gb_minor: { type: ['integer', 'null'] },
           },
         },
       },
     },
     async (request) => {
       const auth = requirePermission(request, 'settings:manage');
-      const monthly = request.body.monthly_per_gb ?? null;
-      const yearly = request.body.yearly_per_gb ?? null;
-      if (monthly !== null && (!Number.isInteger(monthly) || monthly <= 0)) {
-        throw errors.validation([{ field: 'monthly_per_gb', code: 'invalid' }]);
+      const perGb = request.body.per_gb_minor ?? null;
+      if (perGb !== null && (!Number.isInteger(perGb) || perGb <= 0)) {
+        throw errors.validation([{ field: 'per_gb_minor', code: 'invalid' }]);
       }
-      if (yearly !== null && (!Number.isInteger(yearly) || yearly <= 0)) {
-        throw errors.validation([{ field: 'yearly_per_gb', code: 'invalid' }]);
-      }
-      const next = { monthly_per_gb: monthly, yearly_per_gb: yearly };
+      const next = { per_gb_minor: perGb };
       await db.query(
         `INSERT INTO settings (key, value_json) VALUES ('hosting.storage_price', $1::jsonb)
          ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
@@ -201,7 +196,7 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
 
   app.get('/settings/subdomain-fee', async (request) => {
     requirePermission(request, 'settings:manage');
-    const { rows } = await db.query<{ value_json: { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null } }>(
+    const { rows } = await db.query<{ value_json: { amount_minor?: number | null; period?: string } }>(
       "SELECT value_json FROM settings WHERE key = 'subdomain.fee'",
     );
     const raw = rows[0]?.value_json ?? {};
@@ -209,12 +204,11 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
       data: {
         amount_minor: typeof raw.amount_minor === 'number' ? raw.amount_minor : null,
         period: raw.period === 'monthly' ? 'monthly' : 'once',
-        amount_yearly_minor: typeof raw.amount_yearly_minor === 'number' ? raw.amount_yearly_minor : null,
       },
     };
   });
 
-  app.post<{ Body: { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null } }>(
+  app.post<{ Body: { amount_minor?: number | null; period?: string } }>(
     '/settings/subdomain-fee',
     {
       schema: {
@@ -224,7 +218,6 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
           properties: {
             amount_minor: { type: ['integer', 'null'] },
             period: { enum: ['once', 'monthly'] },
-            amount_yearly_minor: { type: ['integer', 'null'] },
           },
         },
       },
@@ -233,14 +226,10 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
       const auth = requirePermission(request, 'settings:manage');
       const amount = request.body.amount_minor ?? null;
       const period = request.body.period === 'monthly' ? 'monthly' : 'once';
-      const yearly = request.body.amount_yearly_minor ?? null;
       if (amount !== null && (!Number.isInteger(amount) || amount <= 0)) {
         throw errors.validation([{ field: 'amount_minor', code: 'invalid' }]);
       }
-      if (yearly !== null && (!Number.isInteger(yearly) || yearly <= 0)) {
-        throw errors.validation([{ field: 'amount_yearly_minor', code: 'invalid' }]);
-      }
-      const next = { amount_minor: amount, period, amount_yearly_minor: yearly };
+      const next = { amount_minor: amount, period };
       await db.query(
         `INSERT INTO settings (key, value_json) VALUES ('subdomain.fee', $1::jsonb)
          ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
@@ -257,7 +246,7 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
         // already saved, so the UI reported failure for a successful save.)
         resourceId: null,
         traceId: request.id,
-        diff: { amount_minor: amount, period, amount_yearly_minor: yearly },
+        diff: { amount_minor: amount, period },
       });
       return reply.status(200).send({ data: next });
     },
