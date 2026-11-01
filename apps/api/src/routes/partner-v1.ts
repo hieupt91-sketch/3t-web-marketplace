@@ -310,7 +310,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           );
           if (!buyer.rows[0]) throw errors.validation([{ field: 'buyer_email', code: 'partner.buyer_not_found' }]);
           const tpl = await client.query<{ published_version_id: string | null }>(
-            "SELECT published_version_id FROM templates WHERE id = $1 AND status = 'published' AND NOT hidden",
+            "SELECT published_version_id, category_id FROM templates WHERE id = $1 AND status = 'published' AND NOT hidden",
             [request.body.template_id],
           );
           if (!tpl.rows[0]?.published_version_id) throw errors.notFound();
@@ -328,10 +328,11 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           // plan — a fixed per-plan price when the owner set one, else
           // the policy cut. What the partner charges their customer is
           // their business and never enters this math.
-          const resolved = await resolvePartnerCostPoints(client, plan.id, listed, cut);
+          const resolved = await resolvePartnerCostPoints(client, { categoryId: (tpl.rows[0] as unknown as { category_id: string | null }).category_id, listedMinor: listed, policyCutBps: cut });
           const cost = resolved.exactMinor;
           const costPoints = resolved.points;
           const costSource = resolved.source;
+          const resolvedCutBps = resolved.cutBps;
           const own = await client.query<{ amount_points: string }>(
             'SELECT amount_points::text FROM partner_prices WHERE partner_id = $1 AND plan_id = $2',
             [partnerId, plan.id],
@@ -361,7 +362,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           const sale = await client.query<{ id: string }>(
             `INSERT INTO partner_wallet_sales (partner_id, order_id, external_reference, buyer_id, plan_id, listed_minor, cut_bps, cost_minor, price_minor, cost_points, price_points)
              VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-            [partnerId, orderId, request.body.external_reference, buyer.rows[0].id, plan.id, listed.toString(), cut, cost.toString(), price.toString(), costPoints.toString(), pricePoints.toString()],
+            [partnerId, orderId, request.body.external_reference, buyer.rows[0].id, plan.id, listed.toString(), resolvedCutBps, cost.toString(), price.toString(), costPoints.toString(), pricePoints.toString()],
           );
           const saleId = sale.rows[0]!.id;
           let debit: { ok: boolean; balance: bigint };
@@ -376,7 +377,7 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           await client.query(
             `INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json)
              VALUES ($1, 'partner_wallet', $2, $3, $4, 'pending', $5::jsonb)`,
-            [orderId, providerRef, price.toString(), config.currency, JSON.stringify({ method: 'partner_wallet', listed_minor: listed.toString(), cut_bps: cut, cost_minor: cost.toString(), cost_points: costPoints.toString(), price_points: pricePoints.toString(), cost_source: costSource })],
+            [orderId, providerRef, price.toString(), config.currency, JSON.stringify({ method: 'partner_wallet', listed_minor: listed.toString(), cut_bps: resolvedCutBps, cost_minor: cost.toString(), cost_points: costPoints.toString(), price_points: pricePoints.toString(), cost_source: costSource })],
           );
           return { status: 201, body: { data: { id: saleId, order_id: orderId, external_reference: request.body.external_reference, price_minor: price.toString(), cost_minor: cost.toString(), listed_minor: listed.toString(), cut_bps: cut, price_points: pricePoints.toString(), cost_points: costPoints.toString(), cost_source: costSource, wallet_balance_points: debit.balance.toString(), currency: config.currency, status: 'completed' } }, saleId, providerRef, price };
       });

@@ -51,9 +51,10 @@ function parsePositiveAmount(value: unknown): string {
 }
 
 interface BulkScopeInput {
-  type: 'all' | 'category' | 'ids';
+  type: 'all' | 'category' | 'ids' | 'kind';
   category_id?: string;
   template_ids?: string[];
+  kind?: 'static' | 'dynamic';
 }
 
 /**
@@ -138,11 +139,10 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       ),
       db.query(
         `SELECT p.id, p.code, p.deployment_mode, p.name_json, p.status, p.limits_json, p.row_version,
-                pc.cost_points::text AS partner_cost_points,
                 COALESCE((SELECT jsonb_agg(jsonb_build_object('id', pp.id, 'currency', pp.currency, 'amount_minor', pp.amount_minor::text,
                           'interval', pp.interval, 'effective_from', pp.effective_from, 'effective_to', pp.effective_to) ORDER BY pp.effective_from DESC)
                           FROM plan_prices pp WHERE pp.plan_id = p.id), '[]'::jsonb) AS prices
-         FROM plans p LEFT JOIN plan_partner_costs pc ON pc.plan_id = p.id WHERE p.template_id = $1 ORDER BY p.deployment_mode, p.code`,
+         FROM plans p WHERE p.template_id = $1 ORDER BY p.deployment_mode, p.code`,
         [template.id],
       ),
       publishReadiness(db, template.id, DEFAULT_LOCALE, PLATFORM_CURRENCY),
@@ -411,32 +411,6 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
-  // v30: the owner's fixed partner price for a plan, in points. When set,
-  // wallet sales deduct exactly this; when cleared, the policy % cut on
-  // the listed price applies again. The partner's retail price is never
-  // an input here — the platform only runs the service.
-  app.post<{ Params: { planId: string }; Body: { cost_points: number | null } }>(
-    '/plans/:planId/partner-cost',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['cost_points'], properties: { cost_points: { type: ['integer', 'null'], minimum: 1, maximum: 100000000 } } } } },
-    async (request, reply) => {
-      const auth = requirePermission(request, 'pricing:write');
-      assertId(request.params.planId);
-      const plan = await db.query<{ id: string }>('SELECT id FROM plans WHERE id = $1', [request.params.planId]);
-      if (!plan.rows[0]) throw errors.notFound();
-      if (request.body.cost_points === null) {
-        await db.query('DELETE FROM plan_partner_costs WHERE plan_id = $1', [request.params.planId]);
-      } else {
-        await db.query(
-          `INSERT INTO plan_partner_costs (plan_id, cost_points) VALUES ($1, $2)
-           ON CONFLICT (plan_id) DO UPDATE SET cost_points = EXCLUDED.cost_points`,
-          [request.params.planId, request.body.cost_points],
-        );
-      }
-      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'plan.partner_cost_set', resourceType: 'plan', resourceId: request.params.planId, traceId: request.id });
-      return reply.status(200).send({ data: { plan_id: request.params.planId, partner_cost_points: request.body.cost_points } });
-    },
-  );
-
   /** Resolve a bulk scope to template ids. `ids` keeps unknown ids in the list so
    *  the per-template loop can report them as failures, but a scope that matches
    *  zero existing templates is a client error (400 bulk.scope_empty). */
@@ -449,6 +423,22 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     if (scope.type === 'category') {
       if (!scope.category_id || !UUID.test(scope.category_id)) throw errors.validation([{ field: 'scope.category_id', code: 'invalid' }]);
       const { rows } = await db.query<{ id: string }>('SELECT id FROM templates WHERE category_id = $1 ORDER BY slug', [scope.category_id]);
+      if (rows.length === 0) throw new AppError(400, 'bulk.scope_empty');
+      return rows.map((r) => r.id);
+    }
+    if (scope.type === 'kind') {
+      if (scope.kind !== 'static' && scope.kind !== 'dynamic') throw errors.validation([{ field: 'scope.kind', code: 'invalid' }]);
+      // Kind = the template's LATEST version adapter (same rule as the
+      // pricing overview): dynamic adapters are node-http/next-standalone,
+      // everything else (incl. no version yet) counts as static.
+      const condition = scope.kind === 'dynamic'
+        ? "adapter IN ('node-http', 'next-standalone')"
+        : "(adapter IS NULL OR adapter NOT IN ('node-http', 'next-standalone'))";
+      const { rows } = await db.query<{ id: string }>(
+        `SELECT t.id FROM templates t
+          LEFT JOIN LATERAL (SELECT v.adapter FROM template_versions v WHERE v.template_id = t.id ORDER BY v.created_at DESC LIMIT 1) lv ON true
+         WHERE ${condition.replaceAll('adapter', 'lv.adapter')} ORDER BY t.slug`,
+      );
       if (rows.length === 0) throw new AppError(400, 'bulk.scope_empty');
       return rows.map((r) => r.id);
     }
@@ -482,9 +472,10 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     additionalProperties: false,
     required: ['type'],
     properties: {
-      type: { enum: ['all', 'category', 'ids'] },
+      type: { enum: ['all', 'category', 'ids', 'kind'] },
       category_id: { type: 'string' },
       template_ids: { type: 'array', items: { type: 'string' }, maxItems: 500 },
+      kind: { enum: ['static', 'dynamic'] },
     },
   } as const;
 
@@ -497,7 +488,6 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     const { rows } = await db.query<{
       id: string; slug: string; title_vi: string | null; category_id: string | null; category_code: string | null;
       status: string; hidden: boolean; current_price_minor: string | null; adapter: string | null;
-      partner_cost_selfhost: string | null; partner_cost_hosted: string | null;
     }>(
       `SELECT t.id, t.slug, tt.title AS title_vi, t.category_id, c.code AS category_code, t.status, t.hidden,
               (SELECT v.adapter FROM template_versions v WHERE v.template_id = t.id ORDER BY v.created_at DESC LIMIT 1) AS adapter,
@@ -506,13 +496,7 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
                 WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'selfhost'
                   AND pp.currency = $1 AND pp.interval = 'one_time'
                   AND pp.effective_from <= now() AND (pp.effective_to IS NULL OR pp.effective_to > now())
-                ORDER BY pp.amount_minor ASC LIMIT 1) AS current_price_minor,
-              (SELECT pc.cost_points::text FROM plans p JOIN plan_partner_costs pc ON pc.plan_id = p.id
-                WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'selfhost'
-                ORDER BY pc.cost_points ASC LIMIT 1) AS partner_cost_selfhost,
-              (SELECT pc.cost_points::text FROM plans p JOIN plan_partner_costs pc ON pc.plan_id = p.id
-                WHERE p.template_id = t.id AND p.status = 'active' AND p.deployment_mode = 'hosted'
-                ORDER BY pc.cost_points ASC LIMIT 1) AS partner_cost_hosted
+                ORDER BY pp.amount_minor ASC LIMIT 1) AS current_price_minor
          FROM templates t
          LEFT JOIN template_categories c ON c.id = t.category_id
          LEFT JOIN template_translations tt ON tt.template_id = t.id AND tt.locale = $2
@@ -545,52 +529,6 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       const ids = await resolveBulkScope(request.body.scope);
       const result = await runBulk(ids, (client, id) => applyQuickPrice(client, id, amount, auth.userId, request.id));
       return { data: { amount_minor: amount, currency: PLATFORM_CURRENCY, ...result } };
-    },
-  );
-
-  // v31: bulk partner price — pin (or clear) the fixed wallet-deduction
-  // price for the active plans of every template in scope, per deployment
-  // mode. Same scope shape as bulk-price; per-template transactions.
-  app.post<{ Body: { cost_points: number | null; modes: string[]; scope: BulkScopeInput } }>(
-    '/templates/bulk-partner-cost',
-    {
-      schema: {
-        body: {
-          type: 'object', additionalProperties: false, required: ['cost_points', 'modes', 'scope'],
-          properties: {
-            cost_points: { type: ['integer', 'null'], minimum: 1, maximum: 100000000 },
-            modes: { type: 'array', items: { enum: ['selfhost', 'hosted'] }, minItems: 1, maxItems: 2 },
-            scope: bulkScopeSchema,
-          },
-        },
-      },
-    },
-    async (request) => {
-      const auth = requirePermission(request, 'pricing:write');
-      const modes = [...new Set(request.body.modes)];
-      if (modes.length === 0) throw errors.validation([{ field: 'modes', code: 'required' }]);
-      const ids = await resolveBulkScope(request.body.scope);
-      let plansUpdated = 0;
-      const result = await runBulk(ids, async (client, templateId) => {
-        const plans = await client.query<{ id: string }>(
-          "SELECT id FROM plans WHERE template_id = $1 AND status = 'active' AND deployment_mode = ANY($2::text[])",
-          [templateId, modes],
-        );
-        for (const plan of plans.rows) {
-          if (request.body.cost_points === null) {
-            await client.query('DELETE FROM plan_partner_costs WHERE plan_id = $1', [plan.id]);
-          } else {
-            await client.query(
-              `INSERT INTO plan_partner_costs (plan_id, cost_points) VALUES ($1, $2)
-               ON CONFLICT (plan_id) DO UPDATE SET cost_points = EXCLUDED.cost_points`,
-              [plan.id, request.body.cost_points],
-            );
-          }
-          plansUpdated += 1;
-        }
-        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'plan.partner_cost_bulk', resourceType: 'template', resourceId: templateId, traceId: request.id });
-      });
-      return { data: { cost_points: request.body.cost_points, modes, plans_updated: plansUpdated, ...result } };
     },
   );
 

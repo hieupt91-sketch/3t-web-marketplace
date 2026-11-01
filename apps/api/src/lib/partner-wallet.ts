@@ -81,24 +81,33 @@ export function partnerCostPoints(listedMinor: bigint, cutBps: number): bigint {
   return (exact + POINT_VND - 1n) / POINT_VND;
 }
 
+/** The category's partner discount in bps, or null when the category
+ *  has no override (the policy's global cut then applies). */
+export async function categoryDiscountBps(client: Client, categoryId: string | null): Promise<number | null> {
+  if (!categoryId) return null;
+  const { rows } = await client.query<{ discount_bps: number }>('SELECT discount_bps FROM partner_category_discounts WHERE category_id = $1', [categoryId]);
+  return rows[0]?.discount_bps ?? null;
+}
+
 /**
- * The deduction for one sale of a plan, resolved in order:
- * 1. the owner's fixed partner price for the plan (plan_partner_costs),
- *    in points — the partner's own retail price plays no role at all;
- * 2. the policy % cut on the listed price, converted to points.
+ * The deduction for one sale, in points. Partner pricing is a % cut on
+ * the listed price only (owner decision, v32): the template's category
+ * rate when the owner set one for that category, otherwise the partner
+ * policy's global cut. What the partner charges their own customer
+ * never enters this math.
  */
 export async function resolvePartnerCostPoints(
   client: Client,
-  planId: string,
-  listedMinor: bigint,
-  cutBps: number,
-): Promise<{ points: bigint; exactMinor: bigint; source: 'fixed' | 'cut' }> {
-  const { rows } = await client.query<{ cost_points: string }>('SELECT cost_points::text FROM plan_partner_costs WHERE plan_id = $1', [planId]);
-  if (rows[0]) {
-    const points = BigInt(rows[0].cost_points);
-    return { points, exactMinor: pointsToVnd(points), source: 'fixed' };
-  }
-  return { points: partnerCostPoints(listedMinor, cutBps), exactMinor: partnerCost(listedMinor, cutBps), source: 'cut' };
+  args: { categoryId: string | null; listedMinor: bigint; policyCutBps: number },
+): Promise<{ points: bigint; exactMinor: bigint; cutBps: number; source: 'category' | 'policy' }> {
+  const categoryBps = await categoryDiscountBps(client, args.categoryId);
+  const cutBps = categoryBps ?? args.policyCutBps;
+  return {
+    points: partnerCostPoints(args.listedMinor, cutBps),
+    exactMinor: partnerCost(args.listedMinor, cutBps),
+    cutBps,
+    source: categoryBps !== null ? 'category' : 'policy',
+  };
 }
 
 /** A whole-point price for a VND amount (rounds up, like the cost). */

@@ -44,7 +44,7 @@ export default function PartnerPricesPage() {
   return (
     <div className="stack">
       <h1>{t('ui.partner.prices')}</h1>
-      <p className="muted" style={{ margin: 0 }}>{t('ui.partner.prices_hint', { pct: String(data.reseller_discount_bps / 100) })}</p>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.partner.prices_hint')}</p>
       {saved ? <Alert tone="success"><p>{t('ui.partner.prices_saved')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
       <div className="table-wrap"><table className="table">
@@ -54,7 +54,7 @@ export default function PartnerPricesPage() {
             <tr key={p.plan_id}>
               <td>{p.template_slug} · {p.plan_name[locale] ?? p.plan_name.vi}</td>
               <td>{money(p.listed_minor, locale)}</td>
-              <td><strong>{p.cost_points} {t('ui.partner.points')}</strong> <span className="muted">({money(p.cost_minor, locale)})</span>{p.cost_source === 'fixed' ? <> <span className="badge badge--neutral">{t('ui.partner.cost_fixed')}</span></> : null}</td>
+              <td><strong>{p.cost_points} {t('ui.partner.points')}</strong> <span className="muted">({money(p.cost_minor, locale)})</span>{p.cost_source === 'category' ? <> <span className="badge badge--neutral">{t('ui.partner.cost_category')}</span></> : null}</td>
               <td>
                 <input
                   className="input" type="number" min={0} style={{ width: 150 }} value={drafts[p.plan_id] ?? ''}

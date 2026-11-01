@@ -488,7 +488,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
   app.get('/partner/prices', async (request) => {
     const partner = await activePartner(request);
     const cut = await cutBps(partner);
-    const { rows: templates } = await db.query<{ id: string; slug: string }>("SELECT id, slug FROM templates WHERE status = 'published' AND NOT hidden ORDER BY created_at DESC LIMIT 200");
+    const { rows: templates } = await db.query<{ id: string; slug: string; category_id: string | null }>("SELECT id, slug, category_id FROM templates WHERE status = 'published' AND NOT hidden ORDER BY created_at DESC LIMIT 200");
     const mine = await db.query<{ plan_id: string; amount_points: string }>('SELECT plan_id, amount_points::text FROM partner_prices WHERE partner_id = $1', [partner.id]);
     const priceByPlan = new Map(mine.rows.map((r) => [r.plan_id, r.amount_points]));
     const out: unknown[] = [];
@@ -496,7 +496,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
       const plans = await loadActivePlans(db, t.id, config.currency);
       for (const plan of plans) {
         const listed = BigInt(computeCharge(plan).subtotal);
-        const resolved = await resolvePartnerCostPoints(db, plan.id, listed, cut);
+        const resolved = await resolvePartnerCostPoints(db, { categoryId: t.category_id, listedMinor: listed, policyCutBps: cut });
         out.push({
           template_id: t.id, template_slug: t.slug, plan_id: plan.id, plan_name: plan.name, deployment_mode: plan.deployment_mode,
           listed_minor: listed.toString(), cost_minor: resolved.exactMinor.toString(), cost_points: resolved.points.toString(), cost_source: resolved.source,

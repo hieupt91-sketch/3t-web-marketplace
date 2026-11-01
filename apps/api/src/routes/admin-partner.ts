@@ -200,6 +200,60 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // v32: partner discount % per category — overrides the policy's global
+  // cut for templates in that category when a wallet sale deducts.
+  app.get('/partner-category-discounts', async (request) => {
+    requirePermission(request, 'partner:read');
+    const { rows } = await db.query(
+      `SELECT c.id AS category_id, c.code, d.discount_bps
+         FROM template_categories c
+         LEFT JOIN partner_category_discounts d ON d.category_id = c.id
+        ORDER BY c.code`,
+    );
+    return { data: rows };
+  });
+
+  app.post<{ Body: { items: { category_id: string; discount_bps: number | null }[] } }>(
+    '/partner-category-discounts',
+    {
+      schema: {
+        body: {
+          type: 'object', additionalProperties: false, required: ['items'],
+          properties: {
+            items: {
+              type: 'array', maxItems: 200,
+              items: {
+                type: 'object', additionalProperties: false, required: ['category_id', 'discount_bps'],
+                properties: { category_id: { type: 'string' }, discount_bps: { type: ['integer', 'null'], minimum: 0, maximum: 9000 } },
+              },
+            },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'partner:manage');
+      for (const item of request.body.items) {
+        if (!UUID.test(item.category_id)) throw errors.validation([{ field: 'items.category_id', code: 'invalid' }]);
+      }
+      await tx(db, async (client) => {
+        for (const item of request.body.items) {
+          if (item.discount_bps === null) {
+            await client.query('DELETE FROM partner_category_discounts WHERE category_id = $1', [item.category_id]);
+          } else {
+            await client.query(
+              `INSERT INTO partner_category_discounts (category_id, discount_bps) VALUES ($1, $2)
+               ON CONFLICT (category_id) DO UPDATE SET discount_bps = EXCLUDED.discount_bps`,
+              [item.category_id, item.discount_bps],
+            );
+          }
+        }
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'partner.category_discounts_updated', resourceType: 'partner_policy', resourceId: null, traceId: request.id });
+      });
+      return reply.status(200).send({ data: { updated: request.body.items.length } });
+    },
+  );
+
   // Partner policies: commission rate + the reseller wallet cut.
   app.get('/partner-policies', async (request) => {
     requirePermission(request, 'partner:read');

@@ -113,6 +113,7 @@ const ADMIN_NAV: NavGroup[] = [
     labelKey: 'ui.admin.nav.group_system',
     items: [
       { href: '/admin/partners', labelKey: 'ui.admin.partners', permission: 'partner:read' },
+      { href: '/admin/partner-policies', labelKey: 'ui.admin.partner_policies', permission: 'partner:read' },
       { href: '/admin/staff', labelKey: 'ui.admin.staff', permission: 'staff:manage' },
     ],
   },

@@ -243,46 +243,38 @@ describe('partner wallet', () => {
     expect(await walletBalanceViaApi()).toBe('30'); // 210 - 180
   });
 
-  it('a fixed per-plan partner price overrides the cut — deduction ignores the partner retail price', async () => {
-    const set = await post(`/api/v1/admin/plans/${planId}/partner-cost`, { cost_points: 50 }, ownerCookie);
-    expect(set.statusCode, set.body).toBe(200);
-    const list = await get('/api/v1/partner/prices', partnerCookie);
-    const row = (list.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
-    expect(row.cost_points).toBe('50');
-    expect(row.cost_source).toBe('fixed');
-    const t = await post('/api/v1/partner/wallet/topups', { amount_points: '100' }, partnerCookie);
+  it('a category discount overrides the global cut for the wallet deduction', async () => {
+    // Give the fixture template a category and pin a 25% partner discount on it.
+    const cat = await ctx.db.query<{ id: string }>("INSERT INTO template_categories (code) VALUES ('wallet-cat') RETURNING id");
+    const categoryId = cat.rows[0]!.id;
+    await ctx.db.query('UPDATE templates SET category_id = $2 WHERE id = $1', [templateId, categoryId]);
+    const setRes = await post('/api/v1/admin/partner-category-discounts', { items: [{ category_id: categoryId, discount_bps: 2500 }] }, ownerCookie);
+    expect(setRes.statusCode, setRes.body).toBe(200);
+    const listed = await get('/api/v1/admin/partner-category-discounts', ownerCookie);
+    expect((listed.json().data as { category_id: string; discount_bps: number | null }[]).find((x) => x.category_id === categoryId)?.discount_bps).toBe(2500);
+    // Prices: listed 199.999 -> 25% cut -> exact 149.999 -> 150 points, source category.
+    const prices = await get('/api/v1/partner/prices', partnerCookie);
+    const row = (prices.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
+    expect(row.cost_points).toBe('150');
+    expect(row.cost_source).toBe('category');
+    const t = await post('/api/v1/partner/wallet/topups', { amount_points: '200' }, partnerCookie);
     await post(`/api/v1/admin/partners/${partnerId}/wallet/topups/${t.json().data.id}/confirm`, {}, ownerCookie);
-    expect(await walletBalanceViaApi()).toBe('130');
-    // The partner's own price for this plan is 250 points (set earlier);
-    // the sale still deducts exactly the platform's 50-point partner price.
+    expect(await walletBalanceViaApi()).toBe('230'); // 30 left over + 200
+    // The partner's own price is 250 points (set earlier); the deduction
+    // is the category-cut cost of 150 — their retail never enters it.
     const sale = await api('POST', '/api/v1/partner/v1/wallet-sales', {
-      template_id: templateId, plan_id: planId, buyer_email: 'wallet-buyer5@example.com', external_reference: 'CTV-ORDER-FIXED',
+      template_id: templateId, plan_id: planId, buyer_email: 'wallet-buyer5@example.com', external_reference: 'CTV-ORDER-CATEGORY',
     });
     expect(sale.statusCode, sale.body).toBe(201);
     expect(sale.json().data.price_points).toBe('250');
-    expect(sale.json().data.cost_points).toBe('50');
-    expect(sale.json().data.cost_source).toBe('fixed');
+    expect(sale.json().data.cost_points).toBe('150');
+    expect(sale.json().data.cost_source).toBe('category');
     expect(sale.json().data.wallet_balance_points).toBe('80');
-    // v31 bulk: pin by id scope, clear by bulk, hosted mode does not touch selfhost.
-    const bulkSet = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: 42, modes: ['selfhost'], scope: { type: 'ids', template_ids: [templateId] } }, ownerCookie);
-    expect(bulkSet.statusCode, bulkSet.body).toBe(200);
-    expect(bulkSet.json().data.updated_count).toBe(1);
-    expect(bulkSet.json().data.plans_updated).toBeGreaterThanOrEqual(1);
-    const pinned = await ctx.db.query("SELECT cost_points::text AS c FROM plan_partner_costs WHERE plan_id = $1", [planId]);
-    expect(pinned.rows[0].c).toBe('42');
-    const badModes = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: 42, modes: [], scope: { type: 'all' } }, ownerCookie);
-    expect(badModes.statusCode).toBe(422);
-    const buyerBulk = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: 42, modes: ['selfhost'], scope: { type: 'all' } }, partnerCookie);
-    expect(buyerBulk.statusCode).toBe(403);
-    const bulkClear = await post('/api/v1/admin/templates/bulk-partner-cost', { cost_points: null, modes: ['selfhost', 'hosted'], scope: { type: 'all' } }, ownerCookie);
-    expect(bulkClear.statusCode, bulkClear.body).toBe(200);
-    const gone = await ctx.db.query('SELECT 1 FROM plan_partner_costs WHERE plan_id = $1', [planId]);
-    expect(gone.rowCount).toBe(0);
-    const clear = await post(`/api/v1/admin/plans/${planId}/partner-cost`, { cost_points: null }, ownerCookie);
-    expect(clear.statusCode, clear.body).toBe(200);
-    const list2 = await get('/api/v1/partner/prices', partnerCookie);
-    const row2 = (list2.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
+    // Clearing the category rate returns the plan to the global 10% cut.
+    await post('/api/v1/admin/partner-category-discounts', { items: [{ category_id: categoryId, discount_bps: null }] }, ownerCookie);
+    const prices2 = await get('/api/v1/partner/prices', partnerCookie);
+    const row2 = (prices2.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
     expect(row2.cost_points).toBe('180');
-    expect(row2.cost_source).toBe('cut');
+    expect(row2.cost_source).toBe('policy');
   });
 });
