@@ -167,6 +167,7 @@ h3 {
   margin-inline-start: auto;
   flex-wrap: nowrap;
   min-width: 0;
+  flex-shrink: 0;
 }
 @media (max-width: 1500px) {
   .site-nav {
@@ -179,6 +180,14 @@ h3 {
    * the search yields width first so the row never spills. */
   .header-search {
     flex-basis: 225px;
+  }
+}
+@media (max-width: 1250px) {
+  .site-nav a:not(.button) {
+    padding-inline: 6px;
+  }
+  .site-nav .button {
+    padding-inline: 12px;
   }
 }
 @media (max-width: 900px) {
@@ -480,8 +489,8 @@ h3 {
   display: flex;
   align-items: center;
   gap: var(--space-2);
-  flex: 0 1 300px;
-  min-width: 0;
+  flex: 1 1 300px;
+  min-width: 120px;
   height: 44px;
   margin-inline-start: var(--space-3);
   padding-inline: 14px;
