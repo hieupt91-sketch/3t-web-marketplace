@@ -38,6 +38,7 @@ beforeAll(async () => {
   await createUser(ctx, 'wallet-buyer2@example.com');
   await createUser(ctx, 'wallet-buyer3@example.com');
   await createUser(ctx, 'wallet-buyer4@example.com');
+  await createUser(ctx, 'wallet-buyer5@example.com');
 
   const policy = await ctx.db.query<{ id: string }>("SELECT id FROM partner_policies WHERE code = 'default'");
   const pa = await ctx.db.query<{ id: string }>(
@@ -240,5 +241,33 @@ describe('partner wallet', () => {
     expect(sale.json().data.price_minor).toBe('200000');
     expect(sale.json().data.cost_points).toBe('180');
     expect(await walletBalanceViaApi()).toBe('30'); // 210 - 180
+  });
+
+  it('a fixed per-plan partner price overrides the cut — deduction ignores the partner retail price', async () => {
+    const set = await post(`/api/v1/admin/plans/${planId}/partner-cost`, { cost_points: 50 }, ownerCookie);
+    expect(set.statusCode, set.body).toBe(200);
+    const list = await get('/api/v1/partner/prices', partnerCookie);
+    const row = (list.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
+    expect(row.cost_points).toBe('50');
+    expect(row.cost_source).toBe('fixed');
+    const t = await post('/api/v1/partner/wallet/topups', { amount_points: '100' }, partnerCookie);
+    await post(`/api/v1/admin/partners/${partnerId}/wallet/topups/${t.json().data.id}/confirm`, {}, ownerCookie);
+    expect(await walletBalanceViaApi()).toBe('130');
+    // The partner's own price for this plan is 250 points (set earlier);
+    // the sale still deducts exactly the platform's 50-point partner price.
+    const sale = await api('POST', '/api/v1/partner/v1/wallet-sales', {
+      template_id: templateId, plan_id: planId, buyer_email: 'wallet-buyer5@example.com', external_reference: 'CTV-ORDER-FIXED',
+    });
+    expect(sale.statusCode, sale.body).toBe(201);
+    expect(sale.json().data.price_points).toBe('250');
+    expect(sale.json().data.cost_points).toBe('50');
+    expect(sale.json().data.cost_source).toBe('fixed');
+    expect(sale.json().data.wallet_balance_points).toBe('80');
+    const clear = await post(`/api/v1/admin/plans/${planId}/partner-cost`, { cost_points: null }, ownerCookie);
+    expect(clear.statusCode, clear.body).toBe(200);
+    const list2 = await get('/api/v1/partner/prices', partnerCookie);
+    const row2 = (list2.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
+    expect(row2.cost_points).toBe('180');
+    expect(row2.cost_source).toBe('cut');
   });
 });

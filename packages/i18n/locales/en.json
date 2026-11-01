@@ -1669,5 +1669,8 @@
   "ui.admin.wallet_sales": "Wallet sales",
   "ui.partner.points": "points",
   "ui.partner.balance_equiv": "≈ {amount}",
-  "ui.partner.topup_equiv": "Transfer: {amount}"
+  "ui.partner.topup_equiv": "Transfer: {amount}",
+  "ui.admin.partner_cost": "Partner price (points)",
+  "ui.admin.partner_cost_hint": "Points deducted from the partner wallet per wallet sale. Empty = deduct by the policy % cut.",
+  "ui.partner.cost_fixed": "Fixed price"
 }

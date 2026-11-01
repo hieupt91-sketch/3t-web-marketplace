@@ -179,7 +179,15 @@ Delivery at-least-once; 2xx xác nhận, retry đề xuất 1 phút/5 phút/30 p
 Song song mô hình hoa hồng giới thiệu ở trên, CTV có thể bán trực tiếp theo
 kiểu đại lý nạp tiền trước:
 
-- **Giá vốn = giá bán lẻ niêm yết của sàn trừ % cắt** trong chính sách CTV
+- **Số điểm trừ vào ví mỗi đơn = giá sàn đặt riêng cho CTV.** Chủ sàn
+  có thể ghim một giá điểm cố định cho từng gói
+  (`plan_partner_costs`, đặt ở trang chi tiết mẫu trong admin) — khi đó
+  trừ đúng số đó. Chưa ghim thì trừ theo **giá bán lẻ niêm yết trừ %
+  cắt** trong chính sách CTV. Giá CTV bán cho khách của họ (ví dụ họ
+  bán 300 điểm trong khi giá sàn cho CTV là 50) **không tham gia vào
+  phép trừ** — sàn chỉ liên kết và chạy dịch vụ, phần bán lẻ là việc
+  của CTV.
+- (Cơ chế % cắt: giá vốn = giá bán lẻ niêm yết của sàn trừ % cắt** trong chính sách CTV
   (`partner_policies.reseller_discount_bps`, chủ sàn/người có quyền
   `partner:manage` cài; mặc định bằng mức hoa hồng mẫu 10%).
 - **Giá bán do CTV tự đặt** cho từng gói (`partner_prices`), tự do chỉnh

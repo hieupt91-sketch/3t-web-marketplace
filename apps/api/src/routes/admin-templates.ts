@@ -138,10 +138,11 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       ),
       db.query(
         `SELECT p.id, p.code, p.deployment_mode, p.name_json, p.status, p.limits_json, p.row_version,
+                pc.cost_points::text AS partner_cost_points,
                 COALESCE((SELECT jsonb_agg(jsonb_build_object('id', pp.id, 'currency', pp.currency, 'amount_minor', pp.amount_minor::text,
                           'interval', pp.interval, 'effective_from', pp.effective_from, 'effective_to', pp.effective_to) ORDER BY pp.effective_from DESC)
                           FROM plan_prices pp WHERE pp.plan_id = p.id), '[]'::jsonb) AS prices
-         FROM plans p WHERE p.template_id = $1 ORDER BY p.deployment_mode, p.code`,
+         FROM plans p LEFT JOIN plan_partner_costs pc ON pc.plan_id = p.id WHERE p.template_id = $1 ORDER BY p.deployment_mode, p.code`,
         [template.id],
       ),
       publishReadiness(db, template.id, DEFAULT_LOCALE, PLATFORM_CURRENCY),
@@ -407,6 +408,32 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
         if (isUniqueViolation(error) || (error as { code?: string }).code === '23P01') throw errors.conflict('price.overlap');
         throw error;
       }
+    },
+  );
+
+  // v30: the owner's fixed partner price for a plan, in points. When set,
+  // wallet sales deduct exactly this; when cleared, the policy % cut on
+  // the listed price applies again. The partner's retail price is never
+  // an input here — the platform only runs the service.
+  app.post<{ Params: { planId: string }; Body: { cost_points: number | null } }>(
+    '/plans/:planId/partner-cost',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['cost_points'], properties: { cost_points: { type: ['integer', 'null'], minimum: 1, maximum: 100000000 } } } } },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'pricing:write');
+      assertId(request.params.planId);
+      const plan = await db.query<{ id: string }>('SELECT id FROM plans WHERE id = $1', [request.params.planId]);
+      if (!plan.rows[0]) throw errors.notFound();
+      if (request.body.cost_points === null) {
+        await db.query('DELETE FROM plan_partner_costs WHERE plan_id = $1', [request.params.planId]);
+      } else {
+        await db.query(
+          `INSERT INTO plan_partner_costs (plan_id, cost_points) VALUES ($1, $2)
+           ON CONFLICT (plan_id) DO UPDATE SET cost_points = EXCLUDED.cost_points`,
+          [request.params.planId, request.body.cost_points],
+        );
+      }
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'plan.partner_cost_set', resourceType: 'plan', resourceId: request.params.planId, traceId: request.id });
+      return reply.status(200).send({ data: { plan_id: request.params.planId, partner_cost_points: request.body.cost_points } });
     },
   );
 

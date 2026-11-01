@@ -4,7 +4,7 @@ import { getSetting, hashToken, loadActivePlans, tx, writeAudit } from '@3t/core
 import { requirePermission, requireUser } from '../app.ts';
 import { errors } from '../errors.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
-import { partnerCost, partnerCostPoints, pointsToVnd, walletBalance } from '../lib/partner-wallet.ts';
+import { pointsToVnd, resolvePartnerCostPoints, walletBalance } from '../lib/partner-wallet.ts';
 import { computeCharge } from './commerce.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { assertPublicWebhookUrl, decryptWebhookSecret, encryptWebhookSecret, sendWebhookDelivery } from '../lib/partner-webhooks.ts';
@@ -496,9 +496,10 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
       const plans = await loadActivePlans(db, t.id, config.currency);
       for (const plan of plans) {
         const listed = BigInt(computeCharge(plan).subtotal);
+        const resolved = await resolvePartnerCostPoints(db, plan.id, listed, cut);
         out.push({
           template_id: t.id, template_slug: t.slug, plan_id: plan.id, plan_name: plan.name, deployment_mode: plan.deployment_mode,
-          listed_minor: listed.toString(), cost_minor: partnerCost(listed, cut).toString(), cost_points: partnerCostPoints(listed, cut).toString(),
+          listed_minor: listed.toString(), cost_minor: resolved.exactMinor.toString(), cost_points: resolved.points.toString(), cost_source: resolved.source,
           partner_price_points: priceByPlan.get(plan.id) ?? null, currency: config.currency,
         });
       }

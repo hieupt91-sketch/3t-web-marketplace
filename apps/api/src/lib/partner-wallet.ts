@@ -81,6 +81,26 @@ export function partnerCostPoints(listedMinor: bigint, cutBps: number): bigint {
   return (exact + POINT_VND - 1n) / POINT_VND;
 }
 
+/**
+ * The deduction for one sale of a plan, resolved in order:
+ * 1. the owner's fixed partner price for the plan (plan_partner_costs),
+ *    in points — the partner's own retail price plays no role at all;
+ * 2. the policy % cut on the listed price, converted to points.
+ */
+export async function resolvePartnerCostPoints(
+  client: Client,
+  planId: string,
+  listedMinor: bigint,
+  cutBps: number,
+): Promise<{ points: bigint; exactMinor: bigint; source: 'fixed' | 'cut' }> {
+  const { rows } = await client.query<{ cost_points: string }>('SELECT cost_points::text FROM plan_partner_costs WHERE plan_id = $1', [planId]);
+  if (rows[0]) {
+    const points = BigInt(rows[0].cost_points);
+    return { points, exactMinor: pointsToVnd(points), source: 'fixed' };
+  }
+  return { points: partnerCostPoints(listedMinor, cutBps), exactMinor: partnerCost(listedMinor, cutBps), source: 'cut' };
+}
+
 /** A whole-point price for a VND amount (rounds up, like the cost). */
 export function vndToPointsCeil(amountMinor: bigint): bigint {
   return (amountMinor + POINT_VND - 1n) / POINT_VND;

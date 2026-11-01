@@ -6,7 +6,7 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { formatMoney } from '@3t/i18n';
 
-interface PlanRow { template_slug: string; plan_id: string; plan_name: Record<string, string>; deployment_mode: string; listed_minor: string; cost_minor: string; cost_points: string; partner_price_points: string | null }
+interface PlanRow { template_slug: string; plan_id: string; plan_name: Record<string, string>; deployment_mode: string; listed_minor: string; cost_minor: string; cost_points: string; cost_source?: string; partner_price_points: string | null }
 interface PricesData { reseller_discount_bps: number; plans: PlanRow[] }
 
 const money = (amount: string, locale: 'vi' | 'en') => formatMoney({ amount_minor: amount, currency: 'VND' }, locale);
@@ -54,7 +54,7 @@ export default function PartnerPricesPage() {
             <tr key={p.plan_id}>
               <td>{p.template_slug} · {p.plan_name[locale] ?? p.plan_name.vi}</td>
               <td>{money(p.listed_minor, locale)}</td>
-              <td><strong>{p.cost_points} {t('ui.partner.points')}</strong> <span className="muted">({money(p.cost_minor, locale)})</span></td>
+              <td><strong>{p.cost_points} {t('ui.partner.points')}</strong> <span className="muted">({money(p.cost_minor, locale)})</span>{p.cost_source === 'fixed' ? <> <span className="badge badge--neutral">{t('ui.partner.cost_fixed')}</span></> : null}</td>
               <td>
                 <input
                   className="input" type="number" min={0} style={{ width: 150 }} value={drafts[p.plan_id] ?? ''}

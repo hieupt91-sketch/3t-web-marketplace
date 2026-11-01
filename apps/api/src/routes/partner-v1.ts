@@ -4,7 +4,7 @@ import { getSetting, hashToken, loadActivePlans, tx, type PublicPlan } from '@3t
 import { errors } from '../errors.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
-import { creditWallet, debitWallet, partnerCost, partnerCostPoints, pointsToVnd, vndToPointsCeil, walletBalance } from '../lib/partner-wallet.ts';
+import { creditWallet, debitWallet, pointsToVnd, resolvePartnerCostPoints, vndToPointsCeil, walletBalance } from '../lib/partner-wallet.ts';
 import { checkDbRateLimit } from '../lib/rate-limit-store.ts';
 import { computeCharge, processPaymentEvent } from './commerce.ts';
 
@@ -324,8 +324,14 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
             [partnerId],
           );
           const cut = policy.rows[0]?.reseller_discount_bps ?? 1000;
-          const cost = partnerCost(listed, cut);
-          const costPoints = partnerCostPoints(listed, cut);
+          // The deduction is the platform's own partner price for this
+          // plan — a fixed per-plan price when the owner set one, else
+          // the policy cut. What the partner charges their customer is
+          // their business and never enters this math.
+          const resolved = await resolvePartnerCostPoints(client, plan.id, listed, cut);
+          const cost = resolved.exactMinor;
+          const costPoints = resolved.points;
+          const costSource = resolved.source;
           const own = await client.query<{ amount_points: string }>(
             'SELECT amount_points::text FROM partner_prices WHERE partner_id = $1 AND plan_id = $2',
             [partnerId, plan.id],
@@ -370,9 +376,9 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           await client.query(
             `INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json)
              VALUES ($1, 'partner_wallet', $2, $3, $4, 'pending', $5::jsonb)`,
-            [orderId, providerRef, price.toString(), config.currency, JSON.stringify({ method: 'partner_wallet', listed_minor: listed.toString(), cut_bps: cut, cost_minor: cost.toString(), cost_points: costPoints.toString(), price_points: pricePoints.toString() })],
+            [orderId, providerRef, price.toString(), config.currency, JSON.stringify({ method: 'partner_wallet', listed_minor: listed.toString(), cut_bps: cut, cost_minor: cost.toString(), cost_points: costPoints.toString(), price_points: pricePoints.toString(), cost_source: costSource })],
           );
-          return { status: 201, body: { data: { id: saleId, order_id: orderId, external_reference: request.body.external_reference, price_minor: price.toString(), cost_minor: cost.toString(), listed_minor: listed.toString(), cut_bps: cut, price_points: pricePoints.toString(), cost_points: costPoints.toString(), wallet_balance_points: debit.balance.toString(), currency: config.currency, status: 'completed' } }, saleId, providerRef, price };
+          return { status: 201, body: { data: { id: saleId, order_id: orderId, external_reference: request.body.external_reference, price_minor: price.toString(), cost_minor: cost.toString(), listed_minor: listed.toString(), cut_bps: cut, price_points: pricePoints.toString(), cost_points: costPoints.toString(), cost_source: costSource, wallet_balance_points: debit.balance.toString(), currency: config.currency, status: 'completed' } }, saleId, providerRef, price };
       });
       const payload = phase1;
       if (payload.saleId && payload.providerRef) {

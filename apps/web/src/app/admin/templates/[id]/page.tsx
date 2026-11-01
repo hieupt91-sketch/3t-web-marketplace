@@ -38,6 +38,7 @@ interface Plan {
   status: 'draft' | 'active' | 'archived';
   limits_json: Record<string, unknown>;
   row_version: number;
+  partner_cost_points?: string | null;
   prices: Price[];
 }
 interface Version {
@@ -200,6 +201,7 @@ function AddPlan({ templateId, onAdded }: { templateId: string; onAdded: () => v
 function PlanCard({ plan, onChanged }: { plan: Plan; onChanged: () => void }) {
   const { t, dt, locale } = useT();
   const [amount, setAmount] = useState('');
+  const [partnerCost, setPartnerCost] = useState(plan.partner_cost_points ?? '');
   const [interval, setInterval] = useState<'one_time' | 'monthly' | 'yearly'>(plan.deployment_mode === 'hosted' ? 'monthly' : 'one_time');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | null>(null);
@@ -214,6 +216,16 @@ function PlanCard({ plan, onChanged }: { plan: Plan; onChanged: () => void }) {
     setBusy(false);
     if (!res.ok) return setError(res.error);
     setAmount('');
+    onChanged();
+  }
+
+  async function savePartnerCost() {
+    setBusy(true);
+    setError(null);
+    const raw = partnerCost.trim();
+    const res = await api(`/admin/plans/${plan.id}/partner-cost`, { method: 'POST', body: { cost_points: raw === '' ? null : Number(raw) } });
+    setBusy(false);
+    if (!res.ok) return setError(res.error);
     onChanged();
   }
 
@@ -282,6 +294,12 @@ function PlanCard({ plan, onChanged }: { plan: Plan; onChanged: () => void }) {
           )}
         </FormField>
         <button type="button" className="button button--secondary" disabled={busy || !amount} onClick={() => void addPrice()}>{t('ui.plan.add_price')}</button>
+      </div>
+      <div className="row" style={{ alignItems: 'flex-end' }}>
+        <FormField label={t('ui.admin.partner_cost')} hint={t('ui.admin.partner_cost_hint')}>
+          {(p) => <input {...p} className="input tabular" inputMode="numeric" value={partnerCost} onChange={(e) => setPartnerCost(e.target.value.replace(/\D/g, ''))} />}
+        </FormField>
+        <button type="button" className="button button--secondary" disabled={busy} onClick={() => void savePartnerCost()}>{t('ui.action.save')}</button>
       </div>
     </div>
   );

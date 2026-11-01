@@ -1669,5 +1669,8 @@
   "ui.admin.wallet_sales": "Đơn bán qua ví",
   "ui.partner.points": "điểm",
   "ui.partner.balance_equiv": "≈ {amount}",
-  "ui.partner.topup_equiv": "Chuyển khoản: {amount}"
+  "ui.partner.topup_equiv": "Chuyển khoản: {amount}",
+  "ui.admin.partner_cost": "Giá cho CTV (điểm)",
+  "ui.admin.partner_cost_hint": "Số điểm trừ vào ví CTV mỗi đơn bán qua ví. Để trống = trừ theo % cắt trong chính sách CTV.",
+  "ui.partner.cost_fixed": "Giá cố định"
 }
