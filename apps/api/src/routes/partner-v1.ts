@@ -4,7 +4,7 @@ import { getSetting, hashToken, loadActivePlans, tx, type PublicPlan } from '@3t
 import { errors } from '../errors.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
-import { creditWallet, debitWallet, partnerCost, walletBalance } from '../lib/partner-wallet.ts';
+import { creditWallet, debitWallet, partnerCost, partnerCostPoints, pointsToVnd, vndToPointsCeil, walletBalance } from '../lib/partner-wallet.ts';
 import { checkDbRateLimit } from '../lib/rate-limit-store.ts';
 import { computeCharge, processPaymentEvent } from './commerce.ts';
 
@@ -276,10 +276,10 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
     const partnerId = partnerOf(request).partnerId;
     const balance = await walletBalance(db, partnerId);
     const entries = await db.query(
-      'SELECT id, kind, amount_minor::text, balance_after_minor::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
+      'SELECT id, kind, amount_points::text, balance_after_points::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
       [partnerId],
     );
-    return { data: { balance_minor: balance.toString(), currency: config.currency, entries: entries.rows } };
+    return { data: { balance_points: balance.toString(), balance_vnd: pointsToVnd(balance).toString(), currency: config.currency, entries: entries.rows } };
   });
 
   // POST /wallet-sales — direct reseller sale: the partner already
@@ -294,15 +294,15 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
       const partnerId = partnerOf(request).partnerId;
       const terms = await getSetting<{ current: string }>(db, 'terms.version').then((v) => v.current).catch(() => 'terms-2026-10');
       const phase1 = await tx(db, async (client) => {
-          const existing = await client.query<{ id: string; order_id: string; status: string; price_minor: string; cost_minor: string; listed_minor: string; cut_bps: number }>(
-            'SELECT id, order_id, status, price_minor::text, cost_minor::text, listed_minor::text, cut_bps FROM partner_wallet_sales WHERE partner_id = $1 AND external_reference = $2',
+          const existing = await client.query<{ id: string; order_id: string; status: string; price_minor: string; cost_minor: string; listed_minor: string; cut_bps: number; cost_points: string; price_points: string }>(
+            'SELECT id, order_id, status, price_minor::text, cost_minor::text, listed_minor::text, cut_bps, cost_points::text, price_points::text FROM partner_wallet_sales WHERE partner_id = $1 AND external_reference = $2',
             [partnerId, request.body.external_reference],
           );
           if (existing.rows[0]) {
             const e = existing.rows[0]!;
             if (e.status !== 'completed') throw errors.conflict('partner.reference_conflict');
             const bal = await walletBalance(client, partnerId);
-            return { status: 200, body: { data: { id: e.id, order_id: e.order_id, external_reference: request.body.external_reference, price_minor: e.price_minor, cost_minor: e.cost_minor, listed_minor: e.listed_minor, cut_bps: e.cut_bps, wallet_balance_minor: bal.toString(), currency: config.currency, status: 'completed' } }, saleId: null as string | null, providerRef: null as string | null, price: 0n };
+            return { status: 200, body: { data: { id: e.id, order_id: e.order_id, external_reference: request.body.external_reference, price_minor: e.price_minor, cost_minor: e.cost_minor, listed_minor: e.listed_minor, cut_bps: e.cut_bps, price_points: e.price_points, cost_points: e.cost_points, wallet_balance_points: bal.toString(), currency: config.currency, status: 'completed' } }, saleId: null as string | null, providerRef: null as string | null, price: 0n };
           }
           const buyer = await client.query<{ id: string }>(
             'SELECT id FROM users WHERE email_normalized = $1 AND verified_at IS NOT NULL',
@@ -325,11 +325,16 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           );
           const cut = policy.rows[0]?.reseller_discount_bps ?? 1000;
           const cost = partnerCost(listed, cut);
-          const own = await client.query<{ amount_minor: string }>(
-            'SELECT amount_minor::text FROM partner_prices WHERE partner_id = $1 AND plan_id = $2',
+          const costPoints = partnerCostPoints(listed, cut);
+          const own = await client.query<{ amount_points: string }>(
+            'SELECT amount_points::text FROM partner_prices WHERE partner_id = $1 AND plan_id = $2',
             [partnerId, plan.id],
           );
-          const price = own.rows[0] ? BigInt(own.rows[0].amount_minor) : listed;
+          // Prices live in points too: the partner's own point price, or
+          // the listed price rounded up to whole points. The order total
+          // in VND is always price_points x 1,000.
+          const pricePoints = own.rows[0] ? BigInt(own.rows[0].amount_points) : vndToPointsCeil(listed);
+          const price = pointsToVnd(pricePoints);
           const snapshot = { template_id: request.body.template_id, version_id: tpl.rows[0].published_version_id, plan_id: plan.id, plan_code: plan.code, plan_name: plan.name, deployment_mode: plan.deployment_mode, lines: computeCharge(plan).lines, limits: plan.limits, kind: 'wallet_sale' };
           const quote = await client.query<{ id: string }>(
             `INSERT INTO quotes (buyer_id, partner_id, currency, subtotal_minor, total_minor, snapshot_json, expires_at)
@@ -348,14 +353,14 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
             [orderId, request.body.template_id, tpl.rows[0].published_version_id, plan.id, plan.deployment_mode, price.toString(), { plan_name: plan.name, updates_months: (plan.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (plan.limits as { instance_limit?: number }).instance_limit ?? 1, storage_gb: 1 }],
           );
           const sale = await client.query<{ id: string }>(
-            `INSERT INTO partner_wallet_sales (partner_id, order_id, external_reference, buyer_id, plan_id, listed_minor, cut_bps, cost_minor, price_minor)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) RETURNING id`,
-            [partnerId, orderId, request.body.external_reference, buyer.rows[0].id, plan.id, listed.toString(), cut, cost.toString(), price.toString()],
+            `INSERT INTO partner_wallet_sales (partner_id, order_id, external_reference, buyer_id, plan_id, listed_minor, cut_bps, cost_minor, price_minor, cost_points, price_points)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+            [partnerId, orderId, request.body.external_reference, buyer.rows[0].id, plan.id, listed.toString(), cut, cost.toString(), price.toString(), costPoints.toString(), pricePoints.toString()],
           );
           const saleId = sale.rows[0]!.id;
           let debit: { ok: boolean; balance: bigint };
           try {
-            debit = await debitWallet(client, partnerId, cost, 'sale_deduction', 'partner_wallet_sale', saleId, request.body.external_reference);
+            debit = await debitWallet(client, partnerId, costPoints, 'sale_deduction', 'partner_wallet_sale', saleId, request.body.external_reference);
           } catch (err) {
             if (err instanceof Error && err.message === 'partner_wallet_negative') throw errors.validation([{ field: 'wallet', code: 'partner.insufficient_balance' }]);
             throw err;
@@ -365,9 +370,9 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           await client.query(
             `INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json)
              VALUES ($1, 'partner_wallet', $2, $3, $4, 'pending', $5::jsonb)`,
-            [orderId, providerRef, price.toString(), config.currency, JSON.stringify({ method: 'partner_wallet', listed_minor: listed.toString(), cut_bps: cut, cost_minor: cost.toString() })],
+            [orderId, providerRef, price.toString(), config.currency, JSON.stringify({ method: 'partner_wallet', listed_minor: listed.toString(), cut_bps: cut, cost_minor: cost.toString(), cost_points: costPoints.toString(), price_points: pricePoints.toString() })],
           );
-          return { status: 201, body: { data: { id: saleId, order_id: orderId, external_reference: request.body.external_reference, price_minor: price.toString(), cost_minor: cost.toString(), listed_minor: listed.toString(), cut_bps: cut, wallet_balance_minor: debit.balance.toString(), currency: config.currency, status: 'completed' } }, saleId, providerRef, price };
+          return { status: 201, body: { data: { id: saleId, order_id: orderId, external_reference: request.body.external_reference, price_minor: price.toString(), cost_minor: cost.toString(), listed_minor: listed.toString(), cut_bps: cut, price_points: pricePoints.toString(), cost_points: costPoints.toString(), wallet_balance_points: debit.balance.toString(), currency: config.currency, status: 'completed' } }, saleId, providerRef, price };
       });
       const payload = phase1;
       if (payload.saleId && payload.providerRef) {
@@ -391,9 +396,9 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
         }
         if (outcome !== 'processed') {
           await tx(db, async (client) => {
-            const sale = await client.query<{ cost_minor: string; order_id: string }>('SELECT cost_minor::text, order_id FROM partner_wallet_sales WHERE id = $1 FOR UPDATE', [payload.saleId]);
+            const sale = await client.query<{ cost_points: string; order_id: string }>('SELECT cost_points::text, order_id FROM partner_wallet_sales WHERE id = $1 FOR UPDATE', [payload.saleId]);
             if (sale.rows[0]) {
-              await creditWallet(client, partnerId, BigInt(sale.rows[0].cost_minor), 'sale_refund', 'partner_wallet_sale', payload.saleId, 'settlement_failed');
+              await creditWallet(client, partnerId, BigInt(sale.rows[0].cost_points), 'sale_refund', 'partner_wallet_sale', payload.saleId, 'settlement_failed');
               await client.query("UPDATE partner_wallet_sales SET status = 'refunded' WHERE id = $1", [payload.saleId]);
               await client.query("UPDATE orders SET status = 'cancelled', row_version = row_version + 1 WHERE id = $1 AND status = 'awaiting_payment'", [sale.rows[0].order_id]);
             }

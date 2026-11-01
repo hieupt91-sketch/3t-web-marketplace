@@ -1,6 +1,6 @@
 import type { FastifyInstance } from 'fastify';
 import { tx, writeAudit } from '@3t/core';
-import { creditWallet, debitWallet, walletBalance } from '../lib/partner-wallet.ts';
+import { creditWallet, debitWallet, pointsToVnd, walletBalance } from '../lib/partner-wallet.ts';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
@@ -137,18 +137,18 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
     if (!UUID.test(request.params.id)) throw errors.notFound();
     const balance = await walletBalance(db, request.params.id);
     const entries = await db.query(
-      'SELECT id, kind, amount_minor::text, balance_after_minor::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 100',
+      'SELECT id, kind, amount_points::text, balance_after_points::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 100',
       [request.params.id],
     );
     const topups = await db.query(
-      'SELECT id, amount_minor::text, paid_amount_minor::text, code, status, created_at, paid_at FROM partner_topups WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
+      'SELECT id, amount_points::text, paid_amount_minor::text, code, status, created_at, paid_at FROM partner_topups WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
       [request.params.id],
     );
     const sales = await db.query(
-      'SELECT id, order_id, external_reference, listed_minor::text, cut_bps, cost_minor::text, price_minor::text, status, created_at FROM partner_wallet_sales WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
+      'SELECT id, order_id, external_reference, listed_minor::text, cut_bps, cost_minor::text, price_minor::text, cost_points::text, price_points::text, status, created_at FROM partner_wallet_sales WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
       [request.params.id],
     );
-    return { data: { balance_minor: balance.toString(), entries: entries.rows, topups: topups.rows, sales: sales.rows } };
+    return { data: { balance_points: balance.toString(), entries: entries.rows, topups: topups.rows, sales: sales.rows } };
   });
 
   // Staff confirms a top-up that arrived without a hub webhook (the
@@ -157,30 +157,30 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
     const auth = requirePermission(request, 'partner:manage');
     if (!UUID.test(request.params.id) || !UUID.test(request.params.topupId)) throw errors.notFound();
     const result = await tx(db, async (client) => {
-      const topup = await client.query<{ id: string; partner_id: string; amount_minor: string; code: string }>(
-        "SELECT id, partner_id, amount_minor::text, code FROM partner_topups WHERE id = $1 AND partner_id = $2 AND status = 'pending' FOR UPDATE",
+      const topup = await client.query<{ id: string; partner_id: string; amount_points: string; code: string }>(
+        "SELECT id, partner_id, amount_points::text, code FROM partner_topups WHERE id = $1 AND partner_id = $2 AND status = 'pending' FOR UPDATE",
         [request.params.topupId, request.params.id],
       );
       if (!topup.rows[0]) return null;
       const t = topup.rows[0]!;
-      await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = amount_minor, paid_at = now() WHERE id = $1", [t.id]);
-      const balance = await creditWallet(client, t.partner_id, BigInt(t.amount_minor), 'topup', 'partner_topup', t.id, `manual:${t.code}`);
+      await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = $2, paid_at = now() WHERE id = $1", [t.id, pointsToVnd(BigInt(t.amount_points)).toString()]);
+      const balance = await creditWallet(client, t.partner_id, BigInt(t.amount_points), 'topup', 'partner_topup', t.id, `manual:${t.code}`);
       await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'partner.wallet_topup_confirmed', resourceType: 'partner_topup', resourceId: t.id, traceId: request.id });
-      return { id: t.id, status: 'paid', balance_minor: balance.toString() };
+      return { id: t.id, status: 'paid', balance_points: balance.toString() };
     });
     if (!result) throw errors.conflict('topup.not_pending');
     return reply.status(200).send({ data: result });
   });
 
   // Staff wallet adjustment: a ledger entry with a reason, never an edit.
-  app.post<{ Params: { id: string }; Body: { amount_minor: string; note: string } }>(
+  app.post<{ Params: { id: string }; Body: { amount_points: string; note: string } }>(
     '/partners/:id/wallet/adjust',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor', 'note'], properties: { amount_minor: { type: 'string', pattern: '^-?[0-9]+$' }, note: { type: 'string', minLength: 3, maxLength: 500 } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_points', 'note'], properties: { amount_points: { type: 'string', pattern: '^-?[0-9]+$' }, note: { type: 'string', minLength: 3, maxLength: 500 } } } } },
     async (request, reply) => {
       const auth = requirePermission(request, 'partner:manage');
       if (!UUID.test(request.params.id)) throw errors.notFound();
-      const amount = BigInt(request.body.amount_minor);
-      if (amount === 0n) throw errors.validation([{ field: 'amount_minor', code: 'must_be_nonzero' }]);
+      const amount = BigInt(request.body.amount_points);
+      if (amount === 0n) throw errors.validation([{ field: 'amount_points', code: 'must_be_nonzero' }]);
       const result = await tx(db, async (client) => {
         const partner = await client.query<{ id: string }>('SELECT id FROM partner_accounts WHERE id = $1', [request.params.id]);
         if (!partner.rows[0]) return null;
@@ -189,11 +189,11 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
           balance = await creditWallet(client, request.params.id, amount, 'adjustment', 'admin', null, request.body.note);
         } else {
           const debit = await debitWallet(client, request.params.id, -amount, 'adjustment', 'admin', null, request.body.note);
-          if (!debit.ok) throw errors.validation([{ field: 'amount_minor', code: 'partner.insufficient_balance' }]);
+          if (!debit.ok) throw errors.validation([{ field: 'amount_points', code: 'partner.insufficient_balance' }]);
           balance = debit.balance;
         }
         await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'partner.wallet_adjusted', resourceType: 'partner', resourceId: request.params.id, traceId: request.id });
-        return { balance_minor: balance.toString() };
+        return { balance_points: balance.toString() };
       });
       if (!result) throw errors.notFound();
       return reply.status(200).send({ data: result });

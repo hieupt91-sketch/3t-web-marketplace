@@ -6,7 +6,7 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { formatMoney } from '@3t/i18n';
 
-interface PlanRow { template_slug: string; plan_id: string; plan_name: Record<string, string>; deployment_mode: string; listed_minor: string; cost_minor: string; partner_price_minor: string | null }
+interface PlanRow { template_slug: string; plan_id: string; plan_name: Record<string, string>; deployment_mode: string; listed_minor: string; cost_minor: string; cost_points: string; partner_price_points: string | null }
 interface PricesData { reseller_discount_bps: number; plans: PlanRow[] }
 
 const money = (amount: string, locale: 'vi' | 'en') => formatMoney({ amount_minor: amount, currency: 'VND' }, locale);
@@ -23,7 +23,7 @@ export default function PartnerPricesPage() {
     const res = await api<PricesData>('/partner/prices');
     if (!res.ok) return setError(res.error);
     setData(res.data);
-    setDrafts(Object.fromEntries(res.data.plans.map((p) => [p.plan_id, p.partner_price_minor ?? ''])));
+    setDrafts(Object.fromEntries(res.data.plans.map((p) => [p.plan_id, p.partner_price_points ?? ''])));
   }, []);
   useEffect(() => { void load(); }, [load]);
   if (error && !data) return <ErrorState error={error} onRetry={() => void load()} />;
@@ -34,7 +34,7 @@ export default function PartnerPricesPage() {
     setBusy(true);
     setSaved(false);
     const raw = (drafts[planId] ?? '').trim();
-    const res = await api('/partner/prices', { method: 'PUT', body: { plan_id: planId, amount_minor: raw === '' ? null : raw } });
+    const res = await api('/partner/prices', { method: 'PUT', body: { plan_id: planId, amount_points: raw === '' ? null : raw } });
     setBusy(false);
     if (!res.ok) return setError(res.error);
     setSaved(true);
@@ -54,11 +54,11 @@ export default function PartnerPricesPage() {
             <tr key={p.plan_id}>
               <td>{p.template_slug} · {p.plan_name[locale] ?? p.plan_name.vi}</td>
               <td>{money(p.listed_minor, locale)}</td>
-              <td>{money(p.cost_minor, locale)}</td>
+              <td><strong>{p.cost_points} {t('ui.partner.points')}</strong> <span className="muted">({money(p.cost_minor, locale)})</span></td>
               <td>
                 <input
                   className="input" type="number" min={0} style={{ width: 150 }} value={drafts[p.plan_id] ?? ''}
-                  placeholder={p.listed_minor}
+                  placeholder={String(Math.ceil(Number(p.listed_minor) / 1000))}
                   onChange={(e) => setDrafts((d) => ({ ...d, [p.plan_id]: e.target.value }))}
                   aria-label={t('ui.partner.price_mine')}
                 />

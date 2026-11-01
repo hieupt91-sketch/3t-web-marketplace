@@ -7,10 +7,10 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { formatMoney } from '@3t/i18n';
 
-interface Entry { id: string; kind: string; amount_minor: string; balance_after_minor: string; note: string; created_at: string }
-interface Topup { id: string; amount_minor: string; code: string; status: string; created_at: string }
-interface Sale { id: string; external_reference: string; listed_minor: string; cut_bps: number; cost_minor: string; price_minor: string; status: string; created_at: string }
-interface WalletData { balance_minor: string; entries: Entry[]; topups: Topup[]; sales: Sale[] }
+interface Entry { id: string; kind: string; amount_points: string; balance_after_points: string; note: string; created_at: string }
+interface Topup { id: string; amount_points: string; code: string; status: string; created_at: string }
+interface Sale { id: string; external_reference: string; listed_minor: string; cut_bps: number; cost_minor: string; price_minor: string; cost_points: string; price_points: string; status: string; created_at: string }
+interface WalletData { balance_points: string; entries: Entry[]; topups: Topup[]; sales: Sale[] }
 
 const money = (amount: string, locale: 'vi' | 'en') => formatMoney({ amount_minor: amount, currency: 'VND' }, locale);
 
@@ -46,7 +46,7 @@ function AdminPartnerWalletInner({ id }: { id: string }) {
     if (busy) return;
     setBusy(true);
     setSaved(false);
-    const res = await api(`/admin/partners/${id}/wallet/adjust`, { method: 'POST', body: { amount_minor: adjustAmount, note: adjustNote } });
+    const res = await api(`/admin/partners/${id}/wallet/adjust`, { method: 'POST', body: { amount_points: adjustAmount, note: adjustNote } });
     setBusy(false);
     if (!res.ok) return setError(res.error);
     setSaved(true);
@@ -59,10 +59,10 @@ function AdminPartnerWalletInner({ id }: { id: string }) {
     <div className="stack">
       <h1>{t('ui.partner.wallet')}</h1>
       <section className="card stack">
-        <strong>{t('ui.partner.balance')}: {money(data.balance_minor, locale)}</strong>
+        <strong>{t('ui.partner.balance')}: {data.balance_points} {t('ui.partner.points')}</strong>
         {data.topups.filter((x) => x.status === 'pending').map((x) => (
           <div key={x.id} className="row" style={{ justifyContent: 'space-between' }}>
-            <span className="mono">{x.code}</span><span>{money(x.amount_minor, locale)}</span>
+            <span className="mono">{x.code}</span><span>{x.amount_points} {t('ui.partner.points')}</span>
             <button type="button" className="button" disabled={busy} onClick={() => void confirmTopup(x.id)}>{t('ui.admin.wallet_confirm_topup')}</button>
           </div>
         ))}
@@ -81,12 +81,12 @@ function AdminPartnerWalletInner({ id }: { id: string }) {
       <section className="card stack">
         <strong>{t('ui.partner.wallet_history')}</strong>
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.partner.wallet_kind_label')}</th><th>{t('ui.partner.topup_amount')}</th><th>{t('ui.partner.balance')}</th></tr></thead>
-          <tbody>{data.entries.map((r) => (<tr key={r.id}><td>{r.kind}{r.note ? ` · ${r.note}` : ''}</td><td>{money(r.amount_minor, locale)}</td><td>{money(r.balance_after_minor, locale)}</td></tr>))}</tbody></table></div>
+          <tbody>{data.entries.map((r) => (<tr key={r.id}><td>{r.kind}{r.note ? ` · ${r.note}` : ''}</td><td>{r.amount_points} {t('ui.partner.points')}</td><td>{r.balance_after_points} {t('ui.partner.points')}</td></tr>))}</tbody></table></div>
       </section>
       <section className="card stack">
         <strong>{t('ui.admin.wallet_sales')}</strong>
         <div className="table-wrap"><table className="table"><thead><tr><th>{t('ui.partner.topup_code')}</th><th>{t('ui.partner.price_listed')}</th><th>{t('ui.partner.price_cost')}</th><th>{t('ui.partner.price_mine')}</th><th>{t('ui.partner.status')}</th></tr></thead>
-          <tbody>{data.sales.map((r) => (<tr key={r.id}><td className="mono">{r.external_reference}</td><td>{money(r.listed_minor, locale)}</td><td>{money(r.cost_minor, locale)}</td><td>{money(r.price_minor, locale)}</td><td>{r.status}</td></tr>))}</tbody></table></div>
+          <tbody>{data.sales.map((r) => (<tr key={r.id}><td className="mono">{r.external_reference}</td><td>{money(r.listed_minor, locale)}</td><td>{r.cost_points} {t('ui.partner.points')}</td><td>{r.price_points} {t('ui.partner.points')}</td><td>{r.status}</td></tr>))}</tbody></table></div>
       </section>
       {error ? <ErrorState error={error} /> : null}
     </div>

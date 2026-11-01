@@ -4,7 +4,7 @@ import { getSetting, hashToken, loadActivePlans, tx, writeAudit } from '@3t/core
 import { requirePermission, requireUser } from '../app.ts';
 import { errors } from '../errors.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
-import { partnerCost, walletBalance } from '../lib/partner-wallet.ts';
+import { partnerCost, partnerCostPoints, pointsToVnd, walletBalance } from '../lib/partner-wallet.ts';
 import { computeCharge } from './commerce.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { assertPublicWebhookUrl, decryptWebhookSecret, encryptWebhookSecret, sendWebhookDelivery } from '../lib/partner-webhooks.ts';
@@ -452,33 +452,34 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     const partner = await activePartner(request);
     const balance = await walletBalance(db, partner.id);
     const entries = await db.query(
-      'SELECT id, kind, amount_minor::text, balance_after_minor::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 100',
+      'SELECT id, kind, amount_points::text, balance_after_points::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 100',
       [partner.id],
     );
     const topups = await db.query(
-      'SELECT id, amount_minor::text, paid_amount_minor::text, code, status, created_at, paid_at FROM partner_topups WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 20',
+      'SELECT id, amount_points::text, paid_amount_minor::text, code, status, created_at, paid_at FROM partner_topups WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 20',
       [partner.id],
     );
-    return { data: { balance_minor: balance.toString(), currency: config.currency, reseller_discount_bps: await cutBps(partner), entries: entries.rows, topups: topups.rows } };
+    return { data: { balance_points: balance.toString(), balance_vnd: pointsToVnd(balance).toString(), currency: config.currency, reseller_discount_bps: await cutBps(partner), entries: entries.rows, topups: topups.rows.map((t) => ({ ...t, transfer_amount_minor: pointsToVnd(BigInt(t.amount_points)).toString() })) } };
   });
 
-  app.post<{ Body: { amount_minor: string } }>(
+  app.post<{ Body: { amount_points: string } }>(
     '/partner/wallet/topups',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor'], properties: { amount_minor: { type: 'string', pattern: '^[0-9]+$' } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_points'], properties: { amount_points: { type: 'string', pattern: '^[0-9]+$' } } } } },
     async (request, reply) => {
       const partner = await activePartner(request);
-      const amount = BigInt(request.body.amount_minor);
-      if (amount < 10000n || amount > 1000000000n) throw errors.validation([{ field: 'amount_minor', code: 'out_of_range' }]);
+      const points = BigInt(request.body.amount_points);
+      if (points < 10n || points > 1000000n) throw errors.validation([{ field: 'amount_points', code: 'out_of_range' }]);
       const code = `WT${randomBytes(5).toString('hex').toUpperCase()}`;
       const { rows } = await db.query<{ id: string }>(
-        'INSERT INTO partner_topups (partner_id, amount_minor, code) VALUES ($1, $2, $3) RETURNING id',
-        [partner.id, amount.toString(), code],
+        'INSERT INTO partner_topups (partner_id, amount_points, code) VALUES ($1, $2, $3) RETURNING id',
+        [partner.id, points.toString(), code],
       );
       const bank = await getSetting<{ enabled: boolean; bank_name: string; account_number: string; account_holder: string }>(db, 'payment.bank_transfer').catch(() => null);
+      const transfer = pointsToVnd(points).toString();
       return reply.status(201).send({
         data: {
-          id: rows[0]!.id, code, amount_minor: amount.toString(), status: 'pending',
-          bank: bank?.enabled ? { bank_name: bank.bank_name, account_number: bank.account_number, account_holder: bank.account_holder, content: code } : null,
+          id: rows[0]!.id, code, amount_points: points.toString(), transfer_amount_minor: transfer, status: 'pending',
+          bank: bank?.enabled ? { bank_name: bank.bank_name, account_number: bank.account_number, account_holder: bank.account_holder, content: code, amount_minor: transfer } : null,
         },
       });
     },
@@ -488,8 +489,8 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
     const partner = await activePartner(request);
     const cut = await cutBps(partner);
     const { rows: templates } = await db.query<{ id: string; slug: string }>("SELECT id, slug FROM templates WHERE status = 'published' AND NOT hidden ORDER BY created_at DESC LIMIT 200");
-    const mine = await db.query<{ plan_id: string; amount_minor: string }>('SELECT plan_id, amount_minor::text FROM partner_prices WHERE partner_id = $1', [partner.id]);
-    const priceByPlan = new Map(mine.rows.map((r) => [r.plan_id, r.amount_minor]));
+    const mine = await db.query<{ plan_id: string; amount_points: string }>('SELECT plan_id, amount_points::text FROM partner_prices WHERE partner_id = $1', [partner.id]);
+    const priceByPlan = new Map(mine.rows.map((r) => [r.plan_id, r.amount_points]));
     const out: unknown[] = [];
     for (const t of templates) {
       const plans = await loadActivePlans(db, t.id, config.currency);
@@ -497,33 +498,33 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
         const listed = BigInt(computeCharge(plan).subtotal);
         out.push({
           template_id: t.id, template_slug: t.slug, plan_id: plan.id, plan_name: plan.name, deployment_mode: plan.deployment_mode,
-          listed_minor: listed.toString(), cost_minor: partnerCost(listed, cut).toString(),
-          partner_price_minor: priceByPlan.get(plan.id) ?? null, currency: config.currency,
+          listed_minor: listed.toString(), cost_minor: partnerCost(listed, cut).toString(), cost_points: partnerCostPoints(listed, cut).toString(),
+          partner_price_points: priceByPlan.get(plan.id) ?? null, currency: config.currency,
         });
       }
     }
     return { data: { reseller_discount_bps: cut, plans: out } };
   });
 
-  app.put<{ Body: { plan_id: string; amount_minor: string | null } }>(
+  app.put<{ Body: { plan_id: string; amount_points: string | null } }>(
     '/partner/prices',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, amount_minor: { type: ['string', 'null'], pattern: '^[0-9]+$' } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, amount_points: { type: ['string', 'null'], pattern: '^[0-9]+$' } } } } },
     async (request, reply) => {
       const partner = await activePartner(request);
       const plan = await db.query<{ id: string }>('SELECT id FROM plans WHERE id = $1 AND status = $2', [request.body.plan_id, 'active']);
       if (!plan.rows[0]) throw errors.notFound();
-      if (request.body.amount_minor === null) {
+      if (request.body.amount_points === null) {
         await db.query('DELETE FROM partner_prices WHERE partner_id = $1 AND plan_id = $2', [partner.id, request.body.plan_id]);
-        return reply.status(200).send({ data: { plan_id: request.body.plan_id, partner_price_minor: null } });
+        return reply.status(200).send({ data: { plan_id: request.body.plan_id, partner_price_points: null } });
       }
-      const amount = BigInt(request.body.amount_minor);
-      if (amount <= 0n) throw errors.validation([{ field: 'amount_minor', code: 'must_be_positive' }]);
+      const points = BigInt(request.body.amount_points);
+      if (points <= 0n) throw errors.validation([{ field: 'amount_points', code: 'must_be_positive' }]);
       await db.query(
-        `INSERT INTO partner_prices (partner_id, plan_id, amount_minor) VALUES ($1, $2, $3)
-         ON CONFLICT (partner_id, plan_id) DO UPDATE SET amount_minor = EXCLUDED.amount_minor`,
-        [partner.id, request.body.plan_id, amount.toString()],
+        `INSERT INTO partner_prices (partner_id, plan_id, amount_points) VALUES ($1, $2, $3)
+         ON CONFLICT (partner_id, plan_id) DO UPDATE SET amount_points = EXCLUDED.amount_points`,
+        [partner.id, request.body.plan_id, points.toString()],
       );
-      return reply.status(200).send({ data: { plan_id: request.body.plan_id, partner_price_minor: amount.toString() } });
+      return reply.status(200).send({ data: { plan_id: request.body.plan_id, partner_price_points: points.toString() } });
     },
   );
 }

@@ -185,6 +185,13 @@ kiểu đại lý nạp tiền trước:
 - **Giá bán do CTV tự đặt** cho từng gói (`partner_prices`), tự do chỉnh
   sửa bất cứ lúc nào; không đặt thì bán theo giá niêm yết. Sàn không thu
   tiền của khách cuối trong luồng này — CTV tự thu theo giá của họ.
+- **Đơn vị tính là ĐIỂM: 1 điểm = 1.000 ₫.** Số dư, tiền nạp, tiền vốn
+  và giá bán của CTV đều tính bằng điểm cho gọn; VND chỉ xuất hiện ở
+  biên (nạp N điểm = chuyển khoản N × 1.000 ₫; tổng đơn = giá điểm ×
+  1.000 ₫). Tiền vốn quy ra điểm **làm tròn lên** tới điểm nguyên gần
+  nhất và được hiển thị trước ở trang giá bán — không bao giờ trừ lén
+  cao hơn con số đã hiển thị. Số VND chính xác của tiền vốn vẫn lưu ở
+  từng đơn bán để đối chiếu kế toán.
 - **Ví cá nhân của CTV** (`partner_wallets` + sổ `partner_wallet_entries`
   append-only): CTV tạo mã nạp `WT…` và chuyển khoản ngân hàng ghi đúng
   mã; webhook ngân hàng (SePay/Casso/hub) cộng tiền vào ví tự động theo

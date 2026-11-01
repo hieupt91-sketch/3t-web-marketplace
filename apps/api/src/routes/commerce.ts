@@ -29,7 +29,7 @@ import {
 import { requireUser } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
 import { accrueOrderCommission, reverseOrderCommission } from '../lib/partner-ledger.ts';
-import { creditWallet } from '../lib/partner-wallet.ts';
+import { creditWallet, POINT_VND } from '../lib/partner-wallet.ts';
 import { RESERVED_SUBDOMAINS, SUBDOMAIN_RE, createSiteInTx, currentHold } from '../site-create.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
@@ -485,8 +485,16 @@ export async function processPaymentEvent(db: Db, provider: string, rawBody: str
         );
         if (topup.rows[0]) {
           const t = topup.rows[0]!;
+          // The wallet runs on points (1 point = 1,000 VND): credit the
+          // whole points received; a sub-point remainder stays visible
+          // in paid_amount_minor for staff to adjust if it ever matters.
+          const points = BigInt(event.amountMinor) / POINT_VND;
+          if (points < 1n) {
+            await client.query("UPDATE payment_events SET processing_status = 'ignored' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
+            return 'ignored';
+          }
           await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = $2, paid_at = now() WHERE id = $1", [t.id, event.amountMinor]);
-          await creditWallet(client, t.partner_id, BigInt(event.amountMinor), 'topup', 'partner_topup', t.id, event.providerRef);
+          await creditWallet(client, t.partner_id, points, 'topup', 'partner_topup', t.id, event.providerRef);
           await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
           return 'processed';
         }
