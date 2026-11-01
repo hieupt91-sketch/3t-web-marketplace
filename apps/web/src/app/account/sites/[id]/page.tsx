@@ -11,7 +11,9 @@ interface Site {
   id: string; display_name: string; status: string; subdomain: string | null; url: string | null;
   default_locale: string; subscription: { current_period_end: string; status: string } | null;
   deployments: { id: string; operation: string; status: string }[];
+  capabilities?: string[]; domain_paid_until?: string | null;
 }
+interface AdminSetup { setup_pending: boolean; setup_url: string | null; login_url: string | null; token: string | null }
 
 /** C07 — site overview: URL, admin, status, version, expiry, quota, recent tasks. */
 export default function SiteOverviewPage() {
@@ -20,6 +22,14 @@ export default function SiteOverviewPage() {
   const router = useRouter();
   const [site, setSite] = useState<Site | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
+  const [setup, setSetup] = useState<AdminSetup | null>(null);
+  const [setupBusy, setSetupBusy] = useState(false);
+  async function loadSetup() {
+    setSetupBusy(true);
+    const res = await api<AdminSetup>(`/sites/${params.id}/admin-setup`);
+    setSetupBusy(false);
+    if (res.ok) setSetup(res.data); else setError(res.error);
+  }
   const load = useCallback(async () => {
     const res = await api<Site>(`/sites/${params.id}`);
     if (res.ok) setSite(res.data); else setError(res.error);
@@ -45,6 +55,33 @@ export default function SiteOverviewPage() {
         <span className="muted">{t('ui.sites.subdomain_label')}: {site.subdomain ?? '—'} · {t('ui.sites.locale')}: {site.default_locale}</span>
       </p>
       {site.url ? <p><Link className="button" href={site.url} target="_blank" rel="noopener">{t('ui.sites.open_site')}</Link> <Link className="button button--secondary" href={`${site.url.replace(/\/$/, '')}/admin`} target="_blank" rel="noopener">{t('ui.sites.open_admin')}</Link></p> : null}
+      {(site.capabilities ?? []).includes('admin') ? (
+        <div className="card stack">
+          <strong>{t('ui.sites.admin_setup_title')}</strong>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.sites.admin_setup_body')}</p>
+          {!setup ? (
+            <div className="row"><button type="button" className="button button--secondary" disabled={setupBusy} onClick={() => void loadSetup()}>{setupBusy ? t('ui.state.loading') : t('ui.sites.admin_setup_button')}</button></div>
+          ) : setup.setup_pending ? (
+            <div className="stack">
+              <p style={{ margin: 0 }}>{t('ui.sites.admin_setup_token_label')}: <strong className="mono">{setup.token}</strong></p>
+              {setup.setup_url ? <p style={{ margin: 0 }}><Link className="button" href={setup.setup_url} target="_blank" rel="noopener">{t('ui.sites.admin_setup_open')}</Link></p> : null}
+            </div>
+          ) : (
+            <p style={{ margin: 0 }}>{t('ui.sites.admin_setup_done')}{setup.login_url ? <> <Link href={setup.login_url} target="_blank" rel="noopener">{t('ui.sites.open_admin')}</Link></> : null}</p>
+          )}
+        </div>
+      ) : null}
+      {site.subdomain ? (
+        <div className="card stack">
+          <strong>{t('ui.sites.domain_pkg_title')}</strong>
+          <p className="muted" style={{ margin: 0 }}>
+            {site.domain_paid_until
+              ? (new Date(site.domain_paid_until).getFullYear() > 9000 ? t('ui.sites.domain_pkg_forever') : t('ui.sites.domain_pkg_until', { date: dt(site.domain_paid_until) }))
+              : t('ui.sites.domain_pkg_never')}
+          </p>
+          <div className="row"><Link className="button button--secondary" href={`/checkout/domain?site=${site.id}`}>{site.domain_paid_until ? t('ui.sites.domain_pkg_renew') : t('ui.sites.domain_pkg_buy')}</Link></div>
+        </div>
+      ) : null}
       {site.status === 'suspended' ? <p className="muted">{t('ui.sites.suspended_note')}</p> : null}
       {site.subscription ? <p className="muted">{t('ui.sites.expires')}: {dt(site.subscription.current_period_end)} ({t(`ui.sites.subscription_${site.subscription.status}`)})</p> : null}
       <div className="row">

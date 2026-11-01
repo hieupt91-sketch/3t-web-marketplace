@@ -72,9 +72,12 @@ function PurchasesInner() {
               </dl>
               <Link className="button button--secondary" href={`/account/purchases/${e.id}/downloads`}>{t('ui.account.downloads_title')}</Link>
               {e.mode === 'selfhost' ? (
-                <button type="button" className="button" disabled={busy === e.id || e.status !== 'active'} onClick={() => void download(e)}>
-                  {busy === e.id ? t('ui.state.saving') : t('ui.purchases.download')}
-                </button>
+                <>
+                  <button type="button" className="button" disabled={busy === e.id || e.status !== 'active'} onClick={() => void download(e)}>
+                    {busy === e.id ? t('ui.state.saving') : t('ui.purchases.download')}
+                  </button>
+                  {e.status === 'active' ? <Link className="button button--secondary" href={`/checkout/configure?template=${encodeURIComponent(e.template.slug)}&upgrade=${e.id}`}>{t('ui.purchases.buy_hosting')}</Link> : null}
+                </>
               ) : (
                 <p className="muted">{t('ui.purchases.hosted_pending')}</p>
               )}

@@ -179,9 +179,11 @@ export function usdTransferAvailable(s: UsdTransferSettings): boolean {
  * Compute what a buyer first pays for a plan from its current prices (never from the client):
  * self-host is a single one-time fee; hosting is an optional setup fee plus the first period.
  */
-export function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: QuoteLine[] } {
+export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'yearly'): { subtotal: bigint; lines: QuoteLine[] } {
   const oneTime = plan.prices.find((p) => p.interval === 'one_time');
-  const recurring = plan.prices.find((p) => p.interval === 'monthly' || p.interval === 'yearly');
+  const recurring = billingInterval
+    ? plan.prices.find((p) => p.interval === billingInterval)
+    : plan.prices.find((p) => p.interval === 'monthly' || p.interval === 'yearly');
   const lines: QuoteLine[] = [];
   let subtotal = 0n;
   if (plan.deployment_mode === 'selfhost') {
@@ -189,7 +191,7 @@ export function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: Quot
     lines.push({ label: plan.code, interval: 'one_time', amount_minor: oneTime.amount_minor });
     subtotal = BigInt(oneTime.amount_minor);
   } else {
-    if (!recurring) throw errors.conflict('plan.not_purchasable');
+    if (!recurring) throw errors.conflict(billingInterval ? 'plan.interval_unavailable' : 'plan.not_purchasable');
     if (oneTime) {
       lines.push({ label: `${plan.code}:setup`, interval: 'one_time', amount_minor: oneTime.amount_minor });
       subtotal += BigInt(oneTime.amount_minor);
@@ -203,7 +205,37 @@ export function computeCharge(plan: PublicPlan): { subtotal: bigint; lines: Quot
 /** A hosted purchase's site wish, captured at quote time: the buyer picked
  *  the subdomain (and site name) while buying, so fulfilment can create
  *  the site the moment the order is paid. */
-export interface SiteRequest { subdomain: string; display_name: string; locale: 'vi' | 'en' }
+export interface SiteRequest { subdomain: string; display_name: string; locale: 'vi' | 'en'; domain_interval?: 'once' | 'monthly' | 'yearly' }
+
+interface SubdomainFeeSetting { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null }
+
+/** The domain package's price line for a buyer-chosen period, from the
+ *  OWNER's fee settings only. Returns null when no fee is configured. */
+export function domainFeeLine(feeRaw: SubdomainFeeSetting | null, wantYearly: boolean): { line: QuoteLine; interval: 'once' | 'monthly' | 'yearly' } | null {
+  if (!feeRaw || typeof feeRaw.amount_minor !== 'number' || feeRaw.amount_minor <= 0) return null;
+  if (feeRaw.period === 'monthly' && wantYearly) {
+    if (typeof feeRaw.amount_yearly_minor !== 'number' || feeRaw.amount_yearly_minor <= 0) {
+      throw errors.validation([{ field: 'site_request.domain_interval', code: 'unavailable' }]);
+    }
+    return { line: { label: 'subdomain_fee', interval: 'yearly', amount_minor: String(Math.trunc(feeRaw.amount_yearly_minor)) }, interval: 'yearly' };
+  }
+  if (feeRaw.period === 'monthly') {
+    return { line: { label: 'subdomain_fee', interval: 'monthly', amount_minor: String(Math.trunc(feeRaw.amount_minor)) }, interval: 'monthly' };
+  }
+  return { line: { label: 'subdomain_fee', interval: 'one_time', amount_minor: String(Math.trunc(feeRaw.amount_minor)) }, interval: 'once' };
+}
+
+/** Extend a site's domain paid-through horizon by one bought period. */
+export async function applyDomainPaidPeriod(client: PoolClient, siteId: string, interval: 'once' | 'monthly' | 'yearly'): Promise<void> {
+  await client.query(
+    `UPDATE sites SET domain_paid_until = CASE
+       WHEN $2 = 'yearly' THEN GREATEST(COALESCE(domain_paid_until, now()), now()) + interval '1 year'
+       WHEN $2 = 'monthly' THEN GREATEST(COALESCE(domain_paid_until, now()), now()) + interval '1 month'
+       ELSE '9999-12-31T00:00:00Z'::timestamptz
+     END WHERE id = $1`,
+    [siteId, interval],
+  );
+}
 
 /**
  * Move an awaiting_payment order past its payment window to 'expired':
@@ -231,7 +263,7 @@ export async function expireStaleOrder(client: PoolClient, orderId: string, trac
  * and have decided the order may move to paid.
  */
 export async function fulfillOrder(client: PoolClient, orderId: string, buyerId: string, traceId: string): Promise<void> {
-  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number; site_request?: SiteRequest } }>(
+  const items = await client.query<{ id: string; template_id: string; version_id: string; deployment_mode: string; snapshot_json: { updates_months?: number; instance_limit?: number; site_request?: SiteRequest; installation?: boolean; domain_fee_paid?: boolean } }>(
     'SELECT id, template_id, version_id, deployment_mode, snapshot_json FROM order_items WHERE order_id = $1',
     [orderId],
   );
@@ -246,6 +278,15 @@ export async function fulfillOrder(client: PoolClient, orderId: string, buyerId:
        ON CONFLICT (order_item_id) DO NOTHING`,
       [item.id, buyerId, item.template_id, item.version_id, item.deployment_mode, instanceLimit, updatesMonths],
     );
+    // The separate installation/configuration package: no entitlement —
+    // it is work for the team, tracked as a service task the buyer can
+    // follow on their order and staff clear from the operations queue.
+    if (item.snapshot_json.installation) {
+      await client.query(
+        "INSERT INTO service_tasks (order_id, buyer_id, kind) VALUES ($1, $2, 'installation')",
+        [orderId, buyerId],
+      );
+    }
     // Hosted purchase that already chose its domain at checkout: create
     // the site right away so the buyer just logs in and it runs.
     // Best-effort by design \u2014 a name lost in the meantime (or any other
@@ -259,7 +300,7 @@ export async function fulfillOrder(client: PoolClient, orderId: string, buyerId:
       if (entitlementId) {
         await client.query('SAVEPOINT auto_site');
         try {
-          await createSiteInTx(client, {
+          const created = await createSiteInTx(client, {
             ownerId: buyerId,
             entitlementId,
             displayName: siteRequest.display_name,
@@ -271,11 +312,26 @@ export async function fulfillOrder(client: PoolClient, orderId: string, buyerId:
             via: 'checkout',
           });
           await client.query('RELEASE SAVEPOINT auto_site');
+          if (item.snapshot_json.domain_fee_paid) {
+            await applyDomainPaidPeriod(client, created.siteId, siteRequest.domain_interval ?? 'once');
+          }
         } catch {
           await client.query('ROLLBACK TO SAVEPOINT auto_site');
           await client.query('RELEASE SAVEPOINT auto_site');
         }
       }
+    }
+  }
+  // An order with no items is the standalone domain package: extend the
+  // named site's paid-through horizon by the bought period.
+  if (items.rows.length === 0) {
+    const q = await client.query<{ snapshot_json: { kind?: string; site_id?: string; site_request?: SiteRequest } }>(
+      'SELECT q.snapshot_json FROM quotes q JOIN orders o ON o.quote_id = q.id WHERE o.id = $1',
+      [orderId],
+    );
+    const qs = q.rows[0]?.snapshot_json;
+    if (qs?.kind === 'domain_package' && qs.site_id) {
+      await applyDomainPaidPeriod(client, qs.site_id, qs.site_request?.domain_interval ?? 'once');
     }
   }
   await client.query("UPDATE orders SET status = 'paid', paid_at = now(), row_version = row_version + 1 WHERE id = $1", [orderId]);
@@ -468,14 +524,36 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   }
 
   // POST /quotes — backend prices the plan; the quote is bound to the buyer and expires.
-  app.post<{ Body: { plan_id: string; template_id: string; site_request?: { subdomain: string; display_name: string; locale?: 'vi' | 'en' } } }>(
+  app.post<{ Body: { plan_id: string; template_id: string; billing_interval?: 'monthly' | 'yearly'; installation?: boolean; upgrade_entitlement_id?: string; site_request?: { subdomain: string; display_name: string; locale?: 'vi' | 'en'; domain_interval?: 'monthly' | 'yearly' } } }>(
     '/quotes',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] } } } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] }, domain_interval: { enum: ['monthly', 'yearly'] } } }, billing_interval: { enum: ['monthly', 'yearly'] }, installation: { type: 'boolean' }, upgrade_entitlement_id: { type: 'string', pattern: UUID.source } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const found = await loadPlanForPurchase(request.body.template_id, request.body.plan_id);
       if (!found) throw errors.notFound();
-      const charge = computeCharge(found.plan);
+      // Packages stay separate (owner rule): the web itself, hosting
+      // (monthly OR yearly at the buyer's choice), the domain, and the
+      // installation service are distinct lines — never silently bundled.
+      let upgradeEntitlementId: string | null = null;
+      if (request.body.upgrade_entitlement_id) {
+        // Standalone hosting: only for a web the buyer already owns, and
+        // only against that template's hosted plan.
+        if (found.plan.deployment_mode !== 'hosted') throw errors.validation([{ field: 'upgrade_entitlement_id', code: 'hosted_only' }]);
+        const ent = await db.query<{ user_id: string; template_id: string; mode: string; status: string }>(
+          'SELECT user_id, template_id, mode, status FROM entitlements WHERE id = $1',
+          [request.body.upgrade_entitlement_id],
+        );
+        const e = ent.rows[0];
+        if (!e || e.user_id !== auth.userId || e.template_id !== request.body.template_id || e.mode !== 'selfhost' || e.status !== 'active') {
+          throw errors.validation([{ field: 'upgrade_entitlement_id', code: 'invalid' }]);
+        }
+        upgradeEntitlementId = request.body.upgrade_entitlement_id;
+      }
+      const billingInterval = request.body.billing_interval;
+      if (billingInterval && found.plan.deployment_mode !== 'hosted') {
+        throw errors.validation([{ field: 'billing_interval', code: 'hosted_only' }]);
+      }
+      const charge = computeCharge(found.plan, billingInterval);
       const lines: QuoteLine[] = [...charge.lines];
       let subtotal = charge.subtotal;
       // Hosted buyers may choose their subdomain while buying (owner rule
@@ -511,12 +589,31 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
             }
           }
         });
-        const feeRaw = (await getSetting(db, 'subdomain.fee').catch(() => null)) as { amount_minor?: number | null; period?: string } | null;
-        if (feeRaw && typeof feeRaw.amount_minor === 'number' && feeRaw.amount_minor > 0) {
-          const fee = BigInt(Math.trunc(feeRaw.amount_minor));
-          lines.push({ label: 'subdomain_fee', interval: feeRaw.period === 'monthly' ? 'monthly' : 'one_time', amount_minor: fee.toString() });
-          subtotal += fee;
+        const feeRaw = (await getSetting(db, 'subdomain.fee').catch(() => null)) as SubdomainFeeSetting | null;
+        // The domain is its own package: one-time when the owner priced
+        // it once; otherwise the buyer picks monthly or yearly (yearly
+        // only exists when the owner set a yearly amount — prices are
+        // never invented here).
+        const feePart = domainFeeLine(feeRaw, request.body.site_request.domain_interval === 'yearly');
+        siteRequest.domain_interval = feePart ? feePart.interval : 'once';
+        if (feePart) {
+          lines.push(feePart.line);
+          subtotal += BigInt(feePart.line.amount_minor);
         }
+      }
+      // The installation/configuration service package: optional,
+      // separate, owner-priced in its own settings — added only when
+      // the buyer explicitly opts in.
+      let installation = false;
+      if (request.body.installation) {
+        const svc = (await getSetting(db, 'service.installation').catch(() => null)) as { enabled?: boolean; amount_minor?: number } | null;
+        if (!svc?.enabled || typeof svc.amount_minor !== 'number' || svc.amount_minor <= 0) {
+          throw errors.validation([{ field: 'installation', code: 'unavailable' }]);
+        }
+        const amt = BigInt(Math.trunc(svc.amount_minor));
+        lines.push({ label: 'installation_service', interval: 'one_time', amount_minor: amt.toString() });
+        subtotal += amt;
+        installation = true;
       }
       const snapshot = {
         template_id: request.body.template_id,
@@ -528,6 +625,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         lines,
         limits: found.plan.limits,
         ...(siteRequest ? { site_request: siteRequest } : {}),
+        ...(billingInterval ? { billing_interval: billingInterval } : {}),
+        ...(installation ? { installation: true } : {}),
+        ...(upgradeEntitlementId ? { upgrade_entitlement_id: upgradeEntitlementId } : {}),
       };
       const { rows } = await db.query<{ id: string; expires_at: Date }>(
         `INSERT INTO quotes (buyer_id, currency, subtotal_minor, total_minor, snapshot_json, expires_at)
@@ -545,6 +645,59 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           line_items: lines,
           deployment_mode: found.plan.deployment_mode,
           site_request: siteRequest,
+          billing_interval: billingInterval ?? null,
+          installation,
+          upgrade_entitlement_id: upgradeEntitlementId,
+          expires_at: rows[0]!.expires_at.toISOString(),
+        },
+      });
+    },
+  );
+
+  // The domain package on its own: a buyer whose site already exists
+  // (created in the wizard, or bought without a name) buys/renews just
+  // the name. The quote is a single fee line against that site; the
+  // order carries no template item, and fulfilment extends the site's
+  // domain_paid_until by the bought period.
+  app.post<{ Body: { site_id: string; domain_interval?: 'monthly' | 'yearly' } }>(
+    '/quotes/domain-package',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['site_id'], properties: { site_id: { type: 'string', pattern: UUID.source }, domain_interval: { enum: ['monthly', 'yearly'] } } } } },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      const siteRes = await db.query<{ id: string; owner_id: string; subdomain: string; display_name: string }>(
+        'SELECT id, owner_id, subdomain, display_name FROM sites WHERE id = $1',
+        [request.body.site_id],
+      );
+      const site = siteRes.rows[0];
+      if (!site || site.owner_id !== auth.userId) throw errors.notFound();
+      const feeRaw = (await getSetting(db, 'subdomain.fee').catch(() => null)) as SubdomainFeeSetting | null;
+      const feePart = domainFeeLine(feeRaw, request.body.domain_interval === 'yearly');
+      if (!feePart) throw errors.conflict('domain.fee_unset');
+      const lines: QuoteLine[] = [feePart.line];
+      const subtotal = BigInt(feePart.line.amount_minor);
+      const snapshot = {
+        kind: 'domain_package',
+        site_id: site.id,
+        plan_name: { vi: 'Gói tên miền', en: 'Domain package' },
+        deployment_mode: 'hosted',
+        lines,
+        limits: {},
+        site_request: { subdomain: site.subdomain, display_name: site.display_name, locale: 'vi' as const, domain_interval: feePart.interval },
+      };
+      const { rows } = await db.query<{ id: string; expires_at: Date }>(
+        `INSERT INTO quotes (buyer_id, currency, subtotal_minor, total_minor, snapshot_json, expires_at)
+         VALUES ($1, $2, $3, $3, $4::jsonb, now() + make_interval(mins => $5)) RETURNING id, expires_at`,
+        [auth.userId, config.currency, subtotal.toString(), JSON.stringify(snapshot), QUOTE_TTL_MINUTES],
+      );
+      return reply.status(201).send({
+        data: {
+          id: rows[0]!.id,
+          currency: config.currency,
+          subtotal_minor: subtotal.toString(),
+          total_minor: subtotal.toString(),
+          line_items: lines,
+          deployment_mode: 'hosted',
+          site_request: snapshot.site_request,
           expires_at: rows[0]!.expires_at.toISOString(),
         },
       });
@@ -554,7 +707,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Params: { id: string } }>('/quotes/:id', async (request) => {
     const auth = requireUser(request);
     assertId(request.params.id);
-    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string>; site_request?: SiteRequest }; expires_at: Date }>(
+    const { rows } = await db.query<{ buyer_id: string | null; currency: string; subtotal_minor: string; discount_minor: string; tax_minor: string; total_minor: string; snapshot_json: { lines: QuoteLine[]; deployment_mode: string; plan_name: Record<string, string>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean }; expires_at: Date }>(
       'SELECT buyer_id, currency, subtotal_minor::text, discount_minor::text, tax_minor::text, total_minor::text, snapshot_json, expires_at FROM quotes WHERE id = $1',
       [request.params.id],
     );
@@ -571,6 +724,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         line_items: q.snapshot_json.lines,
         deployment_mode: q.snapshot_json.deployment_mode,
         site_request: q.snapshot_json.site_request ?? null,
+        billing_interval: q.snapshot_json.billing_interval ?? null,
+        installation: q.snapshot_json.installation ?? false,
         plan_name: q.snapshot_json.plan_name,
         expires_at: q.expires_at.toISOString(),
         expired: q.expires_at <= new Date(),
@@ -599,24 +754,29 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           if (!q || q.buyer_id !== auth.userId) throw errors.notFound();
           if (q.expired) throw errors.conflict('quote.expired');
           if (request.body.terms_version !== currentTerms) throw errors.conflict('terms.version_stale');
-          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest };
+          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean; kind?: string; lines?: QuoteLine[] };
           const order = await client.query<{ id: string }>(
             `INSERT INTO orders (buyer_id, quote_id, currency, subtotal_minor, total_minor, locale, terms_version, payment_window_expires_at)
              VALUES ($1, $2, $3, $4, $4, $5, $6, now() + make_interval(mins => $7)) RETURNING id`,
             [auth.userId, q.id, q.currency, q.total_minor, request.locale, request.body.terms_version, config.paymentWindowMinutes],
           );
           const orderId = order.rows[0]!.id;
-          await client.query(
-            `INSERT INTO order_items (order_id, template_id, version_id, plan_id, deployment_mode, unit_price_minor, snapshot_json)
-             VALUES ($1, $2, $3, $4, $5, $6, $7)`,
-            [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, q.total_minor, { plan_name: snap.plan_name, updates_months: (snap.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number }).instance_limit ?? 1, ...(snap.site_request ? { site_request: snap.site_request } : {}) }],
-          );
+          // The standalone domain package has no template item: the
+          // order is a single fee line against an existing site, and
+          // fulfilment extends that site's domain paid period instead.
+          if (snap.kind !== 'domain_package') {
+            await client.query(
+              `INSERT INTO order_items (order_id, template_id, version_id, plan_id, deployment_mode, unit_price_minor, snapshot_json)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+              [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, q.total_minor, { plan_name: snap.plan_name, updates_months: (snap.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number }).instance_limit ?? 1, ...(snap.site_request ? { site_request: snap.site_request } : {}), ...(snap.billing_interval ? { billing_interval: snap.billing_interval } : {}), ...(snap.installation ? { installation: true } : {}), ...(snap.lines?.some((l) => l.label === 'subdomain_fee') ? { domain_fee_paid: true } : {}) }],
+            );
+          }
           // The chosen name stays the buyer's while late settlement is
           // still plausible: stretch their hold to 24h from the order.
           // The order itself still auto-expires at its payment window;
           // an admin confirmation inside this horizon revives it and
           // fulfilment claims the name then.
-          if (snap.site_request) {
+          if (snap.site_request && snap.kind !== 'domain_package') {
             await client.query(
               "UPDATE subdomain_reservations SET expires_at = GREATEST(expires_at, now() + interval '24 hours') WHERE subdomain = $1 AND user_id = $2 AND status = 'active'",
               [snap.site_request.subdomain, auth.userId],
@@ -658,6 +818,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const o = rows[0];
     if (!o || o.buyer_id !== auth.userId) throw errors.notFound();
     const items = await db.query('SELECT template_id, version_id, plan_id, deployment_mode, unit_price_minor::text, snapshot_json FROM order_items WHERE order_id = $1', [o.id]);
+    const svcTask = await db.query<{ status: string }>("SELECT status FROM service_tasks WHERE order_id = $1 AND kind = 'installation' ORDER BY created_at LIMIT 1", [o.id]);
     return {
       data: {
         id: o.id,
@@ -669,6 +830,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         total_minor: o.total_minor,
         terms_version: o.terms_version,
         items: items.rows,
+        installation_status: svcTask.rows[0]?.status ?? null,
         paid_at: o.paid_at?.toISOString() ?? null,
         payment_window_expires_at: o.payment_window_expires_at?.toISOString() ?? null,
         created_at: o.created_at.toISOString(),

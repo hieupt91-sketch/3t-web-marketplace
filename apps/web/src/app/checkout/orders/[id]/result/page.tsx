@@ -8,7 +8,7 @@ import { Alert, ErrorState, Loading, StatusBadge } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
-interface Order { id: string; payment_status: string; items?: { snapshot_json?: { site_request?: { subdomain: string; display_name: string } } }[] }
+interface Order { id: string; payment_status: string; installation_status?: string | null; items?: { snapshot_json?: { site_request?: { subdomain: string; display_name: string } } }[] }
 
 function Result() {
   const { t } = useT();
@@ -31,6 +31,9 @@ function Result() {
           <p>{t('ui.checkout.result_site', { domain: `${order.items.find((i) => i.snapshot_json?.site_request)?.snapshot_json?.site_request?.subdomain}.webmaket.com` })}</p>
           <p><Link className="button" href="/account/sites">{t('ui.account.nav.sites')}</Link></p>
         </Alert>
+      ) : null}
+      {paid && order.installation_status ? (
+        <Alert tone="info"><p>{order.installation_status === 'done' ? t('ui.checkout.result_installation_done') : t('ui.checkout.result_installation_pending')}</p></Alert>
       ) : null}
       {paid ? null : order.payment_status === 'needs_reconciliation' ? (
         <Alert tone="warning"><p>{t('ui.checkout.reconciliation_body')}</p></Alert>

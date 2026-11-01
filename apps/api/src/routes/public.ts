@@ -204,11 +204,17 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
       messenger: contactRaw.messenger?.trim() || null,
       email: contactRaw.email?.trim() || null,
     };
-    const feeRow = await db.query<{ value_json: { amount_minor?: number | null; period?: string } }>("SELECT value_json FROM settings WHERE key = 'subdomain.fee'");
+    const feeRow = await db.query<{ value_json: { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null } }>("SELECT value_json FROM settings WHERE key = 'subdomain.fee'");
+    const svcRow = await db.query<{ value_json: { enabled?: boolean; amount_minor?: number | null } }>("SELECT value_json FROM settings WHERE key = 'service.installation'");
     const feeRaw = feeRow.rows[0]?.value_json;
     const subdomain_fee = feeRaw
-      ? { amount_minor: typeof feeRaw.amount_minor === 'number' ? feeRaw.amount_minor : null, period: feeRaw.period === 'monthly' ? 'monthly' : 'once' }
+      ? { amount_minor: typeof feeRaw.amount_minor === 'number' ? feeRaw.amount_minor : null, period: feeRaw.period === 'monthly' ? 'monthly' : 'once', amount_yearly_minor: typeof feeRaw.amount_yearly_minor === 'number' ? feeRaw.amount_yearly_minor : null }
       : null;
+    const svcRaw = svcRow.rows[0]?.value_json;
+    const installation_service = {
+      available: svcRaw?.enabled === true && typeof svcRaw.amount_minor === 'number' && svcRaw.amount_minor > 0,
+      amount_minor: svcRaw?.enabled === true && typeof svcRaw.amount_minor === 'number' ? svcRaw.amount_minor : null,
+    };
     const payRow = await db.query<{ value_json: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.bank_transfer'");
     const payRaw = payRow.rows[0]?.value_json;
     const bank_transfer_enabled = payRaw?.enabled === true
@@ -248,6 +254,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         terms_version: terms.rows[0]?.value_json.current ?? null,
         contact,
         subdomain_fee,
+        installation_service,
         payment: { bank_transfer: bank_transfer_enabled, vnpay: vnpay_enabled, momo: momo_enabled, paypal: paypal_enabled, usd_transfer: usd_enabled },
         ads,
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),

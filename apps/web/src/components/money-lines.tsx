@@ -21,7 +21,7 @@ export function MoneyLines({ quote, locale }: { quote: QuoteLike; locale: Locale
     <dl className="details">
       {quote.line_items.map((line, i) => (
         <div key={i} style={{ display: 'contents' }}>
-          <dt>{line.label === 'subdomain_fee' ? t('ui.checkout.subdomain_fee_line') : lineLabel(line.interval)}</dt>
+          <dt>{line.label === 'subdomain_fee' ? t('ui.checkout.subdomain_fee_line') : line.label === 'installation_service' ? t('ui.checkout.installation_line') : lineLabel(line.interval)}</dt>
           <dd className="tabular">{m(line.amount_minor)}</dd>
         </div>
       ))}

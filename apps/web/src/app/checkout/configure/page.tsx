@@ -12,7 +12,7 @@ import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface Plan { id: string; code: string; deployment_mode: string; name: Record<string, string>; prices: { interval: string; amount_minor: string; currency: string }[] }
 interface Template { id: string; slug: string; title: string; adapter: string | null; plans: Plan[] }
-interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string } | null }
+interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string; amount_yearly_minor?: number | null } | null; installation_service?: { available: boolean; amount_minor: number | null } }
 interface SubCheck { available: boolean; reason: string | null; held_by_you?: boolean; reservation_expires_at?: string }
 
 type HoldState =
@@ -27,6 +27,7 @@ function Configure() {
   const router = useRouter();
   const params = useSearchParams();
   const slug = params.get('template') ?? '';
+  const upgrade = params.get('upgrade') ?? '';
   const [tpl, setTpl] = useState<Template | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
   const [selected, setSelected] = useState<string>('');
@@ -41,13 +42,19 @@ function Configure() {
   const [hold, setHold] = useState<HoldState | null>(null);
   const [heldName, setHeldName] = useState('');
   const [holdBusy, setHoldBusy] = useState(false);
+  // Split packages: hosting period, domain period and the separate
+  // installation service are the buyer's own choices (owner prices only).
+  const [billingInterval, setBillingInterval] = useState<'monthly' | 'yearly'>('monthly');
+  const [domainInterval, setDomainInterval] = useState<'monthly' | 'yearly'>('monthly');
+  const [installation, setInstallation] = useState(false);
 
   useEffect(() => {
     if (!slug) return;
     void api<Template>(`/templates/${encodeURIComponent(slug)}?locale=${locale}`).then((res) => {
       if (res.ok) {
         setTpl(res.data);
-        setSelected(res.data.plans[0]?.id ?? '');
+        const upgradePlan = upgrade ? res.data.plans.find((pl) => pl.deployment_mode === 'hosted') : undefined;
+        setSelected(upgradePlan?.id ?? res.data.plans[0]?.id ?? '');
         setDisplayName((prev) => prev || res.data.title);
       } else setError(res.error);
     });
@@ -105,20 +112,38 @@ function Configure() {
 
   const firstCharge = (p: Plan) => p.prices.find((x) => x.interval === 'one_time') ?? p.prices[0];
   const plan = tpl.plans.find((p) => p.id === selected) ?? null;
+  const monthlyPrice = plan?.prices.find((x) => x.interval === 'monthly');
+  const yearlyPrice = plan?.prices.find((x) => x.interval === 'yearly');
+  const hasBothPeriods = Boolean(monthlyPrice && yearlyPrice);
+  const chosenRecurring = billingInterval === 'yearly' && yearlyPrice ? yearlyPrice : (monthlyPrice ?? yearlyPrice);
   const isHosted = plan?.deployment_mode === 'hosted';
   const name = subdomain.trim().toLowerCase();
   const nameReady = !isHosted || skipName || (hold?.kind === 'held_you' && heldName === name && name !== '');
   const baseDomain = config?.site_base_domain ?? 'webmaket.com';
-  const fee = config?.subdomain_fee && config.subdomain_fee.amount_minor !== null
-    ? formatMoney({ amount_minor: String(config.subdomain_fee.amount_minor), currency: config.currency ?? 'VND' }, locale)
+  const feeSetting = config?.subdomain_fee ?? null;
+  const currency = config?.currency ?? 'VND';
+  const feeMonthly = feeSetting && feeSetting.amount_minor !== null
+    ? formatMoney({ amount_minor: String(feeSetting.amount_minor), currency }, locale)
+    : null;
+  const feeYearly = feeSetting && typeof feeSetting.amount_yearly_minor === 'number'
+    ? formatMoney({ amount_minor: String(feeSetting.amount_yearly_minor), currency }, locale)
+    : null;
+  const feeHasYearly = feeSetting?.period === 'monthly' && feeYearly !== null;
+  const fee = feeHasYearly && domainInterval === 'yearly' ? feeYearly : feeMonthly;
+  const svc = config?.installation_service;
+  const svcPrice = svc?.available && svc.amount_minor !== null && svc.amount_minor !== undefined
+    ? formatMoney({ amount_minor: String(svc.amount_minor), currency }, locale)
     : null;
 
   async function continueToReview() {
     if (!tpl || !selected) return;
     setBusy(true); setError(null);
     const body: Record<string, unknown> = { template_id: tpl.id, plan_id: selected };
+    if (isHosted && hasBothPeriods) body.billing_interval = billingInterval;
+    if (isHosted && upgrade) body.upgrade_entitlement_id = upgrade;
+    if (installation && svcPrice) body.installation = true;
     if (isHosted && !skipName) {
-      body.site_request = { subdomain: name, display_name: displayName.trim() || tpl!.title, locale };
+      body.site_request = { subdomain: name, display_name: displayName.trim() || tpl!.title, locale, ...(feeHasYearly ? { domain_interval: domainInterval } : {}) };
     }
     const res = await api<{ id: string }>('/quotes', { method: 'POST', body });
     setBusy(false);
@@ -142,10 +167,11 @@ function Configure() {
         )}
       </p>
       {error ? <ErrorState error={error} /> : null}
+      {upgrade ? <Alert tone="info"><p>{t('ui.checkout.upgrade_note')}</p></Alert> : null}
       <fieldset className="stack" style={{ border: 0, padding: 0, margin: 0 }}>
         <legend className="field"><strong>{t('ui.checkout.choose_plan')}</strong></legend>
         {tpl.plans.map((p) => {
-          const price = firstCharge(p);
+          const price = p.deployment_mode === 'hosted' && p.id === selected && chosenRecurring ? chosenRecurring : firstCharge(p);
           return (
             <label key={p.id} className="card row" style={{ justifyContent: 'space-between', cursor: 'pointer' }}>
               <span className="row">
@@ -157,6 +183,19 @@ function Configure() {
           );
         })}
       </fieldset>
+      {isHosted && hasBothPeriods ? (
+        <div className="card stack">
+          <strong>{t('ui.checkout.billing_label')}</strong>
+          <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
+            <input type="radio" name="billing" checked={billingInterval === 'monthly'} onChange={() => setBillingInterval('monthly')} />
+            <span>{t('ui.checkout.billing_monthly')} · <span className="tabular">{monthlyPrice ? formatMoney(monthlyPrice, locale) : ''}</span></span>
+          </label>
+          <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
+            <input type="radio" name="billing" checked={billingInterval === 'yearly'} onChange={() => setBillingInterval('yearly')} />
+            <span>{t('ui.checkout.billing_yearly')} · <span className="tabular">{yearlyPrice ? formatMoney(yearlyPrice, locale) : ''}</span></span>
+          </label>
+        </div>
+      ) : null}
       {(() => {
         if (!plan || plan.deployment_mode !== 'selfhost') return null;
         const runtime = tpl.adapter === 'node-http' || tpl.adapter === 'next-standalone';
@@ -207,10 +246,31 @@ function Configure() {
                             : t('ui.sites.subdomain_invalid')}
                   </p>
                 ) : null}
-                {fee ? <p className="muted" style={{ margin: 0 }}>{t('ui.setup.subdomain_fee', { fee, period: config?.subdomain_fee?.period === 'monthly' ? t('ui.setup.fee_monthly') : t('ui.setup.fee_once') })}</p> : null}
+                {feeHasYearly ? (
+                  <div className="stack">
+                    <strong>{t('ui.checkout.domain_billing_label')}</strong>
+                    <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                      <input type="radio" name="domain-billing" checked={domainInterval === 'monthly'} onChange={() => setDomainInterval('monthly')} />
+                      <span>{t('ui.checkout.billing_monthly')} · <span className="tabular">{feeMonthly}</span></span>
+                    </label>
+                    <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
+                      <input type="radio" name="domain-billing" checked={domainInterval === 'yearly'} onChange={() => setDomainInterval('yearly')} />
+                      <span>{t('ui.checkout.billing_yearly')} · <span className="tabular">{feeYearly}</span></span>
+                    </label>
+                  </div>
+                ) : fee ? <p className="muted" style={{ margin: 0 }}>{t('ui.setup.subdomain_fee', { fee, period: feeSetting?.period === 'monthly' ? t('ui.setup.fee_monthly') : t('ui.setup.fee_once') })}</p> : null}
               </div>
             </>
           ) : null}
+        </div>
+      ) : null}
+      {svcPrice ? (
+        <div className="card stack">
+          <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
+            <input type="checkbox" checked={installation} onChange={(e) => setInstallation(e.target.checked)} />
+            <span><strong>{t('ui.checkout.installation_title')}</strong> · <span className="tabular">{svcPrice}</span></span>
+          </label>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.installation_body')}</p>
         </div>
       ) : null}
       <div className="row">

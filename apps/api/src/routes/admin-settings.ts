@@ -85,9 +85,66 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  app.get('/settings/installation-service', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const { rows } = await db.query<{ value_json: { enabled?: boolean; amount_minor?: number | null } }>(
+      "SELECT value_json FROM settings WHERE key = 'service.installation'",
+    );
+    const raw = rows[0]?.value_json ?? {};
+    return {
+      data: {
+        enabled: raw.enabled === true,
+        amount_minor: typeof raw.amount_minor === 'number' ? raw.amount_minor : null,
+      },
+    };
+  });
+
+  app.post<{ Body: { enabled?: boolean; amount_minor?: number | null } }>(
+    '/settings/installation-service',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            amount_minor: { type: ['integer', 'null'] },
+          },
+        },
+      },
+    },
+    async (request) => {
+      const auth = requirePermission(request, 'settings:manage');
+      const enabled = request.body.enabled === true;
+      const amount = request.body.amount_minor ?? null;
+      if (amount !== null && (!Number.isInteger(amount) || amount <= 0)) {
+        throw errors.validation([{ field: 'amount_minor', code: 'invalid' }]);
+      }
+      if (enabled && amount === null) {
+        throw errors.validation([{ field: 'amount_minor', code: 'required' }]);
+      }
+      const next = { enabled, amount_minor: amount };
+      await db.query(
+        `INSERT INTO settings (key, value_json) VALUES ('service.installation', $1::jsonb)
+         ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
+        [JSON.stringify(next)],
+      );
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.installation_service_updated',
+        resourceType: 'settings',
+        resourceId: null,
+        traceId: request.id,
+        diff: next,
+      });
+      return { data: next };
+    },
+  );
+
   app.get('/settings/subdomain-fee', async (request) => {
     requirePermission(request, 'settings:manage');
-    const { rows } = await db.query<{ value_json: { amount_minor?: number | null; period?: string } }>(
+    const { rows } = await db.query<{ value_json: { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null } }>(
       "SELECT value_json FROM settings WHERE key = 'subdomain.fee'",
     );
     const raw = rows[0]?.value_json ?? {};
@@ -95,11 +152,12 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
       data: {
         amount_minor: typeof raw.amount_minor === 'number' ? raw.amount_minor : null,
         period: raw.period === 'monthly' ? 'monthly' : 'once',
+        amount_yearly_minor: typeof raw.amount_yearly_minor === 'number' ? raw.amount_yearly_minor : null,
       },
     };
   });
 
-  app.post<{ Body: { amount_minor?: number | null; period?: string } }>(
+  app.post<{ Body: { amount_minor?: number | null; period?: string; amount_yearly_minor?: number | null } }>(
     '/settings/subdomain-fee',
     {
       schema: {
@@ -109,6 +167,7 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
           properties: {
             amount_minor: { type: ['integer', 'null'] },
             period: { enum: ['once', 'monthly'] },
+            amount_yearly_minor: { type: ['integer', 'null'] },
           },
         },
       },
@@ -117,10 +176,14 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
       const auth = requirePermission(request, 'settings:manage');
       const amount = request.body.amount_minor ?? null;
       const period = request.body.period === 'monthly' ? 'monthly' : 'once';
+      const yearly = request.body.amount_yearly_minor ?? null;
       if (amount !== null && (!Number.isInteger(amount) || amount <= 0)) {
         throw errors.validation([{ field: 'amount_minor', code: 'invalid' }]);
       }
-      const next = { amount_minor: amount, period };
+      if (yearly !== null && (!Number.isInteger(yearly) || yearly <= 0)) {
+        throw errors.validation([{ field: 'amount_yearly_minor', code: 'invalid' }]);
+      }
+      const next = { amount_minor: amount, period, amount_yearly_minor: yearly };
       await db.query(
         `INSERT INTO settings (key, value_json) VALUES ('subdomain.fee', $1::jsonb)
          ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
@@ -137,7 +200,7 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
         // already saved, so the UI reported failure for a successful save.)
         resourceId: null,
         traceId: request.id,
-        diff: { amount_minor: amount, period },
+        diff: { amount_minor: amount, period, amount_yearly_minor: yearly },
       });
       return reply.status(200).send({ data: next });
     },

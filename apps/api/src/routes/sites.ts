@@ -1,5 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
+import { readFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { lookup, resolveTxt } from 'node:dns/promises';
 import { domainToASCII } from 'node:url';
@@ -448,6 +450,29 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   // under their own entitlement; the platform never calls the site's
   // admin and never touches another tenant's directory. Restores are
   // step-up + name-confirmed, like whole-tree restores.
+  app.get<{ Params: { id: string } }>('/sites/:id/admin-setup', async (request) => {
+    const auth = requireUser(request);
+    const site = await loadDynamicSite(request.params.id, auth.userId);
+    let token: string | null = null;
+    try {
+      token = (await readFile(join(config.workDir, 'sites', site.id, 'data', 'setup-token.txt'), 'utf8')).trim() || null;
+    } catch {
+      token = null;
+    }
+    const base = siteUrl(site, config.siteOriginTemplate)?.replace(/\/$/, '') ?? null;
+    if (token) {
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.admin_setup_viewed', resourceType: 'site', resourceId: site.id, traceId: request.id });
+    }
+    return {
+      data: {
+        setup_pending: token !== null,
+        setup_url: base ? `${base}/admin/setup` : null,
+        login_url: base ? `${base}/admin` : null,
+        token,
+      },
+    };
+  });
+
   async function loadDynamicSite(siteId: string, userId: string): Promise<SiteView> {
     const site = await loadSiteForUser(db, siteId, userId, true);
     const version = await db.query<{ adapter: string; manifest_json: { capabilities?: string[] } }>(

@@ -121,6 +121,41 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
     },
   );
 
+  // Service tasks (migration 0032): work a paid service package creates
+  // for the team — today the installation/configuration package. Staff
+  // work the queue here; the buyer follows the status on their order.
+  app.get<{ Querystring: { status?: string } }>('/service-tasks', async (request) => {
+    requirePermission(request, 'ops:read');
+    const status = request.query.status === 'done' ? 'done' : 'pending';
+    const { rows } = await db.query(
+      `SELECT st.id, st.order_id, st.kind, st.status, st.created_at, st.completed_at,
+              u.email_normalized AS buyer_email, o.total_minor::text AS order_total_minor, o.currency
+       FROM service_tasks st
+       JOIN users u ON u.id = st.buyer_id
+       JOIN orders o ON o.id = st.order_id
+       WHERE st.status = $1
+       ORDER BY st.created_at ASC
+       LIMIT 200`,
+      [status],
+    );
+    return { data: rows, page: { next_cursor: null, has_more: false } };
+  });
+
+  app.post<{ Params: { id: string } }>('/service-tasks/:id/complete', async (request) => {
+    const auth = requirePermission(request, 'site:operate');
+    assertId(request.params.id);
+    const done = await tx(db, async (client) => {
+      const { rows } = await client.query<{ id: string; status: string }>('SELECT id, status FROM service_tasks WHERE id = $1 FOR UPDATE', [request.params.id]);
+      const task = rows[0];
+      if (!task) throw errors.notFound();
+      if (task.status !== 'pending') throw errors.conflict('service_task.not_pending');
+      await client.query("UPDATE service_tasks SET status = 'done', completed_at = now(), completed_by = $2 WHERE id = $1", [task.id, auth.userId]);
+      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'service_task.completed', resourceType: 'service_task', resourceId: task.id, traceId: request.id });
+      return task.id;
+    });
+    return { data: { id: done, status: 'done' } };
+  });
+
   // Staff refund queue.
   app.get<{ Querystring: { status?: string } }>('/refunds', async (request) => {
     requirePermission(request, 'payment:read');
