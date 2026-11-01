@@ -45,6 +45,8 @@ const NAV: Record<'account' | 'partner', NavItem[]> = {
     { href: '/partner/links', labelKey: 'ui.partner.links' },
     { href: '/partner/orders', labelKey: 'ui.partner.orders' },
     { href: '/partner/commissions', labelKey: 'ui.partner.commissions' },
+    { href: '/partner/wallet', labelKey: 'ui.partner.wallet' },
+    { href: '/partner/prices', labelKey: 'ui.partner.prices' },
     { href: '/partner/payouts', labelKey: 'ui.partner.payouts' },
     { href: '/partner/api-keys', labelKey: 'ui.partner.api_keys' },
     { href: '/partner/webhooks', labelKey: 'ui.partner.webhooks' },

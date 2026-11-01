@@ -173,3 +173,32 @@ Delivery at-least-once; 2xx xác nhận, retry đề xuất 1 phút/5 phút/30 p
 - Key revoke/suspend chặn tạo đơn mới nhưng site đã mua vẫn chạy theo subscription.
 - Refund một phần/full và sau payout đều đối soát được net commission.
 - CTV chọn `en`, buyer checkout/email/portal có locale đúng; price currency vẫn VND nếu chưa mở tiền khác.
+
+## 11. Mô hình ví đại lý (reseller wallet, v28 — chủ sàn chốt 2026-11-01)
+
+Song song mô hình hoa hồng giới thiệu ở trên, CTV có thể bán trực tiếp theo
+kiểu đại lý nạp tiền trước:
+
+- **Giá vốn = giá bán lẻ niêm yết của sàn trừ % cắt** trong chính sách CTV
+  (`partner_policies.reseller_discount_bps`, chủ sàn/người có quyền
+  `partner:manage` cài; mặc định bằng mức hoa hồng mẫu 10%).
+- **Giá bán do CTV tự đặt** cho từng gói (`partner_prices`), tự do chỉnh
+  sửa bất cứ lúc nào; không đặt thì bán theo giá niêm yết. Sàn không thu
+  tiền của khách cuối trong luồng này — CTV tự thu theo giá của họ.
+- **Ví cá nhân của CTV** (`partner_wallets` + sổ `partner_wallet_entries`
+  append-only): CTV tạo mã nạp `WT…` và chuyển khoản ngân hàng ghi đúng
+  mã; webhook ngân hàng (SePay/Casso/hub) cộng tiền vào ví tự động theo
+  số tiền thực nhận. Chưa có hub thì nhân viên xác nhận tay ở trang ví
+  của CTV trong admin. Nhân viên điều chỉnh số dư bằng bút toán có lý do,
+  không sửa lịch sử.
+- **Bán qua API** `POST /partner/v1/wallet-sales` (scope `wallet:sale`):
+  khai email người mua (phải là tài khoản đã xác minh), hệ thống khóa
+  giá tại thời điểm bán, **trừ tiền vốn vào ví ngay**, rồi chốt đơn qua
+  đúng pipeline thanh toán thường (provider `partner_wallet`) để cấp
+  quyền/tạo web cho người mua. Số dư không đủ → từ chối 422, không tạo
+  đơn. `external_reference` chống bán trùng: gọi lại cùng mã trả cùng
+  đơn, không trừ hai lần. Chốt đơn lỗi → tự hoàn tiền vốn vào ví và hủy
+  đơn. Đơn bán qua ví **không** cộng thêm hoa hồng giới thiệu — % cắt
+  chính là lợi ích của CTV.
+- CTV xem ví, lịch sử và giá bán tại `/partner/wallet` và
+  `/partner/prices`; admin xem ví từng CTV tại `/admin/partners/<id>`.

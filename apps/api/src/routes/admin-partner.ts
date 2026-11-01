@@ -1,5 +1,6 @@
 import type { FastifyInstance } from 'fastify';
-import { writeAudit } from '@3t/core';
+import { tx, writeAudit } from '@3t/core';
+import { creditWallet, debitWallet, walletBalance } from '../lib/partner-wallet.ts';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
@@ -129,4 +130,103 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
     if (rowCount === 0) throw errors.conflict('payout.not_active');
     return reply.status(200).send({ data: { id: request.params.id, status: 'failed' } });
   });
+
+  // --- Partner wallet oversight (docs/06 §11) ---
+  app.get<{ Params: { id: string } }>('/partners/:id/wallet', async (request) => {
+    requirePermission(request, 'partner:read');
+    if (!UUID.test(request.params.id)) throw errors.notFound();
+    const balance = await walletBalance(db, request.params.id);
+    const entries = await db.query(
+      'SELECT id, kind, amount_minor::text, balance_after_minor::text, note, created_at FROM partner_wallet_entries WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 100',
+      [request.params.id],
+    );
+    const topups = await db.query(
+      'SELECT id, amount_minor::text, paid_amount_minor::text, code, status, created_at, paid_at FROM partner_topups WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [request.params.id],
+    );
+    const sales = await db.query(
+      'SELECT id, order_id, external_reference, listed_minor::text, cut_bps, cost_minor::text, price_minor::text, status, created_at FROM partner_wallet_sales WHERE partner_id = $1 ORDER BY created_at DESC LIMIT 50',
+      [request.params.id],
+    );
+    return { data: { balance_minor: balance.toString(), entries: entries.rows, topups: topups.rows, sales: sales.rows } };
+  });
+
+  // Staff confirms a top-up that arrived without a hub webhook (the
+  // no-hub fallback, same as manual payment confirmation).
+  app.post<{ Params: { id: string; topupId: string } }>('/partners/:id/wallet/topups/:topupId/confirm', async (request, reply) => {
+    const auth = requirePermission(request, 'partner:manage');
+    if (!UUID.test(request.params.id) || !UUID.test(request.params.topupId)) throw errors.notFound();
+    const result = await tx(db, async (client) => {
+      const topup = await client.query<{ id: string; partner_id: string; amount_minor: string; code: string }>(
+        "SELECT id, partner_id, amount_minor::text, code FROM partner_topups WHERE id = $1 AND partner_id = $2 AND status = 'pending' FOR UPDATE",
+        [request.params.topupId, request.params.id],
+      );
+      if (!topup.rows[0]) return null;
+      const t = topup.rows[0]!;
+      await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = amount_minor, paid_at = now() WHERE id = $1", [t.id]);
+      const balance = await creditWallet(client, t.partner_id, BigInt(t.amount_minor), 'topup', 'partner_topup', t.id, `manual:${t.code}`);
+      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'partner.wallet_topup_confirmed', resourceType: 'partner_topup', resourceId: t.id, traceId: request.id });
+      return { id: t.id, status: 'paid', balance_minor: balance.toString() };
+    });
+    if (!result) throw errors.conflict('topup.not_pending');
+    return reply.status(200).send({ data: result });
+  });
+
+  // Staff wallet adjustment: a ledger entry with a reason, never an edit.
+  app.post<{ Params: { id: string }; Body: { amount_minor: string; note: string } }>(
+    '/partners/:id/wallet/adjust',
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['amount_minor', 'note'], properties: { amount_minor: { type: 'string', pattern: '^-?[0-9]+$' }, note: { type: 'string', minLength: 3, maxLength: 500 } } } } },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'partner:manage');
+      if (!UUID.test(request.params.id)) throw errors.notFound();
+      const amount = BigInt(request.body.amount_minor);
+      if (amount === 0n) throw errors.validation([{ field: 'amount_minor', code: 'must_be_nonzero' }]);
+      const result = await tx(db, async (client) => {
+        const partner = await client.query<{ id: string }>('SELECT id FROM partner_accounts WHERE id = $1', [request.params.id]);
+        if (!partner.rows[0]) return null;
+        let balance: bigint;
+        if (amount > 0n) {
+          balance = await creditWallet(client, request.params.id, amount, 'adjustment', 'admin', null, request.body.note);
+        } else {
+          const debit = await debitWallet(client, request.params.id, -amount, 'adjustment', 'admin', null, request.body.note);
+          if (!debit.ok) throw errors.validation([{ field: 'amount_minor', code: 'partner.insufficient_balance' }]);
+          balance = debit.balance;
+        }
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'partner.wallet_adjusted', resourceType: 'partner', resourceId: request.params.id, traceId: request.id });
+        return { balance_minor: balance.toString() };
+      });
+      if (!result) throw errors.notFound();
+      return reply.status(200).send({ data: result });
+    },
+  );
+
+  // Partner policies: commission rate + the reseller wallet cut.
+  app.get('/partner-policies', async (request) => {
+    requirePermission(request, 'partner:read');
+    const { rows } = await db.query(
+      'SELECT id, code, rate_bps, reseller_discount_bps, hold_days, payout_min_minor::text, applies_to, active FROM partner_policies ORDER BY created_at',
+    );
+    return { data: rows };
+  });
+
+  app.post<{ Params: { id: string }; Body: { rate_bps?: number; reseller_discount_bps?: number; hold_days?: number; payout_min_minor?: string } }>(
+    '/partner-policies/:id',
+    { schema: { body: { type: 'object', additionalProperties: false, properties: { rate_bps: { type: 'integer', minimum: 0, maximum: 10000 }, reseller_discount_bps: { type: 'integer', minimum: 0, maximum: 9000 }, hold_days: { type: 'integer', minimum: 0, maximum: 365 }, payout_min_minor: { type: 'string', pattern: '^[0-9]+$' } } } } },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'partner:manage');
+      if (!UUID.test(request.params.id)) throw errors.notFound();
+      const { rows } = await db.query<{ id: string }>(
+        `UPDATE partner_policies SET
+           rate_bps = COALESCE($2, rate_bps),
+           reseller_discount_bps = COALESCE($3, reseller_discount_bps),
+           hold_days = COALESCE($4, hold_days),
+           payout_min_minor = COALESCE($5::bigint, payout_min_minor)
+         WHERE id = $1 RETURNING id`,
+        [request.params.id, request.body.rate_bps ?? null, request.body.reseller_discount_bps ?? null, request.body.hold_days ?? null, request.body.payout_min_minor ?? null],
+      );
+      if (!rows[0]) throw errors.notFound();
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'partner.policy_updated', resourceType: 'partner_policy', resourceId: request.params.id, traceId: request.id });
+      return reply.status(200).send({ data: { id: request.params.id, updated: true } });
+    },
+  );
 }

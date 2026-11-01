@@ -29,6 +29,7 @@ import {
 import { requireUser } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
 import { accrueOrderCommission, reverseOrderCommission } from '../lib/partner-ledger.ts';
+import { creditWallet } from '../lib/partner-wallet.ts';
 import { RESERVED_SUBDOMAINS, SUBDOMAIN_RE, createSiteInTx, currentHold } from '../site-create.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
@@ -474,6 +475,22 @@ export async function processPaymentEvent(db: Db, provider: string, rawBody: str
     );
     const pa = attempt.rows[0];
     if (!pa) {
+      // Partner wallet top-ups ride the same bank webhooks: the WT content
+      // code names a pending topup, and the received amount credits the
+      // partner's wallet directly (docs/06 §11).
+      if (provider === 'bank_transfer' && event.status === 'settled' && BigInt(event.amountMinor) > 0n) {
+        const topup = await client.query<{ id: string; partner_id: string }>(
+          "SELECT id, partner_id FROM partner_topups WHERE code = $1 AND status = 'pending' FOR UPDATE",
+          [event.providerRef],
+        );
+        if (topup.rows[0]) {
+          const t = topup.rows[0]!;
+          await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = $2, paid_at = now() WHERE id = $1", [t.id, event.amountMinor]);
+          await creditWallet(client, t.partner_id, BigInt(event.amountMinor), 'topup', 'partner_topup', t.id, event.providerRef);
+          await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
+          return 'processed';
+        }
+      }
       await client.query("UPDATE payment_events SET processing_status = 'ignored' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
       return 'ignored';
     }

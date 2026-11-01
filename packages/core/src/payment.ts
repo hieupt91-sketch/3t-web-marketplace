@@ -293,8 +293,8 @@ export class BankTransferProvider implements PaymentProvider {
     if (typeof parsed.transferType === 'string' && parsed.transferType !== 'in') return ignored;
     const content = typeof parsed.content === 'string' ? parsed.content : '';
     let code = typeof parsed.code === 'string' ? parsed.code.trim().toUpperCase() : '';
-    if (!/^WM[0-9A-F]{10}$/.test(code)) {
-      const found = content.toUpperCase().match(/WM[0-9A-F]{10}/);
+    if (!/^(?:WM|WT)[0-9A-F]{10}$/.test(code)) {
+      const found = content.toUpperCase().match(/(?:WM|WT)[0-9A-F]{10}/);
       code = found ? found[0] : '';
     }
     if (!code) return ignored;
@@ -370,7 +370,7 @@ export class CassoHubProvider {
     // Only incoming money settles: Casso reports withdrawals as negative amounts.
     if (!Number.isFinite(rawAmount) || rawAmount <= 0) return ignored;
     const description = typeof tx.description === 'string' ? tx.description : '';
-    const found = description.toUpperCase().match(/WM[0-9A-F]{10}/);
+    const found = description.toUpperCase().match(/(?:WM|WT)[0-9A-F]{10}/);
     if (!found) return ignored;
     const when = typeof tx.when === 'string' ? new Date(tx.when.replace(' ', 'T')) : new Date();
     return {
