@@ -58,6 +58,41 @@ export interface PlatformConfig {
   partnerWebhookKey: string;
   /** Server-side key encrypting stored MFA TOTP secrets at rest. */
   mfaKey: string;
+  /**
+   * Sandbox Phase 0 (audit C-01) — UID fencing for spawned template code.
+   * 'auto' (default): per-site UIDs are used when the spawning process runs
+   * as root (the production worker container does) and disabled with a loud
+   * startup warning otherwise (dev machines, CI). 'on': refuse to run
+   * without root. 'off': never fence (explicit operator choice).
+   */
+  sandboxUidMode: 'auto' | 'on' | 'off';
+  /** First UID of the per-site pool; site slots are allocated from here. */
+  siteUidBase: number;
+  /** Number of UIDs in the per-site pool (deploy images create these users). */
+  siteUidPoolSize: number;
+  /** Shared primary GID for every sandbox user (sites, demo, import check). */
+  siteGid: number;
+  /** One shared UID for all demo-session processes (demos hold no tenant data). */
+  demoUid: number;
+  /** One shared UID for import-pipeline runtime checks (throwaway workspaces). */
+  importUid: number;
+  /** prlimit caps applied to every spawned site/demo/import-check server. */
+  siteLimitCpuSeconds: number;
+  /**
+   * Address-space cap (RLIMIT_AS via prlimit --as). NOT a small number:
+   * a Node 22 server's VmPeak at idle is ~11.6 GiB (V8 pointer-compression
+   * + Wasm cage reservations), so a cap near the heap size stops the
+   * server from booting at all — measured in the show env: 6 GiB dies in
+   * undici's Wasm instantiation, 16 GiB is healthy. 32 GiB leaves real
+   * headroom while still bounding virtual-memory runaway. Physical RSS
+   * containment is NOT achievable with rlimits (RLIMIT_RSS is a no-op on
+   * Linux) — that is the Phase 1 runner's cgroup/watchdog job.
+   */
+  siteLimitAddressSpaceMb: number;
+  siteLimitMaxProcesses: number;
+  siteLimitFileSizeMb: number;
+  /** How long the API waits for the worker to spawn a demo session server. */
+  demoSpawnWaitMs: number;
 }
 
 function env(name: string, fallback?: string): string {
@@ -65,6 +100,12 @@ function env(name: string, fallback?: string): string {
   if (value !== undefined && value !== '') return value;
   if (fallback !== undefined) return fallback;
   throw new Error(`Missing required environment variable ${name}`);
+}
+
+function sandboxUidMode(): 'auto' | 'on' | 'off' {
+  const value = env('SANDBOX_UID_MODE', 'auto');
+  if (value !== 'auto' && value !== 'on' && value !== 'off') throw new Error('SANDBOX_UID_MODE must be auto|on|off');
+  return value;
 }
 
 export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformConfig {
@@ -101,6 +142,17 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     partnerWebhookAllowLoopback: env('PARTNER_WEBHOOK_ALLOW_LOOPBACK', 'false') === 'true' && mode !== 'production',
     partnerWebhookKey: env('PARTNER_WEBHOOK_KEY', mode === 'production' ? undefined : 'dev-partner-webhook-key'),
     mfaKey: env('MFA_KEY', mode === 'production' ? undefined : 'dev-mfa-key'),
+    sandboxUidMode: sandboxUidMode(),
+    siteUidBase: Number(env('SITE_UID_BASE', '20000')),
+    siteUidPoolSize: Number(env('SITE_UID_POOL_SIZE', '500')),
+    siteGid: Number(env('SITE_GID', '19990')),
+    demoUid: Number(env('DEMO_UID', '19998')),
+    importUid: Number(env('IMPORT_UID', '19999')),
+    siteLimitCpuSeconds: Number(env('SITE_LIMIT_CPU_SECONDS', '86400')),
+    siteLimitAddressSpaceMb: Number(env('SITE_LIMIT_ADDRESS_SPACE_MB', '32768')),
+    siteLimitMaxProcesses: Number(env('SITE_LIMIT_MAX_PROCESSES', '256')),
+    siteLimitFileSizeMb: Number(env('SITE_LIMIT_FILE_SIZE_MB', '1024')),
+    demoSpawnWaitMs: Number(env('DEMO_SPAWN_WAIT_MS', '30000')),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');

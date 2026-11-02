@@ -21,6 +21,23 @@ const SERVE_DIR = join(dirname(fileURLToPath(import.meta.url)), 'serve-dir.mjs')
  */
 export type AgentAction = 'restart' | 'suspend' | 'resume';
 
+/** prlimit caps for a spawned template server (sandbox Phase 0, audit C-01). */
+export interface SiteLimits {
+  cpuSeconds: number;
+  addressSpaceMb: number;
+  maxProcesses: number;
+  fileSizeMb: number;
+}
+
+export function siteLimitsOf(config: PlatformConfig): SiteLimits {
+  return {
+    cpuSeconds: config.siteLimitCpuSeconds,
+    addressSpaceMb: config.siteLimitAddressSpaceMb,
+    maxProcesses: config.siteLimitMaxProcesses,
+    fileSizeMb: config.siteLimitFileSizeMb,
+  };
+}
+
 export interface SpawnSpec {
   kind: 'static' | 'runtime';
   dir: string;
@@ -28,6 +45,20 @@ export interface SpawnSpec {
   start?: string[];
   healthPath: string;
   env?: Record<string, string>;
+  /**
+   * Sandbox Phase 0: run the child under this UID/GID instead of the
+   * worker's own. Only honoured when the worker runs as root (production);
+   * the sandbox module resolves these and passes none when fencing is off.
+   * A different UID is what actually closes the C-01 holes: /proc/<pid>/
+   * environ of the platform processes is ptrace-gated by UID, and the
+   * fenced site tree (0700, owned by this UID) blocks cross-tenant reads.
+   */
+  uid?: number;
+  gid?: number;
+  /** prlimit caps applied to the child at spawn. */
+  limits?: SiteLimits;
+  /** The child's own writable tree (its data/): exported as HOME + TMPDIR. */
+  writableDir?: string;
 }
 
 export function killPid(pid: number | null | undefined): void {
@@ -69,15 +100,78 @@ async function freePort(): Promise<number> {
   });
 }
 
+const PRLIMIT = '/usr/bin/prlimit';
+let prlimitAvailable: boolean | null = null;
+
+/** Pure argv construction for the prlimit wrapper (unit-tested). */
+export function prlimitArgs(limits: SiteLimits): string[] {
+  return [
+    `--cpu=${limits.cpuSeconds}`,
+    `--as=${limits.addressSpaceMb * 1024 * 1024}`,
+    `--nproc=${limits.maxProcesses}`,
+    `--fsize=${limits.fileSizeMb * 1024 * 1024}`,
+  ];
+}
+
+export function buildLimitedArgv(argv: string[], limits: SiteLimits, available: boolean): { argv: string[]; applied: boolean } {
+  if (!available) return { argv, applied: false };
+  // prlimit sets the limits and then execs the program, so the wrapped
+  // process keeps the same pid the caller records.
+  return { argv: [PRLIMIT, ...prlimitArgs(limits), '--', ...argv], applied: true };
+}
+
+export function wrapWithLimits(argv: string[], limits: SiteLimits): { argv: string[]; applied: boolean } {
+  if (prlimitAvailable === null) prlimitAvailable = existsSync(PRLIMIT);
+  return buildLimitedArgv(argv, limits, prlimitAvailable);
+}
+
+/**
+ * The child's environment is an ALLOWLIST, never a copy of the worker's:
+ * platform secrets (DATABASE_URL, MFA_KEY, …) must never reach template
+ * code through env (regression-locked by test; the /proc route is closed
+ * separately by the UID split). Only PATH/NODE_ENV/PORT/HOST, the child's
+ * own HOME/TMPDIR inside its writable tree, and the manifest's declared
+ * `scope:'public'` variables (spec.env) are passed.
+ */
+export function buildChildEnv(config: PlatformConfig, spec: SpawnSpec, port: number): Record<string, string> {
+  const env: Record<string, string> = {
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    NODE_ENV: 'production',
+    PORT: String(port),
+    HOST: config.runtimeBindHost,
+  };
+  if (spec.writableDir) {
+    env.HOME = spec.writableDir;
+    env.TMPDIR = join(spec.writableDir, '.tmp');
+  }
+  return { ...env, ...(spec.env ?? {}) };
+}
+
 /** Spawn a site server and wait for health. Throws on failure (caller rolls back). */
-export async function spawnServer(config: PlatformConfig, spec: SpawnSpec): Promise<{ port: number; pid: number }> {
+export async function spawnServer(config: PlatformConfig, spec: SpawnSpec): Promise<{ port: number; pid: number; limitsApplied: boolean; uidApplied: boolean }> {
   const port = await freePort();
-  const argv = spec.kind === 'static' ? [process.execPath, SERVE_DIR, spec.dir] : spec.start!;
+  const rawArgv = spec.kind === 'static' ? [process.execPath, SERVE_DIR, spec.dir] : spec.start!;
+  let argv = rawArgv;
+  let limitsApplied = false;
+  if (spec.limits) {
+    const wrapped = wrapWithLimits(rawArgv, spec.limits);
+    argv = wrapped.argv;
+    limitsApplied = wrapped.applied;
+    if (!limitsApplied) console.warn(JSON.stringify({ event: 'sandbox_prlimit_missing', path: PRLIMIT }));
+  }
+  // setuid spawn is only possible (and only attempted) when the worker
+  // itself runs as root; the sandbox module never hands out a UID in any
+  // other mode, so a spec.uid here always pairs with a root worker.
+  const uidApplied = spec.uid !== undefined && (process.getuid?.() ?? -1) === 0;
+  if (spec.uid !== undefined && !uidApplied) {
+    console.warn(JSON.stringify({ event: 'sandbox_uid_not_applied', uid: spec.uid, euid: process.getuid?.() }));
+  }
   const proc: ChildProcess = spawn(argv[0]!, argv.slice(1), {
     cwd: spec.dir,
-    env: { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production', PORT: String(port), HOST: config.runtimeBindHost, ...(spec.env ?? {}) },
+    env: buildChildEnv(config, spec, port),
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
+    ...(uidApplied ? { uid: spec.uid, gid: spec.gid } : {}),
   });
   proc.stdout?.on('data', () => undefined);
   proc.stderr?.on('data', () => undefined);
@@ -91,7 +185,7 @@ export async function spawnServer(config: PlatformConfig, spec: SpawnSpec): Prom
     killPid(proc.pid ?? null);
     throw new Error(`site server failed health at ${spec.healthPath}`);
   }
-  return { port, pid: proc.pid ?? 0 };
+  return { port, pid: proc.pid ?? 0, limitsApplied, uidApplied };
 }
 
 /** Atomically swap a site directory: new tree in, old tree kept until success. */

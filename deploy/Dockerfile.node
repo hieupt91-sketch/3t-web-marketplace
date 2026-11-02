@@ -6,6 +6,26 @@
 FROM node:22-bookworm-slim
 WORKDIR /app
 RUN corepack enable
+# Sandbox Phase 0 (audit C-01): the worker spawns template code under
+# per-site UIDs (setuid works because the container still runs as root;
+# the platform services' own non-root hardening is a separate milestone
+# that must land AFTER spawn privilege moves to the Phase 1 runner).
+# - util-linux provides prlimit for the spawn resource caps (the slim
+#   base image does not ship it; the executor/spawn code degrades
+#   silently without it, which must not happen in production).
+# - the sitepool users are the UID fence targets: sitedemo (19998) for
+#   demo sessions, siteimport (19999) for import runtime checks, and
+#   site20000..site20499 for customer sites (matching SITE_UID_BASE=20000
+#   / SITE_UID_POOL_SIZE=500 / SITE_GID=19990 in @3t/core config). They
+#   exist so spawned processes resolve a passwd entry; no login is
+#   possible (nologin shell, no password, no home).
+RUN apt-get update \
+ && apt-get install -y --no-install-recommends util-linux \
+ && rm -rf /var/lib/apt/lists/* \
+ && echo 'sitepool:x:19990:' >> /etc/group \
+ && { echo 'sitedemo:x:19998:19990::/nonexistent:/usr/sbin/nologin'; \
+      echo 'siteimport:x:19999:19990::/nonexistent:/usr/sbin/nologin'; \
+      for i in $(seq 20000 20499); do echo "site$i:x:$i:19990::/nonexistent:/usr/sbin/nologin"; done; } >> /etc/passwd
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
 COPY apps/api/package.json apps/api/
 COPY apps/worker/package.json apps/worker/

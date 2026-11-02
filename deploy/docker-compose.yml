@@ -34,8 +34,6 @@ services:
       - API_HOST=0.0.0.0
       - API_PORT=4000
       - PREVIEW_INTERNAL_URL=http://preview:4100
-      # Demo session servers must be reachable by the site-router container.
-      - RUNTIME_BIND_HOST=0.0.0.0
     volumes:
       - appdata:/app/runtime-data
     depends_on:
@@ -93,10 +91,11 @@ services:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
       - SITE_ROUTER_HOST=0.0.0.0
       - SITE_ROUTER_PORT=4200
-      # Site processes live in the worker container, demo session processes
-      # in the api container; both bind 0.0.0.0 inside the stack (above).
+      # Site AND demo session processes both live in the worker container
+      # (sandbox Phase 0: the API no longer spawns template code); both bind
+      # 0.0.0.0 inside the stack so the site router can reach them.
       - SITE_ROUTER_SITES_HOST=worker
-      - SITE_ROUTER_SESSIONS_HOST=api
+      - SITE_ROUTER_SESSIONS_HOST=worker
     ports:
       - "127.0.0.1:4200:4200"
     depends_on:

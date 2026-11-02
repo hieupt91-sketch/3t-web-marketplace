@@ -1,7 +1,9 @@
 import { randomBytes } from 'node:crypto';
 import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool, enqueueJob, loadConfig } from '@3t/core';
 import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
-import { SITE_JOB_TYPES, runSiteJob, sweepExpiredReservations } from './site-jobs.ts';
+import { SITE_JOB_TYPES, backfillSandboxFencing, runSiteJob, sweepExpiredReservations } from './site-jobs.ts';
+import { DEMO_JOB_TYPES, runDemoJob } from './demo-jobs.ts';
+import { logSandboxStatus, reapOrphanProcesses } from './sandbox.ts';
 import { expireStalePaymentOrders, refundStuckWalletSales } from './order-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
 
@@ -59,6 +61,21 @@ logLine('started', { screenshots: screenshotter !== null });
   }
 }
 
+// Sandbox Phase 0 (audit C-01): announce the fencing posture before any
+// spawn happens. With SANDBOX_UID_MODE=on this throws when the worker is
+// not root — refusing to run template code unfenced is the point.
+logSandboxStatus(config, logLine);
+
+// Boot backfill: allocate sandbox UIDs + fence the trees of sites that
+// predate Phase 0 (their processes pick the UID up at their boot restart
+// below, or at their next restart/update).
+try {
+  const fenced = await backfillSandboxFencing({ config, db });
+  if (fenced > 0) logLine('sandbox_backfill_done', { sites: fenced });
+} catch (error) {
+  logLine('sandbox_backfill_failed', { error: (error as Error).message });
+}
+
 // Boot sweep: site servers are children of this process and die with it (and
 // with the host). Re-enqueue a restart for every live site so hosted sites
 // come back after a worker/VPS reboot without waiting for a visitor; the
@@ -81,7 +98,7 @@ try {
 }
 let lastReservationSweep = 0;
 while (!stopping) {
-  const job = await claimJob(db, workerId, [IMPORT_JOB_TYPE, ...SITE_JOB_TYPES], LEASE_SECONDS).catch((error: Error) => {
+  const job = await claimJob(db, workerId, [IMPORT_JOB_TYPE, ...SITE_JOB_TYPES, ...DEMO_JOB_TYPES], LEASE_SECONDS).catch((error: Error) => {
     logLine('claim_failed', { error: error.message });
     return null;
   });
@@ -105,6 +122,15 @@ while (!stopping) {
           if (refunded > 0 || reconciled > 0) logLine('wallet_sale_sweep', { refunded, reconciled });
         })
         .catch((error: Error) => logLine('wallet_sale_sweep_failed', { error: error.message }));
+      // Sandbox Phase 0 reaper: kill processes whose DB record says they
+      // should no longer exist (expired/cancelled demo sessions, purged
+      // sites) — the API's own killPid cannot reach across containers, so
+      // orphaned template processes are collected here.
+      await reapOrphanProcesses(db)
+        .then(({ demos, sites }) => {
+          if (demos > 0 || sites > 0) logLine('orphan_reap', { demos, sites });
+        })
+        .catch((error: Error) => logLine('orphan_reap_failed', { error: error.message }));
     }
     await new Promise((r) => setTimeout(r, 1000));
     continue;
@@ -112,6 +138,7 @@ while (!stopping) {
   logLine('job_claimed', { job_id: job.id, type: job.type, attempt: job.attempts });
   try {
     if (job.type === IMPORT_JOB_TYPE) await runImportJob({ config, db, store, screenshotter }, job);
+    else if ((DEMO_JOB_TYPES as readonly string[]).includes(job.type)) await runDemoJob({ config, db, store }, job);
     else await runSiteJob({ config, db, store }, job);
     logLine('job_finished', { job_id: job.id });
   } catch (error) {

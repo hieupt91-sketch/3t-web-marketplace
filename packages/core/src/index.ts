@@ -13,3 +13,4 @@ export * from './payment.ts';
 export * from './payment-gateways.ts';
 export * from './bundle.ts';
 export * from './dynamic-content.ts';
+export * from './demo.ts';

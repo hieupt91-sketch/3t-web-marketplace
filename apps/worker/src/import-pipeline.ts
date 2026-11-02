@@ -4,6 +4,8 @@ import { get as httpGet } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { runIsolated, runIsolatedOrThrow, ExecutorError } from './executor.ts';
+import { siteLimitsOf, wrapWithLimits } from './runtime-agent.ts';
+import { fenceImportTree } from './sandbox.ts';
 import {
   IMPORT_ERROR_OUTCOME,
   IMPORT_STEPS,
@@ -310,6 +312,11 @@ async function spawnRuntimeServer(deps: PipelineDeps, state: RunState, manifest:
   };
   await chmod(dir, 0o755);
   await makeWritable(dir);
+  await mkdir(join(dir, '.tmp'), { recursive: true });
+  // Sandbox Phase 0 (audit C-01): the runtime check executes untrusted
+  // template code, so it gets the shared import UID + prlimit caps like
+  // every other spawn point; the throwaway tree is handed to that UID.
+  const fenced = await fenceImportTree(deps.config, dir);
   const port = await freePort();
   const start = state.runtimeStart ?? manifest.runtime.start ?? ['node', 'server.js'];
   const env: Record<string, string> = {
@@ -317,11 +324,20 @@ async function spawnRuntimeServer(deps: PipelineDeps, state: RunState, manifest:
     NODE_ENV: 'production',
     PORT: String(port),
     HOST: '127.0.0.1',
+    HOME: dir,
+    TMPDIR: join(dir, '.tmp'),
   };
   for (const item of manifest.env) {
     if (item.scope === 'public' && item.defaultValue !== undefined) env[item.name] = item.defaultValue;
   }
-  const proc = spawn(start[0]!, start.slice(1), { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  const wrapped = wrapWithLimits(start, siteLimitsOf(deps.config));
+  const proc = spawn(wrapped.argv[0]!, wrapped.argv.slice(1), {
+    cwd: dir,
+    env,
+    detached: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+    ...(fenced ? { uid: deps.config.importUid, gid: deps.config.siteGid } : {}),
+  });
   // Drain output so a chatty server cannot block on a full pipe.
   proc.stdout?.on('data', () => undefined);
   proc.stderr?.on('data', () => undefined);

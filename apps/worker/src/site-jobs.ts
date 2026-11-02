@@ -14,7 +14,8 @@ import {
   type LocalObjectStore,
   type PlatformConfig,
 } from '@3t/core';
-import { httpStatus, killPid, spawnServer, writeSiteMeta } from './runtime-agent.ts';
+import { httpStatus, killPid, siteLimitsOf, spawnServer, writeSiteMeta, type SpawnSpec } from './runtime-agent.ts';
+import { allocateSiteUid, fenceSiteTree, sandboxEnabled } from './sandbox.ts';
 
 export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore'] as const;
 
@@ -31,6 +32,7 @@ interface SiteRow {
   runtime_kind: string | null;
   runtime_port: number | null;
   runtime_pid: number | null;
+  runtime_uid: number | null;
 }
 
 interface VersionRow {
@@ -110,14 +112,62 @@ export async function stripDemoCredentials(siteDirPath: string): Promise<void> {
   }
 }
 
+/**
+ * Spawn with the sandbox Phase 0 spec (audit C-01): the site's allocated
+ * UID (allocated on first spawn, then stable), prlimit caps, and the
+ * site's data/ as the child's HOME/TMPDIR. The tree is fenced to the UID
+ * before every spawn — fencing is idempotent, so restarts re-assert it
+ * and an update's freshly swapped tree (root-owned copies, carried data)
+ * is re-owned correctly before the new code ever runs.
+ */
 async function spawnAndRecord(config: PlatformConfig, db: Db, site: SiteRow, version: VersionRow, dir: string): Promise<void> {
-  const spawned = await spawnServer(config, spawnSpec(version, dir));
+  const base = spawnSpec(version, dir);
+  await mkdir(join(dir, 'data', '.tmp'), { recursive: true });
+  const uid = await allocateSiteUid(db, config, site.id);
+  if (uid !== null) await fenceSiteTree(config, dir, uid);
+  const spec: SpawnSpec = {
+    ...base,
+    limits: siteLimitsOf(config),
+    writableDir: join(dir, 'data'),
+    ...(uid !== null ? { uid, gid: config.siteGid } : {}),
+  };
+  const spawned = await spawnServer(config, spec);
   await db.query('UPDATE sites SET runtime_kind = $2, runtime_port = $3, runtime_pid = $4 WHERE id = $1', [
     site.id,
-    spawnSpec(version, dir).kind,
+    base.kind,
     spawned.port,
     spawned.pid,
   ]);
+}
+
+/**
+ * Boot backfill (plan Phase 0 item 2): sites provisioned before sandbox
+ * fencing existed get their UID allocation + tree fencing once, at worker
+ * start. Their running processes keep the old UID until their next
+ * restart, but the fencing itself (0700 data/) takes effect immediately —
+ * and in production those processes run as root, which bypasses the
+ * fencing for the site's own tree only, never for other tenants'.
+ */
+export async function backfillSandboxFencing(deps: { config: PlatformConfig; db: Db }): Promise<number> {
+  const { config, db } = deps;
+  if (!sandboxEnabled(config)) return 0;
+  const { rows } = await db.query<{ id: string }>("SELECT id FROM sites WHERE status IN ('active', 'grace')");
+  let fenced = 0;
+  for (const row of rows) {
+    try {
+      const site = await loadSite(db, row.id);
+      const uid = await allocateSiteUid(db, config, site.id);
+      if (uid === null) continue;
+      const dir = siteDir(config, site.id);
+      if (existsSync(dir)) {
+        await fenceSiteTree(config, dir, uid);
+        fenced++;
+      }
+    } catch (error) {
+      console.log(JSON.stringify({ event: 'sandbox_backfill_site_failed', site_id: row.id, error: (error as Error).message }));
+    }
+  }
+  return fenced;
 }
 
 /**

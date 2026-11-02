@@ -1,11 +1,16 @@
-import { spawn, type ChildProcess } from 'node:child_process';
-import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
-import { chmod } from 'node:fs/promises';
-import { createServer } from 'node:net';
-import { join } from 'node:path';
+import { randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { get as httpGet, request as httpRequest } from 'node:http';
-import { hashToken, previewOrigin, randomToken, writeAudit, type Db, type PlatformConfig } from '@3t/core';
+import {
+  DEMO_ADMIN_PASSWORD,
+  DEMO_ADMIN_USERNAME,
+  enqueueJob,
+  hashToken,
+  previewOrigin,
+  randomToken,
+  writeAudit,
+  type Db,
+  type PlatformConfig,
+} from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 
@@ -27,52 +32,63 @@ interface VersionRow {
   artifact_key: string;
 }
 
-async function freePort(): Promise<number> {
-  return new Promise<number>((resolve, reject) => {
-    const server = createServer();
-    server.once('error', reject);
-    server.listen(0, '127.0.0.1', () => {
-      const port = (server.address() as { port: number }).port;
-      server.close(() => resolve(port));
-    });
+/**
+ * Demo runtime execution lives in the WORKER, never in this process
+ * (sandbox Phase 0, audit C-01): the API used to spawn template code
+ * itself, sharing a process with session auth and every admin route.
+ * The API now records intent as jobs — demo.spawn / demo.stop — and the
+ * worker performs the spawn (shared demo UID, fenced tree, prlimit caps)
+ * and the kill. The site router proxies session traffic to the worker
+ * host, so visitors see no difference.
+ */
+async function enqueueDemoSpawn(db: Db, sessionId: string, expectPid: number | null): Promise<void> {
+  await enqueueJob(db, {
+    type: 'demo.spawn',
+    dedupeKey: `demo.spawn:${sessionId}:${randomBytes(6).toString('hex')}`,
+    payload: { session_id: sessionId, expect_pid: expectPid },
+    resourceType: 'demo_session',
+    resourceId: sessionId,
+    maxAttempts: 1,
   });
 }
 
-function httpStatus(port: number, path: string): Promise<number> {
-  return new Promise((resolve) => {
-    const req = httpGet({ host: '127.0.0.1', port, path, timeout: 3000 }, (res) => {
-      res.resume();
-      res.on('end', () => resolve(res.statusCode ?? 0));
-    });
-    req.on('timeout', () => req.destroy());
-    req.on('error', () => resolve(0));
+async function enqueueDemoStop(db: Db, sessionId: string, pid: number | null): Promise<void> {
+  await enqueueJob(db, {
+    type: 'demo.stop',
+    dedupeKey: `demo.stop:${sessionId}:${randomBytes(6).toString('hex')}`,
+    payload: { session_id: sessionId, pid },
+    resourceType: 'demo_session',
+    resourceId: sessionId,
+    maxAttempts: 1,
   });
-}
-
-function killPid(pid: number | null): void {
-  if (!pid) return;
-  try {
-    process.kill(pid, 'SIGTERM');
-    setTimeout(() => {
-      try {
-        process.kill(pid, 'SIGKILL');
-      } catch {
-        /* already gone */
-      }
-    }, 2000).unref?.();
-  } catch {
-    /* already gone */
-  }
 }
 
 /**
- * Fixed PUBLIC demo credentials for isolated-admin demo sessions (owner
- * request): every visitor of a demo session can log into the template's own
- * admin with this account and edit freely — the session copy is throwaway,
- * so nothing here is a secret and nothing survives the session.
+ * Wait for the worker to publish the spawned session's runtime port. The
+ * worker writes port + pid + demo_admin_ready in one update, so a visible
+ * port means the session is fully ready (admin seeded). A session that
+ * leaves 'active' underneath us means the spawn failed (the worker
+ * cancels it, mirroring the old in-process behaviour), and a timeout
+ * cancels the session rather than leaving a zombie behind.
  */
-export const DEMO_ADMIN_USERNAME = 'admin';
-export const DEMO_ADMIN_PASSWORD = 'Demo1234';
+async function waitForDemoRuntime(db: Db, config: PlatformConfig, sessionId: string): Promise<number> {
+  const deadline = Date.now() + config.demoSpawnWaitMs;
+  for (;;) {
+    const { rows } = await db.query<{ runtime_port: number | null; status: string }>(
+      'SELECT runtime_port, status FROM demo_sessions WHERE id = $1',
+      [sessionId],
+    );
+    const row = rows[0];
+    if (row?.runtime_port) return row.runtime_port;
+    if (!row || row.status !== 'active') throw errors.badRequest('demo.spawn_failed');
+    if (Date.now() > deadline) {
+      await db.query("UPDATE demo_sessions SET status = 'cancelled' WHERE id = $1 AND status = 'active'", [sessionId]);
+      await enqueueDemoStop(db, sessionId, null);
+      throw errors.badRequest('demo.spawn_failed');
+    }
+    await new Promise((r) => setTimeout(r, 200));
+  }
+}
 
 /**
  * Anonymous demo ownership (audit UI-HIGH-01 / code M-04): creating a
@@ -98,105 +114,12 @@ function requireSessionOwner(request: FastifyRequest, row: { owner_token_hash: B
   if (!token || !row.owner_token_hash || !hashToken(token).equals(row.owner_token_hash)) throw errors.notFound();
 }
 
-function httpFormPost(port: number, path: string, fields: Record<string, string>): Promise<{ status: number; setCookie: boolean }> {
-  return new Promise((resolve) => {
-    const body = new URLSearchParams(fields).toString();
-    const req = httpRequest(
-      { host: '127.0.0.1', port, path, method: 'POST', headers: { 'content-type': 'application/x-www-form-urlencoded', 'content-length': Buffer.byteLength(body) }, timeout: 5000 },
-      (res) => {
-        res.resume();
-        res.on('end', () => resolve({ status: res.statusCode ?? 0, setCookie: Boolean(res.headers['set-cookie']?.length) }));
-      },
-    );
-    req.on('timeout', () => req.destroy());
-    req.on('error', () => resolve({ status: 0, setCookie: false }));
-    req.end(body);
-  });
-}
-
-/**
- * Seed the demo admin account into a freshly spawned session copy, using
- * the template family's own first-run setup flow: the app writes a one-time
- * setup token to data/setup-token.txt when it boots without an admin, and
- * POST /admin/setup creates the account. Best effort by design — any
- * mismatch (a different bootstrap, an admin already present) leaves the
- * demo viewable exactly as before, just without a login-able admin.
- */
-async function seedDemoAdmin(
-  deps: { config: PlatformConfig },
-  sessionId: string,
-  version: VersionRow,
-  port: number,
-): Promise<boolean> {
-  try {
-    if (version.manifest_json.demo?.mode !== 'isolatedAdmin') return false;
-    const tokenFile = join(deps.config.workDir, 'demo-sessions', sessionId, 'data', 'setup-token.txt');
-    let token = '';
-    for (let attempt = 0; attempt < 10 && !token; attempt++) {
-      token = (await readFile(tokenFile, 'utf8').catch(() => '')).trim();
-      if (!token) await new Promise((r) => setTimeout(r, 300));
-    }
-    if (!token) return false;
-    const setup = await httpFormPost(port, '/admin/setup', { token, username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD });
-    if (![301, 302, 303].includes(setup.status)) return false;
-    const login = await httpFormPost(port, '/admin/login', { username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD });
-    return [301, 302, 303].includes(login.status) && login.setCookie;
-  } catch {
-    return false;
-  }
-}
-
-/** Spawn a runtime bundle for a demo session (dev/local runtime; see M5 for the agent). */
-async function spawnDemoServer(
-  deps: { db: Db; store: { pathFor: (key: string) => string }; config: PlatformConfig },
-  sessionId: string,
-  version: VersionRow,
-): Promise<{ port: number; pid: number }> {
-  const dir = join(deps.config.workDir, 'demo-sessions', sessionId);
-  await rm(dir, { recursive: true, force: true });
-  await mkdir(dir, { recursive: true });
-  await cp(deps.store.pathFor(version.artifact_key), dir, { recursive: true, dereference: false });
-  const makeWritable = async (d: string): Promise<void> => {
-    for (const entry of await readdir(d, { withFileTypes: true })) {
-      const full = join(d, entry.name);
-      if (entry.isDirectory()) {
-        await chmod(full, 0o755);
-        await makeWritable(full);
-      } else if (entry.isFile()) await chmod(full, 0o644);
-    }
-  };
-  await chmod(dir, 0o755);
-  await makeWritable(dir);
-  const port = await freePort();
-  const start = version.manifest_json.runtime?.start ?? ['node', 'server.js'];
-  const env: Record<string, string> = { PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin', NODE_ENV: 'production', PORT: String(port), HOST: deps.config.runtimeBindHost };
-  for (const item of version.manifest_json.env ?? []) {
-    if (item.scope === 'public' && item.defaultValue !== undefined) env[item.name] = item.defaultValue;
-  }
-  const proc: ChildProcess = spawn(start[0]!, start.slice(1), { cwd: dir, env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  proc.stdout?.on('data', () => undefined);
-  proc.stderr?.on('data', () => undefined);
-  const healthPath = version.manifest_json.runtime?.healthPath ?? '/';
-  let ok = false;
-  for (let attempt = 0; attempt < 20 && !ok; attempt++) {
-    await new Promise((r) => setTimeout(r, 500));
-    if (proc.exitCode !== null) break;
-    ok = (await httpStatus(port, healthPath)) === 200;
-  }
-  if (!ok) {
-    killPid(proc.pid ?? null);
-    throw errors.badRequest('demo.spawn_failed');
-  }
-  return { port, pid: proc.pid ?? 0 };
-}
-
-/** Mark overdue sessions expired and stop their runtime servers (best effort). */
+/** Mark overdue sessions expired; the worker stops their servers (demo.stop jobs + its orphan reaper). */
 async function sweepExpired(db: Db): Promise<void> {
   const { rows } = await db.query<{ id: string; runtime_pid: number | null }>(
-    "SELECT id, runtime_pid FROM demo_sessions WHERE status = 'active' AND expires_at <= now()",
+    "UPDATE demo_sessions SET status = 'expired' WHERE status = 'active' AND expires_at <= now() RETURNING id, runtime_pid",
   );
-  for (const row of rows) killPid(row.runtime_pid);
-  await db.query("UPDATE demo_sessions SET status = 'expired' WHERE status = 'active' AND expires_at <= now()");
+  for (const row of rows) await enqueueDemoStop(db, row.id, row.runtime_pid);
 }
 
 async function loadSession(db: Db, id: string) {
@@ -236,7 +159,7 @@ function sessionUrl(config: PlatformConfig, row: { id?: string; preview_label: s
  * against real accounts (documented in PROJECT_STATUS).
  */
 export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
-  const { db, store, config } = app.deps;
+  const { db, config } = app.deps;
 
   app.post<{ Body: { version_id: string } }>(
     '/demo-sessions',
@@ -258,7 +181,6 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
       const isRuntime = v.adapter === 'node-http' || v.adapter === 'next-standalone';
       let previewLabel: string | null = null;
       let runtimePort: number | null = null;
-      let runtimePid: number | null = null;
       if (!isRuntime) {
         const preview = await db.query<{ host_label: string }>(
           "SELECT host_label FROM previews WHERE version_id = $1 AND status = 'active' ORDER BY created_at DESC LIMIT 1",
@@ -277,21 +199,14 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
         [v.id, previewLabel, ttlHours, hashToken(ownerToken)],
       );
       const sessionId = created.rows[0]!.id;
-      if (isRuntime) {
-        try {
-          const spawned = await spawnDemoServer({ db, store, config }, sessionId, v);
-          runtimePort = spawned.port;
-          runtimePid = spawned.pid;
-          await db.query('UPDATE demo_sessions SET runtime_port = $2, runtime_pid = $3 WHERE id = $1', [sessionId, runtimePort, runtimePid]);
-        } catch (error) {
-          await db.query("UPDATE demo_sessions SET status = 'cancelled' WHERE id = $1", [sessionId]);
-          throw error;
-        }
-      }
       let demoAdminReady = false;
-      if (isRuntime && runtimePort) {
-        demoAdminReady = await seedDemoAdmin({ config }, sessionId, v, runtimePort);
-        if (demoAdminReady) await db.query('UPDATE demo_sessions SET demo_admin_ready = true WHERE id = $1', [sessionId]);
+      if (isRuntime) {
+        // The worker spawns the session server (and seeds its demo admin);
+        // this request waits until the runtime port is published.
+        await enqueueDemoSpawn(db, sessionId, null);
+        runtimePort = await waitForDemoRuntime(db, config, sessionId);
+        const ready = await db.query<{ demo_admin_ready: boolean }>('SELECT demo_admin_ready FROM demo_sessions WHERE id = $1', [sessionId]);
+        demoAdminReady = ready.rows[0]?.demo_admin_ready ?? false;
       }
       const url = sessionUrl(config, { id: sessionId, preview_label: previewLabel, runtime_port: runtimePort });
       if (freshOwnerToken) {
@@ -361,17 +276,17 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
     if (row.status !== 'active') throw errors.conflict('demo.not_active');
     if (row.last_reset_at && Date.now() - row.last_reset_at.getTime() < RESET_COOLDOWN_MS) throw errors.tooMany(30);
     await db.query('UPDATE demo_sessions SET last_reset_at = now() WHERE id = $1', [row.id]);
-    if (row.runtime_port) {
-      killPid((await db.query<{ runtime_pid: number | null }>('SELECT runtime_pid FROM demo_sessions WHERE id = $1', [row.id])).rows[0]!.runtime_pid);
-      const version = await db.query<VersionRow>(
-        `SELECT v.id, v.template_id, v.adapter, v.manifest_json, v.artifact_id, a.object_key AS artifact_key
-         FROM template_versions v JOIN artifacts a ON a.id = v.artifact_id WHERE v.id = $1`,
-        [row.version_id],
+    const pidRow = await db.query<{ runtime_pid: number | null }>('SELECT runtime_pid FROM demo_sessions WHERE id = $1', [row.id]);
+    if (row.runtime_port || pidRow.rows[0]?.runtime_pid) {
+      // Respawn via the worker: blank the port first so the wait below
+      // only completes on the NEW server, and hand the worker the old pid
+      // to stop (expect_pid).
+      await db.query(
+        'UPDATE demo_sessions SET runtime_port = NULL, admin_token_hash = NULL, admin_token_expires_at = NULL, demo_admin_ready = false WHERE id = $1',
+        [row.id],
       );
-      const spawned = await spawnDemoServer({ db, store, config }, row.id, version.rows[0]!);
-      await db.query('UPDATE demo_sessions SET runtime_port = $2, runtime_pid = $3, admin_token_hash = NULL, admin_token_expires_at = NULL WHERE id = $1', [row.id, spawned.port, spawned.pid]);
-      const ready = await seedDemoAdmin({ config }, row.id, version.rows[0]!, spawned.port);
-      await db.query('UPDATE demo_sessions SET demo_admin_ready = $2 WHERE id = $1', [row.id, ready]);
+      await enqueueDemoSpawn(db, row.id, pidRow.rows[0]?.runtime_pid ?? null);
+      await waitForDemoRuntime(db, config, row.id);
     } else {
       await db.query('UPDATE demo_sessions SET admin_token_hash = NULL, admin_token_expires_at = NULL, demo_admin_ready = false WHERE id = $1', [row.id]);
     }
@@ -388,8 +303,8 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
     const row = await db.query<{ runtime_pid: number | null; preview_label: string | null; owner_token_hash: Buffer | null }>('SELECT runtime_pid, preview_label, owner_token_hash FROM demo_sessions WHERE id = $1', [request.params.id]);
     if (!row.rows[0]) throw errors.notFound();
     requireSessionOwner(request, row.rows[0]!);
-    killPid(row.rows[0]!.runtime_pid);
     await db.query("UPDATE demo_sessions SET status = 'cancelled' WHERE id = $1", [request.params.id]);
+    await enqueueDemoStop(db, request.params.id, row.rows[0]!.runtime_pid);
     await writeAudit(db, { actorType: 'user', actorId: null, action: 'demo.cancelled', resourceType: 'demo_session', resourceId: request.params.id, traceId: request.id });
     return { data: { id: request.params.id, status: 'cancelled' } };
     },
@@ -416,8 +331,8 @@ export async function adminDemoRoutes(app: FastifyInstance): Promise<void> {
     assertId(request.params.id);
     const row = await db.query<{ runtime_pid: number | null }>('SELECT runtime_pid FROM demo_sessions WHERE id = $1', [request.params.id]);
     if (!row.rows[0]) throw errors.notFound();
-    killPid(row.rows[0]!.runtime_pid);
     await db.query("UPDATE demo_sessions SET status = 'expired' WHERE id = $1", [request.params.id]);
+    await enqueueDemoStop(db, request.params.id, row.rows[0]!.runtime_pid);
     return { data: { id: request.params.id, status: 'expired' } };
   });
 }
