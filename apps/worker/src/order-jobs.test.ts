@@ -16,7 +16,7 @@ let partnerId: string;
 async function seedSale(opts: { ref: string; orderStatus: string; ageMinutes: number; costPoints?: number }): Promise<{ saleId: string; orderId: string }> {
   const buyer = await db.query<{ id: string }>(
     "INSERT INTO users (email_normalized, display_name, password_hash, verified_at) VALUES ($1, 'Buyer', 'x', now()) RETURNING id",
-    [`sweep-buyer-${opts.ref}@example.com`],
+    [`sweep-buyer-${opts.ref.toLowerCase()}@example.com`],
   );
   const quote = await db.query<{ id: string }>(
     "INSERT INTO quotes (buyer_id, currency, subtotal_minor, total_minor, snapshot_json, expires_at) VALUES ($1, 'VND', 100000, 100000, '{}'::jsonb, now() + interval '1 hour') RETURNING id",
@@ -29,7 +29,7 @@ async function seedSale(opts: { ref: string; orderStatus: string; ageMinutes: nu
   );
   const tpl = await db.query<{ id: string }>(
     "INSERT INTO templates (slug, owner_id, status) VALUES ($1, $2, 'published') RETURNING id",
-    [`sweep-${opts.ref}`, buyer.rows[0]!.id],
+    [`sweep-${opts.ref.toLowerCase()}`, buyer.rows[0]!.id],
   );
   const plan = await db.query<{ id: string }>(
     "INSERT INTO plans (template_id, code, deployment_mode, name_json) VALUES ($1, 'co-ban', 'selfhost', '{\"vi\":\"Cơ bản\"}'::jsonb) RETURNING id",
@@ -64,8 +64,7 @@ beforeAll(async () => {
 }, 120_000);
 
 afterAll(async () => {
-  await db.end();
-  await drop();
+  await drop(); // drop() ends the pool itself
 });
 
 describe('refundStuckWalletSales', () => {

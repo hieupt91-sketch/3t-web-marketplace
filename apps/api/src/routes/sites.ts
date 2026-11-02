@@ -11,6 +11,7 @@ import { enqueueJob, isUniqueViolation, tx, validateDynamicContent, writeAudit }
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { isPublicIp, pinnedRequest } from '../lib/ssrf.ts';
+import { sessionRateLimit } from '../lib/rate-limit.ts';
 import { errors } from '../errors.ts';
 import { RESERVED_SUBDOMAINS as RESERVED, SUBDOMAIN_RE, createSiteInTx, currentHold, enqueueSiteJob } from '../site-create.ts';
 
