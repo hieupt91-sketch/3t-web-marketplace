@@ -96,7 +96,7 @@ export default async function Home({ params }: Params) {
       </div>
       {shelf.body ? <p className="muted" style={{ margin: 0 }}>{shelf.body}</p> : null}
       {shelf.picks.length >= 2 ? (
-        <CategoryMarquee reverse={shelf.reverse} durationSeconds={Math.max(30, shelf.picks.length * 7)}>
+        <CategoryMarquee reverse={shelf.reverse} durationSeconds={Math.max(60, shelf.picks.length * 14)}>
           <div className="marquee__group">{cards(shelf.picks)}</div>
           <div className="marquee__group" aria-hidden="true" inert>
             {cards(shelf.picks)}
@@ -197,7 +197,7 @@ export default async function Home({ params }: Params) {
                   <Link href={`/${locale}/templates?category=${code}`}>{t('ui.home.view_all')}</Link>
                 </div>
                 {shown.length >= 2 ? (
-                  <CategoryMarquee reverse={sectionIndex % 2 === 1} durationSeconds={Math.max(30, shown.length * 7)}>
+                  <CategoryMarquee reverse={sectionIndex % 2 === 1} durationSeconds={Math.max(60, shown.length * 14)}>
                     <div className="marquee__group">{cards(shown)}</div>
                     <div className="marquee__group" aria-hidden="true" inert>
                       {cards(shown)}

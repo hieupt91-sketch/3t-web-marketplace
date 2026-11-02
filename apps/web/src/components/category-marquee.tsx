@@ -40,7 +40,7 @@ export function CategoryMarquee({ children, reverse = false, durationSeconds }: 
     let visible = true;
     let last = performance.now();
     let raf = 0;
-    const speed = 53;
+    const speed = 26;
     const dir = reverse ? -1 : 1;
     // Callers pass a full-loop duration (scaled by item count); the pace
     // is derived from the measured half-width so longer rows do not run
