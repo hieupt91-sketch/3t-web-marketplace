@@ -26,7 +26,7 @@ export function HeroShowcase({ slides }: { slides: HeroSlide[] }) {
     if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
     const id = setInterval(() => {
       if (!paused.current) setActive((i) => (i + 1) % slides.length);
-    }, 4500);
+    }, 7000);
     return () => clearInterval(id);
   }, [slides.length]);
   const current = slides[active] ?? slides[0];
