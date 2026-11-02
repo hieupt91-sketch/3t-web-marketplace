@@ -34,6 +34,31 @@ import { RESERVED_SUBDOMAINS, SUBDOMAIN_RE, createSiteInTx, currentHold } from '
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { sessionRateLimit } from '../lib/rate-limit.ts';
+import { openSettingSecret } from '../lib/secret-store.ts';
+
+/**
+ * Payment settings carry credentials (audit payments M2): the fields
+ * listed here are stored sealed ("enc:v1:…", see secret-store) and opened
+ * here, at the single read path every consumer uses. Merchant
+ * identifiers (tmn_code, partner_code, access_key) and buyer-facing
+ * account details are not signing secrets and stay readable as stored.
+ * Legacy plaintext values open unchanged until the next settings save.
+ */
+const PAYMENT_SECRET_FIELDS: Record<string, string[]> = {
+  'payment.bank_transfer': ['hub_api_key'],
+  'payment.vnpay': ['secret_key'],
+  'payment.momo': ['secret_key'],
+};
+
+async function getPaymentSetting(db: Db, key: string, secretKey: string): Promise<Record<string, unknown> | null> {
+  const raw = (await getSetting(db, key).catch(() => null)) as Record<string, unknown> | null;
+  if (raw) {
+    for (const field of PAYMENT_SECRET_FIELDS[key] ?? []) {
+      if (typeof raw[field] === 'string') raw[field] = openSettingSecret(secretKey, raw[field] as string);
+    }
+  }
+  return raw;
+}
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -60,9 +85,9 @@ export interface BankTransferSettings {
   hub_api_key: string;
 }
 
-export async function loadBankTransferSettings(db: Db): Promise<BankTransferSettings> {
+export async function loadBankTransferSettings(db: Db, secretKey: string): Promise<BankTransferSettings> {
   // A missing settings row means "not configured yet", never a 500 on checkout.
-  const raw = (await getSetting(db, 'payment.bank_transfer').catch(() => null)) as Partial<BankTransferSettings> | null;
+  const raw = (await getPaymentSetting(db, 'payment.bank_transfer', secretKey)) as Partial<BankTransferSettings> | null;
   return {
     enabled: raw?.enabled === true,
     bank_name: typeof raw?.bank_name === 'string' ? raw.bank_name : '',
@@ -86,8 +111,8 @@ export interface VnPaySettings {
   sandbox: boolean;
 }
 
-export async function loadVnPaySettings(db: Db): Promise<VnPaySettings> {
-  const raw = (await getSetting(db, 'payment.vnpay').catch(() => null)) as Partial<VnPaySettings> | null;
+export async function loadVnPaySettings(db: Db, secretKey: string): Promise<VnPaySettings> {
+  const raw = (await getPaymentSetting(db, 'payment.vnpay', secretKey)) as Partial<VnPaySettings> | null;
   return {
     enabled: raw?.enabled === true,
     tmn_code: typeof raw?.tmn_code === 'string' ? raw.tmn_code : '',
@@ -109,8 +134,8 @@ export interface MoMoSettings {
   sandbox: boolean;
 }
 
-export async function loadMoMoSettings(db: Db): Promise<MoMoSettings> {
-  const raw = (await getSetting(db, 'payment.momo').catch(() => null)) as Partial<MoMoSettings> | null;
+export async function loadMoMoSettings(db: Db, secretKey: string): Promise<MoMoSettings> {
+  const raw = (await getPaymentSetting(db, 'payment.momo', secretKey)) as Partial<MoMoSettings> | null;
   return {
     enabled: raw?.enabled === true,
     partner_code: typeof raw?.partner_code === 'string' ? raw.partner_code : '',
@@ -494,22 +519,37 @@ export async function processPaymentEvent(db: Db, provider: string, rawBody: str
       // code names a pending topup, and the received amount credits the
       // partner's wallet directly (docs/06 §11).
       if (provider === 'bank_transfer' && event.status === 'settled' && BigInt(event.amountMinor) > 0n) {
-        const topup = await client.query<{ id: string; partner_id: string }>(
-          "SELECT id, partner_id FROM partner_topups WHERE code = $1 AND status = 'pending' FOR UPDATE",
+        const topup = await client.query<{ id: string; partner_id: string; amount_points: string; paid_amount_minor: string | null }>(
+          "SELECT id, partner_id, amount_points::text, paid_amount_minor::text FROM partner_topups WHERE code = $1 AND status = 'pending' FOR UPDATE",
           [event.providerRef],
         );
         if (topup.rows[0]) {
           const t = topup.rows[0]!;
-          // The wallet runs on points (1 point = 1,000 VND): credit the
-          // whole points received; a sub-point remainder stays visible
-          // in paid_amount_minor for staff to adjust if it ever matters.
-          const points = BigInt(event.amountMinor) / POINT_VND;
-          if (points < 1n) {
-            await client.query("UPDATE payment_events SET processing_status = 'ignored' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
-            return 'ignored';
+          // Top-ups ACCUMULATE (audit payments M1): a bank transfer can
+          // arrive in parts. paid_amount_minor grows with every settled
+          // event; whole points are credited incrementally (never more
+          // than the requested amount_points); the top-up closes only
+          // once the full requested amount has arrived — an underpayment
+          // no longer closes it 'paid' forever, and an overpayment is
+          // capped at the request and flagged for reconciliation instead
+          // of silently minting extra points.
+          const targetMinor = BigInt(t.amount_points) * POINT_VND;
+          const alreadyMinor = BigInt(t.paid_amount_minor ?? '0');
+          const receivedMinor = alreadyMinor + BigInt(event.amountMinor);
+          const creditableMinor = receivedMinor < targetMinor ? receivedMinor : targetMinor;
+          const credit = creditableMinor / POINT_VND - alreadyMinor / POINT_VND;
+          if (credit > 0n) {
+            await creditWallet(client, t.partner_id, credit, 'topup', 'partner_topup', t.id, event.providerRef);
           }
-          await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = $2, paid_at = now() WHERE id = $1", [t.id, event.amountMinor]);
-          await creditWallet(client, t.partner_id, points, 'topup', 'partner_topup', t.id, event.providerRef);
+          if (receivedMinor >= targetMinor) {
+            await client.query("UPDATE partner_topups SET status = 'paid', paid_amount_minor = $2, paid_at = now() WHERE id = $1", [t.id, receivedMinor.toString()]);
+            if (receivedMinor > targetMinor) {
+              await client.query("UPDATE payment_events SET processing_status = 'needs_reconciliation' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
+              return 'needs_reconciliation';
+            }
+          } else {
+            await client.query('UPDATE partner_topups SET paid_amount_minor = $2 WHERE id = $1', [t.id, receivedMinor.toString()]);
+          }
           await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
           return 'processed';
         }
@@ -939,11 +979,11 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     // recorded state, and no new session may be opened on it.
     const stale = await tx(db, async (client) => expireStaleOrder(client, o.id, request.id));
     if (stale) throw errors.conflict('order.payment_expired');
-    const bankSettings = await loadBankTransferSettings(db);
+    const bankSettings = await loadBankTransferSettings(db, config.partnerWebhookKey);
     const bankAvailable = bankTransferAvailable(bankSettings);
-    const vnpaySettings = await loadVnPaySettings(db);
+    const vnpaySettings = await loadVnPaySettings(db, config.partnerWebhookKey);
     const vnpayAvailable = vnPayAvailable(vnpaySettings);
-    const momoSettings = await loadMoMoSettings(db);
+    const momoSettings = await loadMoMoSettings(db, config.partnerWebhookKey);
     const momoAvailable = moMoAvailable(momoSettings);
     const paypalSettings = await loadPayPalSettings(db);
     const paypalAvailable = payPalAvailable(paypalSettings);
@@ -1276,7 +1316,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
   // VNPay IPN (GET or POST): always HTTP 200 with VNPay's own RspCode body.
   async function handleVnPayIpn(params: Record<string, string>, reply: FastifyReply) {
-    const settings = await loadVnPaySettings(db);
+    const settings = await loadVnPaySettings(db, config.partnerWebhookKey);
     if (!vnPayAvailable(settings)) {
       return reply.status(200).send({ RspCode: '01', Message: 'Order not found' });
     }
@@ -1306,7 +1346,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     // Bank transfer hub (SePay-compatible): the provider is configured from
     // admin settings at request time, so rotating the hub key needs no deploy.
     if (providerName === 'bank_transfer') {
-      const settings = await loadBankTransferSettings(db);
+      const settings = await loadBankTransferSettings(db, config.partnerWebhookKey);
       const provider = new BankTransferProvider(settings.hub_api_key, config.portalOrigin);
       let event: NormalizedEvent;
       try {
@@ -1322,7 +1362,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     // by the secure-token header. Events settle through the bank_transfer
     // pipeline; the reply carries success:true for Casso's strict mode.
     if (providerName === 'casso') {
-      const settings = await loadBankTransferSettings(db);
+      const settings = await loadBankTransferSettings(db, config.partnerWebhookKey);
       const provider = new CassoHubProvider(settings.hub_api_key);
       let events: NormalizedEvent[];
       try {
@@ -1344,7 +1384,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     }
     // MoMo IPN: signature-verified, then MoMo expects a bare 204 back.
     if (providerName === 'momo') {
-      const settings = await loadMoMoSettings(db);
+      const settings = await loadMoMoSettings(db, config.partnerWebhookKey);
       if (!moMoAvailable(settings)) throw errors.notFound();
       const provider = new MoMoProvider({ partnerCode: settings.partner_code, accessKey: settings.access_key, secretKey: settings.secret_key, sandbox: settings.sandbox });
       let event: NormalizedEvent;

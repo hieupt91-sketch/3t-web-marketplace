@@ -171,34 +171,60 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
     const status = request.query.status;
     const where = status && ['requested', 'pending', 'confirmed', 'failed', 'rejected'].includes(status) ? 'WHERE r.status = $1' : '';
     const params = where ? [status] : [];
-    const { rows } = await db.query<{ id: string; order_id: string; buyer_id: string; amount_minor: string; currency: string; status: string; reason: string; created_at: Date }>(
-      `SELECT r.id, r.order_id, r.buyer_id, r.amount_minor::text, r.currency, r.status, r.reason, r.created_at
+    const { rows } = await db.query<{ id: string; order_id: string; buyer_id: string; amount_minor: string; currency: string; status: string; reason: string; provider: string; provider_ref: string | null; created_at: Date }>(
+      `SELECT r.id, r.order_id, r.buyer_id, r.amount_minor::text, r.currency, r.status, r.reason, r.provider, r.provider_ref, r.created_at
        FROM refunds r ${where} ORDER BY r.created_at DESC LIMIT 100`,
       params,
     );
-    return { data: rows.map((r) => ({ id: r.id, order_id: r.order_id, buyer_id: r.buyer_id, amount_minor: r.amount_minor, currency: r.currency, status: r.status, reason: r.reason, created_at: r.created_at.toISOString() })), page: { next_cursor: null, has_more: false } };
+    return { data: rows.map((r) => ({ id: r.id, order_id: r.order_id, buyer_id: r.buyer_id, amount_minor: r.amount_minor, currency: r.currency, status: r.status, reason: r.reason, provider: r.provider, provider_ref: r.provider_ref, created_at: r.created_at.toISOString() })), page: { next_cursor: null, has_more: false } };
   });
 
-  // Approve: creates the provider refund reference; settlement still needs a verified event.
-  app.post<{ Params: { id: string } }>('/refunds/:id/approve', async (request) => {
-    const auth = requirePermission(request, 'payment:refund');
-    assertId(request.params.id);
-    const result = await tx(db, async (client) => {
-      const refund = await client.query<{ id: string; order_id: string; status: string }>(
-        'SELECT id, order_id, status FROM refunds WHERE id = $1 FOR UPDATE',
-        [request.params.id],
-      );
-      const r = refund.rows[0];
-      if (!r) throw errors.notFound();
-      if (r.status !== 'requested') throw errors.conflict('refund.not_requested');
-      const providerRef = `mockrefund_${randomUUID()}`;
-      await client.query("UPDATE refunds SET status = 'pending', provider_ref = $2, decided_by = $3, decided_at = now() WHERE id = $1", [r.id, providerRef, auth.userId]);
-      await recomputeOrderRefundStatus(client, r.order_id);
-      await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'refund.approved', resourceType: 'refund', resourceId: r.id, traceId: request.id });
-      return providerRef;
-    });
-    return { data: { id: request.params.id, status: 'pending', provider_ref: result } };
-  });
+  // Approve: records HOW the refund is executed; settlement still needs a
+  // verified event. The refund inherits the provider the order was
+  // actually paid with (audit payments M4): for money that moves outside
+  // the platform (bank transfer, gateways, PayPal, USD wire) staff must
+  // name the external reference of the refund they executed — the bank
+  // transaction id or gateway refund id — instead of the platform
+  // stamping a fabricated mock reference on a real-money refund. Only
+  // internally-settled providers (mock sandbox, partner wallet) get a
+  // generated reference.
+  app.post<{ Params: { id: string }; Body: { evidence_ref?: string } }>(
+    '/refunds/:id/approve',
+    { schema: { body: { type: 'object', additionalProperties: false, properties: { evidence_ref: { type: 'string', maxLength: 200 } } } } },
+    async (request) => {
+      const auth = requirePermission(request, 'payment:refund');
+      assertId(request.params.id);
+      const result = await tx(db, async (client) => {
+        const refund = await client.query<{ id: string; order_id: string; status: string }>(
+          'SELECT id, order_id, status FROM refunds WHERE id = $1 FOR UPDATE',
+          [request.params.id],
+        );
+        const r = refund.rows[0];
+        if (!r) throw errors.notFound();
+        if (r.status !== 'requested') throw errors.conflict('refund.not_requested');
+        const attempt = await client.query<{ provider: string }>(
+          "SELECT provider FROM payment_attempts WHERE order_id = $1 AND status = 'settled' ORDER BY settled_at DESC NULLS LAST, created_at DESC LIMIT 1",
+          [r.order_id],
+        );
+        const provider = attempt.rows[0]?.provider ?? 'mock';
+        let providerRef: string;
+        if (provider === 'mock' || provider === 'partner_wallet') {
+          providerRef = `${provider === 'mock' ? 'mockrefund' : 'walletrefund'}_${randomUUID()}`;
+        } else {
+          const evidence = typeof request.body?.evidence_ref === 'string' ? request.body.evidence_ref.trim() : '';
+          if (evidence.length < 3) throw errors.validation([{ field: 'evidence_ref', code: 'required' }]);
+          const clash = await client.query('SELECT 1 FROM refunds WHERE provider = $1 AND provider_ref = $2', [provider, evidence]);
+          if (clash.rowCount !== 0) throw errors.conflict('refund.evidence_ref_used');
+          providerRef = evidence;
+        }
+        await client.query("UPDATE refunds SET status = 'pending', provider = $2, provider_ref = $3, decided_by = $4, decided_at = now() WHERE id = $1", [r.id, provider, providerRef, auth.userId]);
+        await recomputeOrderRefundStatus(client, r.order_id);
+        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'refund.approved', resourceType: 'refund', resourceId: r.id, traceId: request.id, diff: { provider } });
+        return providerRef;
+      });
+      return { data: { id: request.params.id, status: 'pending', provider_ref: result } };
+    },
+  );
 
   app.post<{ Params: { id: string }; Body: { reason?: string } }>(
     '/refunds/:id/reject',

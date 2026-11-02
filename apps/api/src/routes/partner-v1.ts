@@ -360,8 +360,12 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
             [orderId, request.body.template_id, tpl.rows[0].published_version_id, plan.id, plan.deployment_mode, price.toString(), { plan_name: plan.name, updates_months: (plan.limits as { updates_months?: number }).updates_months ?? null, instance_limit: (plan.limits as { instance_limit?: number }).instance_limit ?? 1, storage_gb: 1 }],
           );
           const sale = await client.query<{ id: string }>(
-            `INSERT INTO partner_wallet_sales (partner_id, order_id, external_reference, buyer_id, plan_id, listed_minor, cut_bps, cost_minor, price_minor, cost_points, price_points)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+            // 'pending' until phase-2 settlement completes it (audit
+            // payments M3): a crash after this debit must not leave a
+            // 'completed' row for an undelivered sale — the worker sweep
+            // refunds stuck pending sales.
+            `INSERT INTO partner_wallet_sales (partner_id, order_id, external_reference, buyer_id, plan_id, listed_minor, cut_bps, cost_minor, price_minor, cost_points, price_points, status)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 'pending') RETURNING id`,
             [partnerId, orderId, request.body.external_reference, buyer.rows[0].id, plan.id, listed.toString(), resolvedCutBps, cost.toString(), price.toString(), costPoints.toString(), pricePoints.toString()],
           );
           const saleId = sale.rows[0]!.id;
@@ -412,6 +416,13 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           });
           throw errors.conflict('partner.sale_failed');
         }
+        // Settlement delivered: only now does the sale become 'completed'
+        // (audit payments M3). If THIS write crashes, the row stays
+        // 'pending' and the worker sweep would refund a delivered sale —
+        // so it runs immediately, in its own transaction, before replying.
+        await tx(db, async (client) => {
+          await client.query("UPDATE partner_wallet_sales SET status = 'completed' WHERE id = $1 AND status = 'pending'", [payload.saleId]);
+        });
       }
       return reply.status(payload.status).send(payload.body);
     },

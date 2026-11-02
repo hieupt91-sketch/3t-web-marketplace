@@ -3,6 +3,7 @@ import { writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 import { requireStepUp } from '../lib/step-up.ts';
+import { sealSettingSecret } from '../lib/secret-store.ts';
 import { loadBankTransferSettings } from './commerce.ts';
 
 export interface ContactChannels {
@@ -432,7 +433,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
 
   app.get('/settings/payment', async (request) => {
     requirePermission(request, 'settings:manage');
-    const s = await loadBankTransferSettings(db);
+    const s = await loadBankTransferSettings(db, config.partnerWebhookKey);
     return {
       data: {
         enabled: s.enabled,
@@ -470,7 +471,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
       // Bank account + hub key decide where customer money lands and
       // which webhook reports settle orders: step-up required (H-02).
       await requireStepUp(db, auth);
-      const current = await loadBankTransferSettings(db);
+      const current = await loadBankTransferSettings(db, config.partnerWebhookKey);
       const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
       const bankBin = clean(request.body.bank_bin).replace(/\s+/g, '');
       if (bankBin !== '' && !/^[0-9]{6}$/.test(bankBin)) {
@@ -496,7 +497,9 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
       await db.query(
         `INSERT INTO settings (key, value_json) VALUES ('payment.bank_transfer', $1::jsonb)
          ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
-        [JSON.stringify(next)],
+        // The hub key is stored sealed (audit payments M2); `next` keeps
+        // the plaintext for the audit comparison + configured flag above.
+        [JSON.stringify({ ...next, hub_api_key: sealSettingSecret(config.partnerWebhookKey, next.hub_api_key) })],
       );
       await writeAudit(db, {
         actorType: 'user',
@@ -537,10 +540,15 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
     return rows[0]?.value_json ?? {};
   }
   async function save(key: string, value: Record<string, unknown>) {
+    // Gateway signing secrets are stored sealed (audit payments M2).
+    // Sealing is idempotent, so a "keep current" save that carries the
+    // stored ciphertext through never double-encrypts it.
+    const sealed = { ...value };
+    if (typeof sealed.secret_key === 'string') sealed.secret_key = sealSettingSecret(config.partnerWebhookKey, sealed.secret_key);
     await db.query(
       `INSERT INTO settings (key, value_json) VALUES ($1, $2::jsonb)
        ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
-      [key, JSON.stringify(value)],
+      [key, JSON.stringify(sealed)],
     );
   }
 

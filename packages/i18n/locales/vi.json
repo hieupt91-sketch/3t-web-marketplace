@@ -154,6 +154,8 @@
   "ui.admin.reconciliation_resolved": "Đã xử lý.",
   "ui.admin.reconciliation_title": "Đối soát thanh toán",
   "ui.admin.refunds_approve": "Duyệt",
+  "ui.admin.refunds_evidence_hint": "Hoàn tiền thật (chuyển khoản/cổng thanh toán): nhập mã giao dịch hoàn tiền đã thực hiện — bắt buộc khi duyệt. Thanh toán thử (mock) thì để trống.",
+  "ui.admin.refunds_evidence_label": "Mã giao dịch hoàn tiền",
   "ui.admin.refunds_decided": "Đã xử lý yêu cầu.",
   "ui.admin.refunds_empty": "Không có yêu cầu hoàn tiền nào.",
   "ui.admin.refunds_reject": "Từ chối",

@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool, enqueueJob, loadConfig } from '@3t/core';
 import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
 import { SITE_JOB_TYPES, runSiteJob, sweepExpiredReservations } from './site-jobs.ts';
-import { expireStalePaymentOrders } from './order-jobs.ts';
+import { expireStalePaymentOrders, refundStuckWalletSales } from './order-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
 
 const config = loadConfig();
@@ -100,6 +100,11 @@ while (!stopping) {
           if (expired > 0) logLine('order_expiry_sweep', { expired });
         })
         .catch((error: Error) => logLine('order_expiry_sweep_failed', { error: error.message }));
+      await refundStuckWalletSales(db)
+        .then(({ refunded, reconciled }) => {
+          if (refunded > 0 || reconciled > 0) logLine('wallet_sale_sweep', { refunded, reconciled });
+        })
+        .catch((error: Error) => logLine('wallet_sale_sweep_failed', { error: error.message }));
     }
     await new Promise((r) => setTimeout(r, 1000));
     continue;

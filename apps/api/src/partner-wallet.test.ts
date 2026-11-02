@@ -179,6 +179,11 @@ describe('partner wallet', () => {
     const entries = await ctx.db.query<{ kind: string; amount_points: string }>(
       "SELECT kind, amount_points::text FROM partner_wallet_entries WHERE partner_id = $1 AND kind = 'sale_deduction'", [partnerId]);
     expect(entries.rows[0]).toMatchObject({ kind: 'sale_deduction', amount_points: '-180' });
+    // Audit payments M3: the sale row is 'pending' during settlement and
+    // only reads 'completed' once phase 2 has delivered.
+    const saleRow = await ctx.db.query<{ status: string }>(
+      "SELECT status FROM partner_wallet_sales WHERE external_reference = 'CTV-ORDER-1'");
+    expect(saleRow.rows[0]!.status).toBe('completed');
   });
 
   it('retrying the same external reference returns the same sale without a second deduction', async () => {
@@ -277,5 +282,47 @@ describe('partner wallet', () => {
     const row2 = (prices2.json().data.plans as { plan_id: string; cost_points: string; cost_source: string }[]).find((x) => x.plan_id === planId)!;
     expect(row2.cost_points).toBe('180');
     expect(row2.cost_source).toBe('policy');
+  });
+
+  it('accumulates a top-up paid in parts, closing only when fully paid (audit payments M1)', async () => {
+    const before = BigInt(await walletBalanceViaApi());
+    const t = await post('/api/v1/partner/wallet/topups', { amount_points: '100' }, partnerCookie);
+    expect(t.statusCode, t.body).toBe(201);
+    const code = t.json().data.code as string;
+    const pay = (id: number, amount: number) => ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/webhooks/bank_transfer',
+      headers: { authorization: `Apikey ${HUB_KEY}` },
+      payload: { id, code, transferType: 'in', transferAmount: amount },
+    });
+    const part = await pay(555100001, 40000);
+    expect(part.json().outcome).toBe('processed');
+    expect(await walletBalanceViaApi()).toBe((before + 40n).toString());
+    const mid = await ctx.db.query<{ status: string; paid_amount_minor: string }>(
+      'SELECT status, paid_amount_minor::text FROM partner_topups WHERE code = $1', [code]);
+    expect(mid.rows[0]).toMatchObject({ status: 'pending', paid_amount_minor: '40000' });
+    const rest = await pay(555100002, 60000);
+    expect(rest.json().outcome).toBe('processed');
+    expect(await walletBalanceViaApi()).toBe((before + 100n).toString());
+    const done = await ctx.db.query<{ status: string }>('SELECT status FROM partner_topups WHERE code = $1', [code]);
+    expect(done.rows[0]!.status).toBe('paid');
+  });
+
+  it('caps an overpaid top-up at the requested points and flags it (audit payments M1)', async () => {
+    const before = BigInt(await walletBalanceViaApi());
+    const t = await post('/api/v1/partner/wallet/topups', { amount_points: '10' }, partnerCookie);
+    expect(t.statusCode, t.body).toBe(201);
+    const code = t.json().data.code as string;
+    const hook = await ctx.app.inject({
+      method: 'POST',
+      url: '/api/v1/payments/webhooks/bank_transfer',
+      headers: { authorization: `Apikey ${HUB_KEY}` },
+      payload: { id: 555100003, code, transferType: 'in', transferAmount: 25000 },
+    });
+    expect(hook.json().outcome).toBe('needs_reconciliation');
+    expect(await walletBalanceViaApi()).toBe((before + 10n).toString()); // never more than requested
+    const row = await ctx.db.query<{ status: string; paid_amount_minor: string }>(
+      'SELECT status, paid_amount_minor::text FROM partner_topups WHERE code = $1', [code]);
+    expect(row.rows[0]).toMatchObject({ status: 'paid', paid_amount_minor: '25000' });
   });
 });

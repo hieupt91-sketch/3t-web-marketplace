@@ -14,6 +14,8 @@ interface RefundRow {
   currency: string;
   status: string;
   reason: string;
+  provider?: string;
+  provider_ref?: string | null;
   created_at: string;
 }
 
@@ -25,6 +27,7 @@ function RefundsInner() {
   const [error, setError] = useState<ApiError | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [done, setDone] = useState(false);
+  const [evidence, setEvidence] = useState<Record<string, string>>({});
 
   const load = useCallback(async () => {
     const res = await api<RefundRow[]>('/admin/refunds');
@@ -35,7 +38,11 @@ function RefundsInner() {
 
   async function decide(id: string, action: 'approve' | 'reject') {
     setBusy(id); setDone(false);
-    const res = await api(`/admin/refunds/${id}/${action}`, { method: 'POST', body: action === 'reject' ? { reason: '' } : {} });
+    // Approving a real-money refund requires the external reference of
+    // the refund transfer staff executed (audit payments M4); the API
+    // rejects an approval without one for non-mock providers.
+    const body = action === 'reject' ? { reason: '' } : { evidence_ref: evidence[id]?.trim() || undefined };
+    const res = await api(`/admin/refunds/${id}/${action}`, { method: 'POST', body });
     setBusy(null);
     if (!res.ok) return setError(res.error);
     setDone(true);
@@ -61,11 +68,23 @@ function RefundsInner() {
               <td>{t(`ui.refund.status.${r.status}`)}</td>
               <td>
                 {r.status === 'requested' ? (
-                  <div className="row">
-                    <button type="button" className="button" disabled={busy === r.id} onClick={() => void decide(r.id, 'approve')}>{t('ui.admin.refunds_approve')}</button>
-                    <button type="button" className="button button--secondary" disabled={busy === r.id} onClick={() => void decide(r.id, 'reject')}>{t('ui.admin.refunds_reject')}</button>
+                  <div className="stack">
+                    <label className="stack">
+                      <span className="muted">{t('ui.admin.refunds_evidence_label')}</span>
+                      <input
+                        type="text"
+                        value={evidence[r.id] ?? ''}
+                        onChange={(e) => setEvidence((prev) => ({ ...prev, [r.id]: e.target.value }))}
+                        placeholder={t('ui.admin.refunds_evidence_label')}
+                      />
+                    </label>
+                    <span className="muted">{t('ui.admin.refunds_evidence_hint')}</span>
+                    <div className="row">
+                      <button type="button" className="button" disabled={busy === r.id} onClick={() => void decide(r.id, 'approve')}>{t('ui.admin.refunds_approve')}</button>
+                      <button type="button" className="button button--secondary" disabled={busy === r.id} onClick={() => void decide(r.id, 'reject')}>{t('ui.admin.refunds_reject')}</button>
+                    </div>
                   </div>
-                ) : <span className="muted">{r.reason || '—'} · {dt(r.created_at)}</span>}
+                ) : <span className="muted">{r.reason || '—'} · {dt(r.created_at)}{r.provider_ref ? <> · <span className="mono">{r.provider_ref}</span></> : null}</span>}
               </td>
             </tr>
           ))}</tbody>

@@ -264,6 +264,14 @@ describe('6. bank transfer payment settings', () => {
     const pub = await get('/api/v1/config/public');
     expect(pub.json().data.payment.bank_transfer).toBe(true);
   });
+
+  it('stores the hub key sealed at rest, never plaintext (audit payments M2)', async () => {
+    const { rows } = await ctx.db.query<{ value_json: { hub_api_key: string } }>(
+      "SELECT value_json FROM settings WHERE key = 'payment.bank_transfer'");
+    const stored = rows[0]!.value_json.hub_api_key;
+    expect(stored.startsWith('enc:v1:')).toBe(true);
+    expect(stored).not.toContain(HUB_SECRET);
+  });
 });
 
 describe('7a. VNPay gateway settings', () => {
@@ -295,6 +303,14 @@ describe('7a. VNPay gateway settings', () => {
     expect(back.json().data.secret_configured).toBe(true);
     const pub = await get('/api/v1/config/public');
     expect(pub.json().data.payment.vnpay).toBe(true);
+  });
+
+  it('stores the gateway secret sealed at rest, never plaintext (audit payments M2)', async () => {
+    const { rows } = await ctx.db.query<{ value_json: { secret_key: string } }>(
+      "SELECT value_json FROM settings WHERE key = 'payment.vnpay'");
+    const stored = rows[0]!.value_json.secret_key;
+    expect(stored.startsWith('enc:v1:')).toBe(true);
+    expect(stored).not.toContain(SECRET);
   });
 });
 

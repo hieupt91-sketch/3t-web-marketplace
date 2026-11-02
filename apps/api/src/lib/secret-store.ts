@@ -23,3 +23,32 @@ export function decryptSecret(serverKey: string, encoded: string): string {
   decipher.setAuthTag(tag);
   return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString('utf8');
 }
+
+/**
+ * Settings-JSON secrets (audit payments M2): payment credentials live in
+ * the settings table, which any settings read (or a leaked backup) would
+ * otherwise expose in plaintext. A sealed value is the string
+ * "enc:v1:<base64 envelope>" so the JSON field keeps its string type and
+ * presence checks (`!== ''`) keep working on the stored form.
+ * sealSettingSecret is idempotent (an already-sealed value passes
+ * through, so "keep current secret" saves never double-encrypt);
+ * openSettingSecret accepts legacy plaintext unchanged, so values written
+ * before this change keep working until the next settings save re-seals
+ * them. A value that fails to decrypt (server key rotated) opens as ''
+ * — "not configured" — which fails closed everywhere it is consumed.
+ */
+export const SETTING_SECRET_PREFIX = 'enc:v1:';
+
+export function sealSettingSecret(serverKey: string, value: string): string {
+  if (value === '' || value.startsWith(SETTING_SECRET_PREFIX)) return value;
+  return SETTING_SECRET_PREFIX + encryptSecret(serverKey, value);
+}
+
+export function openSettingSecret(serverKey: string, value: string): string {
+  if (!value.startsWith(SETTING_SECRET_PREFIX)) return value;
+  try {
+    return decryptSecret(serverKey, value.slice(SETTING_SECRET_PREFIX.length));
+  } catch {
+    return '';
+  }
+}

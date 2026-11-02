@@ -154,6 +154,8 @@
   "ui.admin.reconciliation_resolved": "Resolved.",
   "ui.admin.reconciliation_title": "Payment reconciliation",
   "ui.admin.refunds_approve": "Approve",
+  "ui.admin.refunds_evidence_hint": "Real refunds (bank transfer / gateway): enter the reference of the refund transfer you executed — required to approve. Leave empty for test (mock) payments only.",
+  "ui.admin.refunds_evidence_label": "Refund transaction reference",
   "ui.admin.refunds_decided": "Request handled.",
   "ui.admin.refunds_empty": "No refund requests.",
   "ui.admin.refunds_reject": "Reject",
