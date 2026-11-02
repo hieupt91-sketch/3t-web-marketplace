@@ -63,11 +63,16 @@ type DbQuery = { query: <T>(sql: string, params: unknown[]) => Promise<{ rows: T
  * Free-update deadline for a site (owner rule 2026-11-02): updates are
  * free for 12 months from the purchase, anchored on the entitlement's
  * creation. Sites created manually (no entitlement) have no deadline.
+ * A non-active entitlement (revoked by a full refund, audit payments
+ * H3) carries no update right at all: its deadline collapses to the
+ * purchase instant, which is always in the past, so the update gate
+ * refuses and the detail view shows the window as already closed.
  */
 export async function updatesFreeUntil(db: DbQuery, entitlementId: string | null): Promise<Date | null> {
   if (!entitlementId) return null;
   const { rows } = await db.query<{ free_until: Date }>(
-    `SELECT created_at + interval '12 months' AS free_until FROM entitlements WHERE id = $1`,
+    `SELECT CASE WHEN status = 'active' THEN created_at + interval '12 months' ELSE created_at END AS free_until
+     FROM entitlements WHERE id = $1`,
     [entitlementId],
   );
   return rows[0]?.free_until ?? null;

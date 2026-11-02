@@ -395,6 +395,20 @@ export async function recomputeOrderRefundStatus(client: PoolClient, orderId: st
          WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = $1) AND status = 'active'`,
         [orderId],
       );
+      // A full refund also tears down what the money bought (audit
+      // payments H3): sites created from this order's entitlements are
+      // suspended in the same transaction — the site router answers
+      // 403 for suspended sites, and the update gate refuses because
+      // the entitlement is no longer active. One-way by design, like
+      // the entitlement revoke above: a later un-refund does not
+      // silently resurrect a torn-down site.
+      await client.query(
+        `UPDATE sites SET status = 'suspended'
+         WHERE entitlement_id IN (
+           SELECT id FROM entitlements WHERE order_item_id IN (SELECT id FROM order_items WHERE order_id = $1)
+         ) AND status NOT IN ('suspended', 'delete_scheduled', 'purged')`,
+        [orderId],
+      );
     }
   }
   return next;

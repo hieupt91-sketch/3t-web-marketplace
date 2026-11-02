@@ -90,6 +90,26 @@ async function materialize(store: LocalObjectStore, version: VersionRow, target:
   await cp(store.pathFor(version.artifact_key), target, { recursive: true, dereference: false });
 }
 
+/**
+ * Files inside a demo session's data/ that must never cross into a real
+ * site (audit H-01): the demo admin account is created with the PUBLIC
+ * demo password (admin/Demo1234), the session-key would keep any demo
+ * session token valid for a same-named account, and a stale setup token
+ * is meaningless once the account is gone. Removing all three drops the
+ * promoted tree into the exact first-run state of a fresh site: the
+ * engine boots without an admin, writes a fresh one-time setup token,
+ * and the buyer claims the site through the platform's admin-setup flow.
+ * Everything else in data/ (content edits, bookings, uploads, the Sheet
+ * integration) is the buyer's own work and is preserved verbatim.
+ */
+export const DEMO_CREDENTIAL_FILES = ['admin.json', 'session-key', 'setup-token.txt'] as const;
+
+export async function stripDemoCredentials(siteDirPath: string): Promise<void> {
+  for (const name of DEMO_CREDENTIAL_FILES) {
+    await rm(join(siteDirPath, 'data', name), { force: true });
+  }
+}
+
 async function spawnAndRecord(config: PlatformConfig, db: Db, site: SiteRow, version: VersionRow, dir: string): Promise<void> {
   const spawned = await spawnServer(config, spawnSpec(version, dir));
   await db.query('UPDATE sites SET runtime_kind = $2, runtime_port = $3, runtime_pid = $4 WHERE id = $1', [
@@ -126,6 +146,10 @@ async function runProvision(deps: { config: PlatformConfig; db: Db; store: Local
       if (existsSync(demoDir)) {
         await rm(dir, { recursive: true, force: true });
         await cp(demoDir, dir, { recursive: true, dereference: false });
+        // The demo's admin account uses a public password: it and every
+        // credential artefact die here, before the tree can boot as a
+        // real site (audit H-01). The buyer's demo edits survive.
+        await stripDemoCredentials(dir);
         await db.query("UPDATE demo_sessions SET status = 'cancelled' WHERE id = $1", [site.demo_session_id]);
         promoted = true;
       }
@@ -353,6 +377,16 @@ async function runContentRestore(deps: { config: PlatformConfig; db: Db; store: 
 
 async function runRestart(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow): Promise<void> {
   const { config, db } = deps;
+  // Suspension is a deliberate state (admin action, subscription lapse,
+  // full-refund teardown — audit payments H3). Restart jobs also arrive
+  // from intents that know nothing about it: the site router's
+  // dead-upstream self-heal (which may act on a seconds-old cached
+  // 'active' row) and the worker's boot sweep. Those must never
+  // resurrect a suspended site: only a job whose payload carries
+  // revive:true — set solely by the admin operations endpoint
+  // (resume / admin restart) — may lift a suspension.
+  const revive = (job.payload_json as { revive?: boolean } | null)?.revive === true;
+  if (site.status === 'suspended' && !revive) return;
   if (site.runtime_pid) killPid(site.runtime_pid);
   const version = await loadVersion(db, site.template_version_id);
   const dir = siteDir(config, site.id);

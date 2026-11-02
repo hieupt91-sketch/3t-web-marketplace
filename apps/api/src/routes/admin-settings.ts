@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
+import { requireStepUp } from '../lib/step-up.ts';
 import { loadBankTransferSettings } from './commerce.ts';
 
 export interface ContactChannels {
@@ -342,6 +343,9 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
     },
     async (request, reply) => {
       const auth = requirePermission(request, 'settings:manage');
+      // Receiving-account details are money-routing config: step-up
+      // required, like every other payment settings change (audit H-02).
+      await requireStepUp(db, auth);
       const next = { enabled: request.body.enabled === true, email: str(request.body.email), holder: str(request.body.holder) };
       if (next.enabled && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(next.email)) {
         throw errors.validation([{ field: 'email', code: 'invalid' }]);
@@ -391,6 +395,7 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
     },
     async (request, reply) => {
       const auth = requirePermission(request, 'settings:manage');
+      await requireStepUp(db, auth);
       const next = {
         enabled: request.body.enabled === true,
         bank_name: str(request.body.bank_name),
@@ -462,6 +467,9 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
     },
     async (request, reply) => {
       const auth = requirePermission(request, 'settings:manage');
+      // Bank account + hub key decide where customer money lands and
+      // which webhook reports settle orders: step-up required (H-02).
+      await requireStepUp(db, auth);
       const current = await loadBankTransferSettings(db);
       const clean = (v: unknown): string => (typeof v === 'string' ? v.trim() : '');
       const bankBin = clean(request.body.bank_bin).replace(/\s+/g, '');
@@ -568,6 +576,7 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
     },
     async (request, reply) => {
       const auth = requirePermission(request, 'settings:manage');
+      await requireStepUp(db, auth);
       const current = await load('payment.vnpay');
       const next = {
         enabled: request.body.enabled === true,
@@ -627,6 +636,7 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
     },
     async (request, reply) => {
       const auth = requirePermission(request, 'settings:manage');
+      await requireStepUp(db, auth);
       const current = await load('payment.momo');
       const next = {
         enabled: request.body.enabled === true,

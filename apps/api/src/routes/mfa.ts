@@ -47,7 +47,13 @@ export async function mfaRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Body: { code: string } }>(
     '/me/mfa/verify',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['code'], properties: { code: { type: 'string', minLength: 6, maxLength: 6 } } } } },
+    // TOTP verification endpoints are brute-force targets: throttle per
+    // IP + session like the step-up endpoint (audit code M-03).
+    { config: { rateLimit: { max: 10, timeWindow: '15 minutes', keyGenerator: (req) => {
+        const cookie = req.cookies?.mp_session;
+        return cookie ? `${req.ip}|${hashToken(cookie).toString('hex').slice(0, 16)}` : req.ip;
+      } } },
+      schema: { body: { type: 'object', additionalProperties: false, required: ['code'], properties: { code: { type: 'string', minLength: 6, maxLength: 6 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const { rows } = await db.query<{ secret_enc: string; verified_at: Date | null }>(

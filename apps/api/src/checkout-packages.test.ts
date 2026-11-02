@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import { mkdir, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestContext, createUser, ORIGIN, type TestContext } from './test-helpers.ts';
+import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Split packages (owner directive 2026-11-01): the web, hosting
  *  (monthly OR yearly), the domain (its own package, also buyable on
@@ -56,6 +56,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const owner = await createUser(ctx, 'pkg-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  await stepUp(ctx, ownerCookie); // wave-1: payment settings + manual confirm require step-up
   buyerA = await createUser(ctx, 'pkg-a@example.com');
   buyerB = await createUser(ctx, 'pkg-b@example.com');
 

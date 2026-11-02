@@ -170,15 +170,25 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
 
   // Step-up: re-authenticate the current session (password, plus TOTP when
   // MFA is verified). Sets sessions.step_up_at for 10 minutes of elevated
-  // actions; requireStepUp enforces it server-side.
+  // actions; requireStepUp enforces it server-side. The endpoint itself
+  // is throttled per IP + session and failed attempts are audited
+  // (audit code M-03): password/TOTP guessing must be slow and visible.
   app.post<{ Body: { password: string; totp_code?: string } }>(
     '/auth/step-up',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['password'], properties: { password: { type: 'string', maxLength: 512 }, totp_code: { type: 'string', minLength: 6, maxLength: 10 } } } } },
+    { config: { rateLimit: { max: 10, timeWindow: '15 minutes', keyGenerator: (req: FastifyRequest) => {
+        const cookie = req.cookies?.mp_session;
+        return cookie ? `${req.ip}|${hashToken(cookie).toString('hex').slice(0, 16)}` : req.ip;
+      } } },
+      schema: { body: { type: 'object', additionalProperties: false, required: ['password'], properties: { password: { type: 'string', maxLength: 512 }, totp_code: { type: 'string', minLength: 6, maxLength: 10 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
+      const auditFailure = () => writeAudit(db, {
+        actorType: 'user', actorId: auth.userId, action: 'auth.step_up_failed',
+        resourceType: 'session', resourceId: auth.sessionId, traceId: request.id,
+      });
       const { rows } = await db.query<{ password_hash: string | null }>('SELECT password_hash FROM users WHERE id = $1', [auth.userId]);
       const ok = await verifyPassword(request.body.password, rows[0]?.password_hash ?? null);
-      if (!ok) throw errors.unauthenticated('auth.invalid_credentials');
+      if (!ok) { await auditFailure(); throw errors.unauthenticated('auth.invalid_credentials'); }
       const mfa = await db.query<{ secret_enc: string; backup_codes_hash: string[] }>(
         'SELECT secret_enc, backup_codes_hash FROM user_mfa WHERE user_id = $1 AND verified_at IS NOT NULL',
         [auth.userId],
@@ -187,7 +197,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const secret = decryptSecret(config.mfaKey, mfa.rows[0].secret_enc);
         const code = request.body.totp_code ?? '';
         const backupIndex = mfa.rows[0].backup_codes_hash.indexOf(hashToken(code).toString('hex'));
-        if (!verifyTotp(secret, code) && backupIndex === -1) throw errors.unauthenticated('mfa.code_invalid');
+        if (!verifyTotp(secret, code) && backupIndex === -1) { await auditFailure(); throw errors.unauthenticated('mfa.code_invalid'); }
         if (backupIndex !== -1) {
           await db.query('UPDATE user_mfa SET backup_codes_hash = $2 WHERE user_id = $1', [auth.userId, mfa.rows[0].backup_codes_hash.filter((_, i) => i !== backupIndex)]);
         }

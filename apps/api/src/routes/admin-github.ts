@@ -1,10 +1,12 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { execFile } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { mkdir, mkdtemp, readdir, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, sep } from 'node:path';
+import { Transform } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
+import { ArchiveError, extractTarArchive } from '@3t/template-sdk';
 import type { FastifyInstance } from 'fastify';
 import {
   IMPORT_STEPS,
@@ -92,18 +94,48 @@ export async function createGithubImport(
   const tmp = await mkdtemp(join(tmpdir(), 'mp-github-'));
   try {
     const tarball = join(tmp, 'repo.tgz');
-    await pipeline(tarRes.body as unknown as NodeJS.ReadableStream, createWriteStream(tarball));
+    // Cap the download at the same byte budget the zip import path
+    // enforces (audit code H-03): an unbounded stream let a hostile or
+    // compromised repo fill the API disk before any check ran. Bytes
+    // past the cap are drained but never written; the verdict is
+    // applied once the stream ends, so the failure is a clean 400
+    // rather than a torn mid-stream abort.
+    let downloaded = 0;
+    const limiter = new Transform({
+      transform(chunk: Buffer, _enc, callback) {
+        downloaded += chunk.length;
+        if (downloaded <= policy.max_upload_bytes) callback(null, chunk);
+        else callback();
+      },
+    });
+    await pipeline(tarRes.body as unknown as NodeJS.ReadableStream, limiter, createWriteStream(tarball));
+    if (downloaded > policy.max_upload_bytes) throw errors.badRequest('github.tarball_too_large');
     const extracted = join(tmp, 'extracted');
     await mkdir(extracted, { recursive: true });
-    await execFileAsync('tar', ['-xzf', tarball, '-C', extracted], tmp);
-    const tops = (await readdir(extracted, { withFileTypes: true })).filter((e) => e.isDirectory());
-    if (tops.length !== 1) throw errors.badRequest('github.tarball_unexpected');
-    let root = join(extracted, tops[0]!.name);
+    // Extract in-process through the SDK's tar extractor — same
+    // guarantees as the zip path (no symlinks/devices, no absolute or
+    // parent-escaping names, per-entry/total/count limits enforced
+    // before writing) — instead of the system tar, which honours all
+    // of those. The single wrapper directory of a GitHub tarball is
+    // stripped by the extractor, so the content lands at the root.
+    try {
+      await extractTarArchive(tarball, extracted);
+    } catch (error) {
+      if (error instanceof ArchiveError) {
+        if (error.code === 'archive_too_large') throw errors.badRequest('github.tarball_too_large');
+        if (error.code === 'archive_unsafe') throw errors.badRequest('github.tarball_unsafe');
+        throw errors.badRequest('github.tarball_invalid');
+      }
+      throw error;
+    }
+    let root = extracted;
     if (subdir !== '') {
       root = join(root, ...subdir.split('/'));
-      await readdir(root).catch(() => {
+      const [rootReal, extractedReal] = await Promise.all([realpath(root).catch(() => null), realpath(extracted)]);
+      if (!rootReal || (rootReal !== extractedReal && !rootReal.startsWith(extractedReal + sep))) {
         throw errors.badRequest('github.subdir_invalid');
-      });
+      }
+      root = rootReal;
     }
     const files = await walkFiles(root);
     if (files.length === 0 || files.length > policy.max_files) throw errors.badRequest('github.file_limit');

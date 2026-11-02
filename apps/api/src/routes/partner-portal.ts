@@ -97,7 +97,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
       const s = session.rows[0];
       if (!s || s.buyer_id !== auth.userId || s.status !== 'claimed' || new Date(s.expires_at) <= new Date()) throw errors.notFound();
       if (s.order_id) return reply.status(200).send({ data: { order_id: s.order_id } });
-      const quote = await client.query<{ snapshot_json: { template_id: string; version_id: string; plan_id: string; deployment_mode: string; lines: { label: string; interval: string; amount_minor: string }[]; limits: Record<string, unknown> }; total_minor: string; currency: string; expires_at: Date }>(
+      const quote = await client.query<{ snapshot_json: { template_id: string; version_id: string; plan_id: string; plan_name?: Record<string, string> | string; deployment_mode: string; lines: { label: string; interval: string; amount_minor: string }[]; limits: Record<string, unknown>; storage_gb?: number }; total_minor: string; currency: string; expires_at: Date }>(
         'SELECT snapshot_json, total_minor::text, currency, expires_at FROM quotes WHERE id = $1',
         [s.quote_id],
       );
@@ -112,18 +112,25 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
       const pol = policy.rows[0]!;
       const terms = await getSetting<{ current: string }>(client, 'terms.version').catch(() => null);
       const order = await client.query<{ id: string }>(
-        `INSERT INTO orders (buyer_id, quote_id, partner_id, currency, subtotal_minor, total_minor, terms_version, locale, status)
-         VALUES ($1, $2, $3, $4, $5, $5, $6, 'vi', 'awaiting_payment') RETURNING id`,
-        [auth.userId, s.quote_id, s.partner_id, q.currency, q.total_minor, terms?.current ?? 'terms-2026-10'],
+        `INSERT INTO orders (buyer_id, quote_id, partner_id, currency, subtotal_minor, total_minor, terms_version, locale, status, payment_window_expires_at)
+         VALUES ($1, $2, $3, $4, $5, $5, $6, 'vi', 'awaiting_payment', now() + make_interval(mins => $7)) RETURNING id`,
+        [auth.userId, s.quote_id, s.partner_id, q.currency, q.total_minor, terms?.current ?? 'terms-2026-10', config.paymentWindowMinutes],
       );
       const orderId = order.rows[0]!.id;
-      for (const line of snap.lines) {
-        await client.query(
-          `INSERT INTO order_items (order_id, template_id, version_id, plan_id, deployment_mode, snapshot_json, unit_price_minor, discount_minor, tax_minor)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0)`,
-          [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode, { plan_id: snap.plan_id, limits: snap.limits }, line.amount_minor],
-        );
-      }
+      // Exactly ONE order item per purchased plan — identical to the
+      // direct and wallet-sale paths. Creating one item per quote price
+      // line (setup + first_period) made fulfilment grant one
+      // entitlement per line: two entitlements for a single payment
+      // (audit payments H1). The payment window above is likewise the
+      // same 15-minute window as every other order (audit payments H2);
+      // the expiry sweep and late-money reconciliation key off it.
+      await client.query(
+        `INSERT INTO order_items (order_id, template_id, version_id, plan_id, deployment_mode, snapshot_json, unit_price_minor, discount_minor, tax_minor)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, 0, 0)`,
+        [orderId, snap.template_id, snap.version_id, snap.plan_id, snap.deployment_mode,
+         { plan_name: snap.plan_name ?? null, updates_months: (snap.limits as { updates_months?: number })?.updates_months ?? null, instance_limit: (snap.limits as { instance_limit?: number })?.instance_limit ?? 1, storage_gb: snap.storage_gb ?? 1 },
+         q.total_minor],
+      );
       await client.query(
         'INSERT INTO attributions (order_id, partner_id, source, policy_snapshot) VALUES ($1, $2, $3, $4)',
         [orderId, s.partner_id, 'session', { rate_bps: pol.rate_bps, hold_days: pol.hold_days, policy_version: pol.policy_version }],

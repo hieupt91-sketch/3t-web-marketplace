@@ -126,3 +126,112 @@ describe('extractArchive', () => {
     await expect(extractArchive(join(dir, 'x.zip'), join(dir, 'out'))).rejects.toMatchObject({ code: 'archive_invalid' });
   });
 });
+
+/* ------------------------- tar.gz extraction ------------------------ */
+
+import { gzipSync } from 'node:zlib';
+import { extractTarArchive } from './archive.ts';
+
+function tarHeader(name: string, size: number, type: string): Buffer {
+  const h = Buffer.alloc(512, 0);
+  h.write(name, 0, 100, 'utf8');
+  h.write('0000644\0', 100, 8, 'latin1');
+  h.write('0000000\0', 108, 8, 'latin1');
+  h.write('0000000\0', 116, 8, 'latin1');
+  h.write(size.toString(8).padStart(11, '0') + '\0', 124, 12, 'latin1');
+  h.write('00000000000\0', 136, 12, 'latin1');
+  h.write('        ', 148, 8, 'latin1'); // checksum placeholder (spaces)
+  h.write(type, 156, 1, 'latin1');
+  h.write('ustar\0', 257, 6, 'latin1');
+  h.write('00', 263, 2, 'latin1');
+  let sum = 0;
+  for (const b of h) sum += b;
+  h.write(sum.toString(8).padStart(6, '0') + '\0 ', 148, 8, 'latin1');
+  return h;
+}
+
+function tarEntry(name: string, data: string | Buffer = '', type = '0'): Buffer {
+  const body = Buffer.isBuffer(data) ? data : Buffer.from(data, 'utf8');
+  const padded = Buffer.alloc(Math.ceil(body.length / 512) * 512, 0);
+  body.copy(padded);
+  return Buffer.concat([tarHeader(name, body.length, type), padded]);
+}
+
+function buildTarGz(parts: Buffer[]): Buffer {
+  return gzipSync(Buffer.concat([...parts, Buffer.alloc(1024, 0)]));
+}
+
+async function tarSetup(parts: Buffer[]) {
+  const dir = await mkdtemp(join(tmpdir(), 'sdk-tar-'));
+  const tgz = join(dir, 'in.tgz');
+  await writeFile(tgz, buildTarGz(parts));
+  const out = join(dir, 'out');
+  await mkdir(out);
+  return { dir, tgz, out };
+}
+
+describe('extractTarArchive', () => {
+  it('extracts a GitHub-shaped tarball and strips the wrapper directory', async () => {
+    const { tgz, out } = await tarSetup([
+      tarEntry('owner-repo-abc123/', '', '5'),
+      tarEntry('owner-repo-abc123/index.html', '<h1>x</h1>'),
+      tarEntry('owner-repo-abc123/css/a.css', 'body{}'),
+    ]);
+    const result = await extractTarArchive(tgz, out);
+    expect(result.strippedPrefix).toBe('owner-repo-abc123/');
+    expect(result.files.map((f) => f.path)).toEqual(['css/a.css', 'index.html']);
+    const { readFile } = await import('node:fs/promises');
+    await expect(readFile(join(out, 'index.html'), 'utf8')).resolves.toBe('<h1>x</h1>');
+  });
+
+  it('rejects a parent-escaping entry and writes nothing (audit H-03)', async () => {
+    const { dir, tgz, out } = await tarSetup([
+      tarEntry('repo/index.html', 'ok'),
+      tarEntry('repo/../escape.txt', 'pwned'),
+    ]);
+    const error = await extractTarArchive(tgz, out).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ArchiveError);
+    expect((error as ArchiveError).code).toBe('archive_unsafe');
+    expect(await readdir(out)).toEqual([]);
+    expect(existsSync(join(dir, 'escape.txt'))).toBe(false);
+  });
+
+  it('rejects absolute paths and symlink entries', async () => {
+    const abs = await tarSetup([tarEntry('/etc/passwd', 'x')]);
+    const absErr = await extractTarArchive(abs.tgz, abs.out).then(() => null, (e: unknown) => e);
+    expect(absErr).toBeInstanceOf(ArchiveError);
+    expect((absErr as ArchiveError).code).toBe('archive_unsafe');
+
+    const link = await tarSetup([
+      tarEntry('repo/index.html', 'ok'),
+      tarEntry('repo/link', '/etc/passwd', '2'),
+    ]);
+    const linkErr = await extractTarArchive(link.tgz, link.out).then(() => null, (e: unknown) => e);
+    expect(linkErr).toBeInstanceOf(ArchiveError);
+    expect((linkErr as ArchiveError).code).toBe('archive_unsafe');
+    expect(await readdir(link.out)).toEqual([]);
+  });
+
+  it('rejects an entry over the per-entry limit and a tarball over the total limit', async () => {
+    const big = await tarSetup([tarEntry('repo/big.bin', Buffer.alloc(2048, 1))]);
+    const err = await extractTarArchive(big.tgz, big.out, { ...DEFAULT_ARCHIVE_LIMITS, maxEntryBytes: 1024 }).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ArchiveError);
+    expect((err as ArchiveError).code).toBe('archive_too_large');
+
+    const many = await tarSetup([tarEntry('repo/a.txt', 'aaaa'), tarEntry('repo/b.txt', 'bbbb')]);
+    const err2 = await extractTarArchive(many.tgz, many.out, { ...DEFAULT_ARCHIVE_LIMITS, maxTotalUncompressedBytes: 4 }).then(() => null, (e: unknown) => e);
+    expect(err2).toBeInstanceOf(ArchiveError);
+    expect((err2 as ArchiveError).code).toBe('archive_too_large');
+  });
+
+  it('rejects a corrupt tarball as archive_invalid', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'sdk-tar-'));
+    const tgz = join(dir, 'in.tgz');
+    await writeFile(tgz, gzipSync(Buffer.from('this is not a tar at all, just some text padded out to look busy........')));
+    const out = join(dir, 'out');
+    await mkdir(out);
+    const err = await extractTarArchive(tgz, out).then(() => null, (e: unknown) => e);
+    expect(err).toBeInstanceOf(ArchiveError);
+    expect((err as ArchiveError).code).toBe('archive_invalid');
+  });
+});

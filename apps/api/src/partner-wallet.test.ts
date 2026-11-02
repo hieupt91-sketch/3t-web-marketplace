@@ -1,7 +1,7 @@
 import { randomBytes, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { hashToken } from '@3t/core';
-import { createTestContext, createUser, ORIGIN, type TestContext } from './test-helpers.ts';
+import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Partner wallet (docs/06 §11): partners top up in advance by bank
  *  transfer, set their own selling prices, and direct API sales deduct
@@ -31,6 +31,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const owner = await createUser(ctx, 'wallet-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  await stepUp(ctx, ownerCookie); // wave-1: payment settings + manual confirm require step-up
   const partnerUser = await createUser(ctx, 'wallet-partner@example.com');
   partnerCookie = partnerUser.cookie;
   const b = await createUser(ctx, 'wallet-buyer@example.com');

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestContext, createUser, ORIGIN, type TestContext } from './test-helpers.ts';
+import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Hosted checkout with the domain chosen while buying (owner rule
  *  2026-11-01): quote holds the name, the subdomain fee joins the same
@@ -42,6 +42,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const owner = await createUser(ctx, 'hosted-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  await stepUp(ctx, ownerCookie); // wave-1: payment settings + manual confirm require step-up
   buyerA = await createUser(ctx, 'hosted-a@example.com');
   buyerB = await createUser(ctx, 'hosted-b@example.com');
 

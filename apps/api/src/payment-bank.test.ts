@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestContext, createUser, ORIGIN, type TestContext } from './test-helpers.ts';
+import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Bank-transfer payments (owner proposal 2026-10-30): owner settings, the
  *  transfer session with content code, hub webhook settlement (SePay shape),
@@ -18,6 +18,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const owner = await createUser(ctx, 'bank-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  await stepUp(ctx, ownerCookie); // wave-1: payment settings + manual confirm require step-up
   const buyer = await createUser(ctx, 'bank-buyer@example.com');
   buyerCookie = buyer.cookie;
   const buyer2 = await createUser(ctx, 'bank-buyer2@example.com');

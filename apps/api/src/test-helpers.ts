@@ -58,6 +58,15 @@ export function sessionCookie(res: LightMyRequestResponse): string {
   return `mp_session=${cookie.value}`;
 }
 
+/** Elevate a session via POST /auth/step-up (wave-1: money actions require it). */
+export async function stepUp(ctx: TestContext, cookie: string): Promise<void> {
+  const res = await ctx.app.inject({
+    method: 'POST', url: '/api/v1/auth/step-up', headers: { origin: ORIGIN, cookie },
+    payload: { password: 'correct horse battery staple' },
+  });
+  if (res.statusCode !== 200) throw new Error(`step-up failed ${res.statusCode} ${res.body}`);
+}
+
 /** Create a verified user directly (optionally with a role) and return a logged-in cookie. */
 export async function createUser(ctx: TestContext, email: string, role?: string): Promise<{ id: string; cookie: string }> {
   const password = 'correct horse battery staple';

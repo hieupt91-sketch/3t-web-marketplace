@@ -1,0 +1,28 @@
+# Build context is the repo root; both deploy Dockerfiles end with a
+# broad COPY . . — everything listed here stays OUT of the images.
+# Audit infra H1: production .env files (database URL, session/MFA/data
+# keys, provider secrets) were baked into image layers this way.
+
+# Secrets and environment files (the committed template stays).
+**/.env
+**/.env.*
+!**/.env.example
+
+# VCS metadata — large, useless at runtime, and a history leak.
+.git
+.github
+
+# Runtime data is a mounted volume in production, never image content.
+runtime-data
+**/runtime-data
+
+# Dependencies are installed inside the image from the lockfile.
+**/node_modules
+
+# Build outputs and caches are produced inside the image.
+**/.next
+**/dist
+**/.turbo
+**/.cache
+**/*.tsbuildinfo
+**/coverage

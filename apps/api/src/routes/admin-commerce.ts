@@ -3,6 +3,7 @@ import type { FastifyInstance } from 'fastify';
 import { tx, writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
+import { requireStepUp } from '../lib/step-up.ts';
 import { fulfillOrder, processPaymentEvent, recomputeOrderRefundStatus } from './commerce.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -63,6 +64,10 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, properties: { note: { type: 'string', maxLength: 500 } } } } },
     async (request) => {
       const auth = requirePermission(request, 'payment:confirm');
+      // Declaring money received settles a real order: step-up
+      // required, on par with granting roles or settling payouts
+      // (audit code H-02). The manual_confirmed audit row below stays.
+      await requireStepUp(db, auth);
       assertId(request.params.id);
       const { rows } = await db.query<{ id: string; provider: string; provider_ref: string | null; amount_minor: string; currency: string; status: string }>(
         'SELECT id, provider, provider_ref, amount_minor::text, currency, status FROM payment_attempts WHERE id = $1',
@@ -101,6 +106,10 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
     { schema: { body: { type: 'object', additionalProperties: false, required: ['resolution', 'reason'], properties: { resolution: { type: 'string', enum: ['paid', 'cancelled'] }, reason: { type: 'string', minLength: 3, maxLength: 500 } } } } },
     async (request) => {
       const auth = requirePermission(request, 'payment:confirm');
+      // Resolving as 'paid' fulfils an order with no provider proof —
+      // the money judgement itself needs step-up (audit code H-02).
+      // 'cancelled' only closes the order and stays permission-only.
+      if (request.body.resolution === 'paid') await requireStepUp(db, auth);
       assertId(request.params.id);
       await tx(db, async (client) => {
         const order = await client.query<{ status: string; buyer_id: string }>(

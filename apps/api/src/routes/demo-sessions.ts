@@ -3,7 +3,7 @@ import { cp, mkdir, readFile, readdir, rm } from 'node:fs/promises';
 import { chmod } from 'node:fs/promises';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
-import type { FastifyInstance } from 'fastify';
+import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { get as httpGet, request as httpRequest } from 'node:http';
 import { hashToken, previewOrigin, randomToken, writeAudit, type Db, type PlatformConfig } from '@3t/core';
 import { requirePermission } from '../app.ts';
@@ -73,6 +73,30 @@ function killPid(pid: number | null): void {
  */
 export const DEMO_ADMIN_USERNAME = 'admin';
 export const DEMO_ADMIN_PASSWORD = 'Demo1234';
+
+/**
+ * Anonymous demo ownership (audit UI-HIGH-01 / code M-04): creating a
+ * demo mints a random bearer token delivered as an HttpOnly cookie;
+ * the session row stores only its SHA-256 hash. Lifecycle actions
+ * (reset / cancel / admin-launch) require presenting the token — via
+ * the cookie (same-origin browser flow) or the x-demo-owner-token
+ * header — and a mismatch is answered with the same 404 as a missing
+ * session, so the endpoint never confirms a session exists.
+ */
+export const DEMO_OWNER_COOKIE = 'mp_demo_owner';
+const RESET_COOLDOWN_MS = 30_000;
+
+function demoOwnerToken(request: FastifyRequest): string | null {
+  const header = request.headers['x-demo-owner-token'];
+  if (typeof header === 'string' && header.length >= 16 && header.length <= 128) return header;
+  const cookie = request.cookies?.[DEMO_OWNER_COOKIE];
+  return typeof cookie === 'string' && cookie.length >= 16 && cookie.length <= 128 ? cookie : null;
+}
+
+function requireSessionOwner(request: FastifyRequest, row: { owner_token_hash: Buffer | null }): void {
+  const token = demoOwnerToken(request);
+  if (!token || !row.owner_token_hash || !hashToken(token).equals(row.owner_token_hash)) throw errors.notFound();
+}
 
 function httpFormPost(port: number, path: string, fields: Record<string, string>): Promise<{ status: number; setCookie: boolean }> {
   return new Promise((resolve) => {
@@ -180,8 +204,9 @@ async function loadSession(db: Db, id: string) {
   const { rows } = await db.query<{
     id: string; version_id: string; preview_label: string | null; runtime_port: number | null; status: string;
     admin_token_expires_at: Date | null; demo_admin_ready: boolean; expires_at: Date; created_at: Date;
+    owner_token_hash: Buffer | null; last_reset_at: Date | null;
   }>(
-    'SELECT id, version_id, preview_label, runtime_port, status, admin_token_expires_at, demo_admin_ready, expires_at, created_at FROM demo_sessions WHERE id = $1',
+    'SELECT id, version_id, preview_label, runtime_port, status, admin_token_expires_at, demo_admin_ready, expires_at, created_at, owner_token_hash, last_reset_at FROM demo_sessions WHERE id = $1',
     [id],
   );
   return rows[0] ?? null;
@@ -222,7 +247,9 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
       if (Number(active.rows[0]!.n) >= config.demoMaxActiveSessions) throw errors.tooMany(60);
       const version = await db.query<VersionRow>(
         `SELECT v.id, v.template_id, v.adapter, v.manifest_json, v.artifact_id, a.object_key AS artifact_key
-         FROM template_versions v JOIN artifacts a ON a.id = v.artifact_id WHERE v.id = $1`,
+         FROM template_versions v JOIN artifacts a ON a.id = v.artifact_id
+         JOIN templates t ON t.id = v.template_id
+         WHERE v.id = $1 AND v.status = 'published' AND t.status = 'published'`,
         [request.body.version_id],
       );
       const v = version.rows[0];
@@ -240,9 +267,14 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
         if (!preview.rows[0]) throw errors.conflict('demo.unavailable');
         previewLabel = preview.rows[0]!.host_label;
       }
+      // Bind the session to this browser's anonymous owner identity;
+      // mint one when the browser does not present it yet.
+      let ownerToken = demoOwnerToken(request);
+      const freshOwnerToken = !ownerToken;
+      if (!ownerToken) ownerToken = randomToken();
       const created = await db.query<{ id: string; expires_at: Date }>(
-        `INSERT INTO demo_sessions (version_id, preview_label, expires_at) VALUES ($1, $2, now() + make_interval(hours => $3)) RETURNING id, expires_at`,
-        [v.id, previewLabel, ttlHours],
+        `INSERT INTO demo_sessions (version_id, preview_label, expires_at, owner_token_hash) VALUES ($1, $2, now() + make_interval(hours => $3), $4) RETURNING id, expires_at`,
+        [v.id, previewLabel, ttlHours, hashToken(ownerToken)],
       );
       const sessionId = created.rows[0]!.id;
       if (isRuntime) {
@@ -262,6 +294,12 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
         if (demoAdminReady) await db.query('UPDATE demo_sessions SET demo_admin_ready = true WHERE id = $1', [sessionId]);
       }
       const url = sessionUrl(config, { id: sessionId, preview_label: previewLabel, runtime_port: runtimePort });
+      if (freshOwnerToken) {
+        reply.setCookie(DEMO_OWNER_COOKIE, ownerToken, {
+          path: '/', httpOnly: true, sameSite: 'lax',
+          secure: config.env === 'production', maxAge: 30 * 24 * 3600,
+        });
+      }
       return reply.status(201).send({ data: { id: sessionId, version_id: v.id, url, admin_url: null, demo_admin: demoAdminReady ? { username: DEMO_ADMIN_USERNAME, password: DEMO_ADMIN_PASSWORD } : null, status: 'active', expires_at: created.rows[0]!.expires_at.toISOString() } });
     },
   );
@@ -289,10 +327,14 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
     };
   });
 
-  app.post<{ Params: { id: string } }>('/demo-sessions/:id/admin-launch', async (request, reply) => {
+  app.post<{ Params: { id: string } }>(
+    '/demo-sessions/:id/admin-launch',
+    { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } },
+    async (request, reply) => {
     assertId(request.params.id);
     const row = await loadSession(db, request.params.id);
     if (!row) throw errors.notFound();
+    requireSessionOwner(request, row);
     if (row.status !== 'active') throw errors.conflict('demo.not_active');
     const version = await db.query<{ manifest_json: VersionRow['manifest_json'] }>('SELECT manifest_json FROM template_versions WHERE id = $1', [row.version_id]);
     if (version.rows[0]!.manifest_json.demo?.mode !== 'isolatedAdmin') throw errors.conflict('demo.no_admin');
@@ -303,13 +345,22 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
     );
     const base = sessionUrl(config, row);
     return reply.status(201).send({ data: { admin_url: base ? `${base.replace(/\/$/, '')}/admin` : null, token, token_expires_at: new Date(Date.now() + 10 * 60_000).toISOString() } });
-  });
+    },
+  );
 
-  app.post<{ Params: { id: string } }>('/demo-sessions/:id/reset', async (request) => {
+  app.post<{ Params: { id: string } }>(
+    '/demo-sessions/:id/reset',
+    // A reset respawns a runtime server — it costs like a create, so it
+    // is throttled like one, plus the per-session cooldown below.
+    { config: { rateLimit: { max: 10, timeWindow: '1 hour' } } },
+    async (request) => {
     assertId(request.params.id);
     const row = await loadSession(db, request.params.id);
     if (!row) throw errors.notFound();
+    requireSessionOwner(request, row);
     if (row.status !== 'active') throw errors.conflict('demo.not_active');
+    if (row.last_reset_at && Date.now() - row.last_reset_at.getTime() < RESET_COOLDOWN_MS) throw errors.tooMany(30);
+    await db.query('UPDATE demo_sessions SET last_reset_at = now() WHERE id = $1', [row.id]);
     if (row.runtime_port) {
       killPid((await db.query<{ runtime_pid: number | null }>('SELECT runtime_pid FROM demo_sessions WHERE id = $1', [row.id])).rows[0]!.runtime_pid);
       const version = await db.query<VersionRow>(
@@ -326,17 +377,23 @@ export async function demoSessionRoutes(app: FastifyInstance): Promise<void> {
     }
     const fresh = await loadSession(db, row.id);
     return { data: { id: row.id, url: sessionUrl(config, fresh!), status: fresh!.status, expires_at: fresh!.expires_at.toISOString() } };
-  });
+    },
+  );
 
-  app.post<{ Params: { id: string } }>('/demo-sessions/:id/cancel', async (request) => {
+  app.post<{ Params: { id: string } }>(
+    '/demo-sessions/:id/cancel',
+    { config: { rateLimit: { max: 30, timeWindow: '1 hour' } } },
+    async (request) => {
     assertId(request.params.id);
-    const row = await db.query<{ runtime_pid: number | null; preview_label: string | null }>('SELECT runtime_pid, preview_label FROM demo_sessions WHERE id = $1', [request.params.id]);
+    const row = await db.query<{ runtime_pid: number | null; preview_label: string | null; owner_token_hash: Buffer | null }>('SELECT runtime_pid, preview_label, owner_token_hash FROM demo_sessions WHERE id = $1', [request.params.id]);
     if (!row.rows[0]) throw errors.notFound();
+    requireSessionOwner(request, row.rows[0]!);
     killPid(row.rows[0]!.runtime_pid);
     await db.query("UPDATE demo_sessions SET status = 'cancelled' WHERE id = $1", [request.params.id]);
     await writeAudit(db, { actorType: 'user', actorId: null, action: 'demo.cancelled', resourceType: 'demo_session', resourceId: request.params.id, traceId: request.id });
     return { data: { id: request.params.id, status: 'cancelled' } };
-  });
+    },
+  );
 }
 
 /** A17 — admin demo oversight (list + expire). */

@@ -1,6 +1,6 @@
 import { createHmac, randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
-import { createTestContext, createUser, ORIGIN, type TestContext } from './test-helpers.ts';
+import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Gateway payments (VNPay + MoMo): owner merchant settings, redirect
  *  sessions, and signed IPN settlement — checked against independent
@@ -18,6 +18,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const owner = await createUser(ctx, 'gw-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  await stepUp(ctx, ownerCookie); // wave-1: payment settings + manual confirm require step-up
   const buyer = await createUser(ctx, 'gw-buyer@example.com');
   buyerCookie = buyer.cookie;
 

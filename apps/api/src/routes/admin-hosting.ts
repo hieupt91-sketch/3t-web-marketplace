@@ -68,11 +68,13 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
         await db.query("UPDATE sites SET status = 'suspended', runtime_port = NULL, runtime_pid = NULL WHERE id = $1", [request.params.id]);
       } else if (request.body.action === 'resume') {
         if (row.status !== 'suspended') throw errors.conflict('site.not_suspended');
-        const { job } = await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${request.params.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: request.params.id }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
+        // revive:true marks deliberate admin intent — the only payload
+        // the worker honours to lift a suspension (audit payments H3).
+        const { job } = await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${request.params.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: request.params.id, revive: true }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
         return { data: { action: 'resume', job_id: job.id } };
       } else {
         if (row.status !== 'active' && row.status !== 'suspended') throw errors.conflict('site.not_active');
-        const { job } = await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${request.params.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: request.params.id }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
+        const { job } = await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${request.params.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: request.params.id, revive: true }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
         return { data: { action: 'restart', job_id: job.id } };
       }
       return { data: { action: request.body.action } };

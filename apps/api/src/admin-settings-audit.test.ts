@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { createTestContext, createUser, ORIGIN, type TestContext } from './test-helpers.ts';
+import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Admin settings audit (owner directive 2026-11-01): every settings
  *  surface must (a) return sane defaults on a fresh install, (b) save
@@ -34,6 +34,7 @@ beforeAll(async () => {
   ctx = await createTestContext();
   const owner = await createUser(ctx, 'audit-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  await stepUp(ctx, ownerCookie); // wave-1: payment settings + manual confirm require step-up
   const buyer = await createUser(ctx, 'audit-buyer@example.com');
   buyerCookie = buyer.cookie;
 }, 120_000);
