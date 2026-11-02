@@ -33,6 +33,7 @@ import { creditWallet, POINT_VND } from '../lib/partner-wallet.ts';
 import { RESERVED_SUBDOMAINS, SUBDOMAIN_RE, createSiteInTx, currentHold } from '../site-create.ts';
 import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
+import { sessionRateLimit } from '../lib/rate-limit.ts';
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -577,7 +578,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   // POST /quotes — backend prices the plan; the quote is bound to the buyer and expires.
   app.post<{ Body: { plan_id: string; template_id: string; billing_interval?: 'monthly' | 'yearly'; installation?: boolean; upgrade_entitlement_id?: string; storage_gb?: number; site_request?: { subdomain: string; display_name: string; locale?: 'vi' | 'en'; domain_interval?: 'monthly' | 'yearly' } } }>(
     '/quotes',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] }, domain_interval: { enum: ['monthly', 'yearly'] } } }, billing_interval: { enum: ['monthly', 'yearly'] }, installation: { type: 'boolean' }, upgrade_entitlement_id: { type: 'string', pattern: UUID.source }, storage_gb: { type: 'integer', minimum: 1, maximum: 100 } } } } },
+    // Each quote writes a row and can hold a subdomain: cap free-account
+    // quote spam (audit code M-05) well above real checkout behaviour.
+    { config: sessionRateLimit(120), schema: { body: { type: 'object', additionalProperties: false, required: ['plan_id', 'template_id'], properties: { plan_id: { type: 'string', pattern: UUID.source }, template_id: { type: 'string', pattern: UUID.source }, site_request: { type: 'object', additionalProperties: false, required: ['subdomain', 'display_name'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, display_name: { type: 'string', minLength: 1, maxLength: 120 }, locale: { enum: ['vi', 'en'] }, domain_interval: { enum: ['monthly', 'yearly'] } } }, billing_interval: { enum: ['monthly', 'yearly'] }, installation: { type: 'boolean' }, upgrade_entitlement_id: { type: 'string', pattern: UUID.source }, storage_gb: { type: 'integer', minimum: 1, maximum: 100 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const found = await loadPlanForPurchase(request.body.template_id, request.body.plan_id);

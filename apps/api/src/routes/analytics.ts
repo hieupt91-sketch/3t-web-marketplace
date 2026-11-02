@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { requirePermission } from '../app.ts';
+import { ipRateLimit } from '../lib/rate-limit.ts';
 
 /**
  * First-party storefront statistics (owner request): a tiny beacon the
@@ -24,6 +25,10 @@ export async function publicAnalyticsRoutes(app: FastifyInstance): Promise<void>
   app.post<{ Body: { path?: string } }>(
     '/analytics/pageview',
     {
+      // Unauthenticated beacon: a per-IP flood brake so a script cannot
+      // inflate the pageviews table or skew storefront statistics
+      // (audit code M-05). Generous vs real browsing (a view per page).
+      config: ipRateLimit(600),
       schema: {
         body: {
           type: 'object',

@@ -2,6 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { writeAudit } from '@3t/core';
 import { requirePermission, requireUser } from '../app.ts';
 import { errors } from '../errors.ts';
+import { sessionRateLimit } from '../lib/rate-limit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function assertId(id: string) {
@@ -36,7 +37,8 @@ export async function supportRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Body: { subject: string; body: string; locale: 'vi' | 'en'; order_id?: string; site_label?: string } }>(
     '/support/tickets',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['subject', 'body', 'locale'], properties: { subject: { type: 'string', minLength: 3, maxLength: 200 }, body: { type: 'string', minLength: 3, maxLength: 10000 }, locale: { enum: ['vi', 'en'] }, order_id: { type: 'string' }, site_label: { type: 'string', maxLength: 200 } } } } },
+    // Free accounts must not flood the staff queue (audit code M-05).
+    { config: sessionRateLimit(30), schema: { body: { type: 'object', additionalProperties: false, required: ['subject', 'body', 'locale'], properties: { subject: { type: 'string', minLength: 3, maxLength: 200 }, body: { type: 'string', minLength: 3, maxLength: 10000 }, locale: { enum: ['vi', 'en'] }, order_id: { type: 'string' }, site_label: { type: 'string', maxLength: 200 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       if (request.body.order_id) {

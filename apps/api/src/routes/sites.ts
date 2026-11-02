@@ -10,6 +10,7 @@ import type { FastifyInstance } from 'fastify';
 import { enqueueJob, isUniqueViolation, tx, validateDynamicContent, writeAudit } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
+import { isPublicIp, pinnedRequest } from '../lib/ssrf.ts';
 import { errors } from '../errors.ts';
 import { RESERVED_SUBDOMAINS as RESERVED, SUBDOMAIN_RE, createSiteInTx, currentHold, enqueueSiteJob } from '../site-create.ts';
 
@@ -167,7 +168,9 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Body: { subdomain: string; entitlement_id?: string } }>(
     '/sites/subdomain-reservations',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['subdomain'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, entitlement_id: { type: 'string' } } } } },
+    // Holds write rows and squat-check names: cap per-account spam
+    // (audit code M-05) well above real purchase behaviour.
+    { config: sessionRateLimit(120), schema: { body: { type: 'object', additionalProperties: false, required: ['subdomain'], properties: { subdomain: { type: 'string', minLength: 3, maxLength: 40 }, entitlement_id: { type: 'string' } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const subdomain = request.body.subdomain.toLowerCase();
@@ -243,19 +246,21 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
     } catch {
       return { data: { hostname, dns_ok: false, addresses: 0, private: false, http_ok: false, http_status: null }, meta: { request_id: request.id } };
     }
-    const isPrivate = (ip: string): boolean => {
-      if (ip.includes(':')) return ip === '::1' || ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe8') || ip.startsWith('fe9') || ip.startsWith('fea') || ip.startsWith('feb');
-      const [a, b] = ip.split('.').map(Number);
-      return a === 10 || a === 127 || (a === 172 && b! >= 16 && b! <= 31) || (a === 192 && b === 168);
-    };
-    if (addresses.length === 0 || addresses.some(isPrivate)) {
+    // Shared SSRF guard (audit M-01): the full non-public range set —
+    // including link-local 169.254.0.0/16 (cloud metadata), CGNAT,
+    // 192.0.0.0/24, 198.18.0.0/15 and IPv4-mapped IPv6 — not the old
+    // four-range local list.
+    if (addresses.length === 0 || addresses.some((a) => !isPublicIp(a))) {
       return { data: { hostname, dns_ok: addresses.length > 0, addresses: addresses.length, private: true, http_ok: false, http_status: null }, meta: { request_id: request.id } };
     }
     let http_status: number | null = null;
     try {
-      const res = await fetch(`https://${hostname}/`, { method: 'GET', redirect: 'manual', signal: AbortSignal.timeout(8000) });
+      // Pinned fetch (audit M-01): pinnedRequest re-resolves, re-validates
+      // every address and connects to a validated one, so a DNS answer
+      // that changes between the check above and the fetch cannot steer
+      // the request at a private target (rebinding TOCTOU).
+      const res = await pinnedRequest(new URL(`https://${hostname}/`), { method: 'GET', timeoutMs: 8000 });
       http_status = res.status;
-      await res.body?.cancel().catch(() => undefined);
     } catch {
       http_status = null;
     }

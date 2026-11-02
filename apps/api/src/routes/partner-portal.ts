@@ -7,6 +7,7 @@ import { partnerBalance } from '../lib/partner-ledger.ts';
 import { pointsToVnd, resolvePartnerCostPoints, walletBalance } from '../lib/partner-wallet.ts';
 import { computeCharge } from './commerce.ts';
 import { requireStepUp } from '../lib/step-up.ts';
+import { sessionRateLimit } from '../lib/rate-limit.ts';
 import { assertPublicWebhookUrl, decryptWebhookSecret, encryptWebhookSecret, sendWebhookDelivery } from '../lib/partner-webhooks.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -27,7 +28,9 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
   // R01: apply (verified users only); rejected applications can be resubmitted.
   app.post<{ Body: { display_name: string; channel: string; domain: string; description?: string } }>(
     '/partner/apply',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['display_name', 'channel', 'domain'], properties: { display_name: { type: 'string', minLength: 1, maxLength: 120 }, channel: { type: 'string', minLength: 1, maxLength: 500 }, domain: { type: 'string', minLength: 1, maxLength: 253 }, description: { type: 'string', maxLength: 2000 } } } } },
+    // Applications land in a staff review queue: cap resubmission spam
+    // (audit code M-05).
+    { config: sessionRateLimit(20), schema: { body: { type: 'object', additionalProperties: false, required: ['display_name', 'channel', 'domain'], properties: { display_name: { type: 'string', minLength: 1, maxLength: 120 }, channel: { type: 'string', minLength: 1, maxLength: 500 }, domain: { type: 'string', minLength: 1, maxLength: 253 }, description: { type: 'string', maxLength: 2000 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const user = await db.query<{ verified_at: Date | null }>('SELECT verified_at FROM users WHERE id = $1', [auth.userId]);

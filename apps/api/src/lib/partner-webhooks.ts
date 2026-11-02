@@ -4,14 +4,18 @@ import { decryptSecret, encryptSecret } from './secret-store.ts';
 /** Webhook secrets use the shared encrypted-secret envelope (see secret-store). */
 export const encryptWebhookSecret = encryptSecret;
 export const decryptWebhookSecret = decryptSecret;
-import { lookup } from 'node:dns/promises';
-import { isIP } from 'node:net';
+import { SsrfError, isPublicIp, pinnedRequest, resolvePublicAddresses } from './ssrf.ts';
+
+export { isPublicIp };
 
 /**
  * Partner webhook delivery (docs/06 §9).
- * SSRF/DNS-rebinding guard (AT-43): HTTPS only, no private/loopback/link-local/
- * reserved IPs, and the hostname is re-resolved at send time — a redirect to
- * another host is never followed (redirect: 'manual').
+ * SSRF/DNS-rebinding guard (AT-43; audit M-02): HTTPS only, no private/
+ * loopback/link-local/reserved IPs (shared isPublicIp in ssrf.ts, incl.
+ * 100.64/10, 192.0.0/24, 198.18/15 and IPv4-mapped IPv6), and at send time
+ * the connection is pinned to an address validated in the same call —
+ * the hostname is never re-resolved between check and fetch, and a
+ * redirect to another host is never followed.
  * Loopback is allowed only when explicitly enabled (dev/test).
  */
 export async function assertPublicWebhookUrl(rawUrl: string, allowLoopback: boolean): Promise<URL> {
@@ -29,50 +33,13 @@ export async function assertPublicWebhookUrl(rawUrl: string, allowLoopback: bool
   if ((host === 'localhost' || host.endsWith('.localhost') || host.endsWith('.local')) && !allowLoopback) {
     throw new Error('webhook.private_host');
   }
-  const ipVersion = isIP(host);
-  if (ipVersion !== 0) {
-    if (!isPublicIp(host) && !(allowLoopback && (host === '127.0.0.1' || host === '::1'))) {
-      throw new Error('webhook.private_host');
-    }
-    return url;
-  }
-  let addresses: { address: string }[];
   try {
-    addresses = await lookup(host, { all: true });
-  } catch {
-    throw new Error('webhook.unresolvable');
-  }
-  for (const { address } of addresses) {
-    if (!isPublicIp(address) && !(allowLoopback && (address === '127.0.0.1' || address === '::1'))) {
-      throw new Error('webhook.private_host');
-    }
+    await resolvePublicAddresses(host.replace(/^\[|\]$/g, ''), allowLoopback);
+  } catch (err) {
+    if (err instanceof SsrfError && err.code === 'unresolvable') throw new Error('webhook.unresolvable');
+    throw new Error('webhook.private_host');
   }
   return url;
-}
-
-export function isPublicIp(ip: string): boolean {
-  const v = isIP(ip);
-  if (v === 4) {
-    const parts = ip.split('.').map(Number);
-    const a = parts[0]!;
-    const b = parts[1]!;
-    if (a === 10) return false;
-    if (a === 127) return false;
-    if (a === 169 && b === 254) return false;
-    if (a === 172 && b >= 16 && b <= 31) return false;
-    if (a === 192 && b === 168) return false;
-    if (a === 0 || a >= 224) return false;
-    return true;
-  }
-  if (v === 6) {
-    const lower = ip.toLowerCase();
-    if (lower === '::1') return false;
-    if (lower.startsWith('fc') || lower.startsWith('fd')) return false;
-    if (lower.startsWith('fe8') || lower.startsWith('fe9') || lower.startsWith('fea') || lower.startsWith('feb')) return false;
-    if (lower.startsWith('ff')) return false;
-    return true;
-  }
-  return false;
 }
 
 export function signWebhookBody(secret: string, timestampSeconds: number, rawBody: string): string {
@@ -149,7 +116,10 @@ export async function sendWebhookDelivery(
   try {
     const url = await assertPublicWebhookUrl(endpointUrl, allowLoopback);
     const timestamp = Math.floor(Date.now() / 1000);
-    const res = await fetch(url, {
+    // Pinned delivery (audit M-02): the TCP connection uses an address that
+    // was resolved and validated inside pinnedRequest itself, so a hostile
+    // DNS answer cannot swap in a private address after the check.
+    const res = await pinnedRequest(url, {
       method: 'POST',
       headers: {
         'content-type': 'application/json',
@@ -158,11 +128,11 @@ export async function sendWebhookDelivery(
         'x-3t-signature': signWebhookBody(endpointSecret, timestamp, rawBody),
       },
       body: rawBody,
-      redirect: 'manual',
-      signal: AbortSignal.timeout(10000),
+      timeoutMs: 10000,
+      allowLoopback,
+      maxBodyBytes: 256 * 1024,
     });
     responseStatus = res.status;
-    await res.text().catch(() => '');
     outcome = res.status >= 200 && res.status < 300 ? 'delivered' : 'failed';
   } catch {
     outcome = 'failed';
