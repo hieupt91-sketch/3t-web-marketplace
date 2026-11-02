@@ -1,6 +1,10 @@
 import type { MetadataRoute } from 'next';
 import { siteBaseUrl } from '@/lib/seo';
 
+// Render per request: the public base URL comes from runtime env
+// (PUBLIC_BASE_URL); a build-time prerender would bake the localhost fallback.
+export const dynamic = 'force-dynamic';
+
 /** Private areas stay disallowed for every crawler; robots is not a substitute for auth (docs/07 §7). */
 const PRIVATE_PATHS = ['/admin', '/account', '/auth', '/checkout', '/demo', '/api'];
 
