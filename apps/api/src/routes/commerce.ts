@@ -1363,12 +1363,37 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
        WHERE e.user_id = $1 ORDER BY e.created_at DESC`,
       [auth.userId],
     );
+    // Sites already created from these entitlements: the purchases page and
+    // the create-site wizard must not present a fully-used entitlement as if
+    // no website existed yet (the hosted checkout auto-creates the first
+    // site, so "pending creation" wording is stale for most hosted buyers).
+    const entIds = rows.map((e) => e.id);
+    const siteRows = entIds.length
+      ? (await db.query<{ id: string; entitlement_id: string; display_name: string; status: string; subdomain: string | null }>(
+          `SELECT id, entitlement_id, display_name, status, subdomain FROM sites
+           WHERE entitlement_id = ANY($1) AND status <> 'purged' ORDER BY created_at DESC`,
+          [entIds],
+        )).rows
+      : [];
+    const sitesByEnt = new Map<string, typeof siteRows>();
+    for (const s of siteRows) {
+      const arr = sitesByEnt.get(s.entitlement_id) ?? [];
+      arr.push(s);
+      sitesByEnt.set(s.entitlement_id, arr);
+    }
     return {
-      data: rows.map((e) => ({
+      data: rows.map((e) => {
+        const entSites = sitesByEnt.get(e.id) ?? [];
+        const usedInstances = entSites.length;
+        const firstSite = entSites[0];
+        return {
         id: e.id,
         mode: e.mode,
         status: e.status,
         instance_limit: e.instance_limit,
+        used_instances: usedInstances,
+        free_instances: Math.max(0, e.instance_limit - usedInstances),
+        site: firstSite ? { id: firstSite.id, display_name: firstSite.display_name, status: firstSite.status, subdomain: firstSite.subdomain } : null,
         storage_gb: e.storage_gb ?? 1,
         updates_until: e.updates_until?.toISOString() ?? null,
         requested_subdomain: e.requested_subdomain,
@@ -1376,7 +1401,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         template: { id: e.template_id, slug: e.slug, adapter: e.adapter },
         version: { id: e.version_id, semver: e.semver },
         created_at: e.created_at.toISOString(),
-      })),
+        };
+      }),
       page: { next_cursor: null, has_more: false },
     };
   });

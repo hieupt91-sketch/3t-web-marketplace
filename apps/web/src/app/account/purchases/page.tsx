@@ -12,6 +12,9 @@ interface Entitlement {
   mode: string;
   status: string;
   instance_limit: number;
+  used_instances?: number;
+  free_instances?: number;
+  site?: { id: string; display_name: string; status: string; subdomain: string | null } | null;
   storage_gb?: number;
   updates_until: string | null;
   template: { id: string; slug: string; adapter: string | null };
@@ -81,7 +84,19 @@ function PurchasesInner() {
                   {e.status === 'active' ? <Link className="button button--secondary" href={`/checkout/configure?template=${encodeURIComponent(e.template.slug)}&upgrade=${e.id}`}>{t('ui.purchases.buy_hosting')}</Link> : null}
                 </>
               ) : (
-                <p className="muted">{t('ui.purchases.hosted_pending')}</p>
+                <>
+                  {e.site ? (
+                    <>
+                      <p className="muted">{t('ui.purchases.hosted_site_ready')}</p>
+                      <Link className="button button--secondary" href={`/account/sites/${e.site.id}`}>{t('ui.purchases.view_site')}</Link>
+                    </>
+                  ) : (
+                    <p className="muted">{t('ui.purchases.hosted_pending')}</p>
+                  )}
+                  {(e.free_instances ?? 0) > 0 ? (
+                    <Link className="button" href="/account/sites/new">{t('ui.purchases.create_site')}</Link>
+                  ) : null}
+                </>
               )}
             </article>
           ))}

@@ -6,7 +6,7 @@ import { ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
-interface Entitlement { id: string; mode: string; status: string; instance_limit: number; requested_subdomain?: string | null; requested_display_name?: string | null; template: { slug: string }; version: { semver: string } }
+interface Entitlement { id: string; mode: string; status: string; instance_limit: number; free_instances?: number; requested_subdomain?: string | null; requested_display_name?: string | null; template: { slug: string }; version: { semver: string } }
 interface SubCheck { available: boolean; reason: string | null; held_by_you?: boolean; reservation_expires_at?: string }
 
 type HoldState =
@@ -87,7 +87,7 @@ export default function NewSitePage() {
   }
   useEffect(() => {
     void api<Entitlement[]>('/me/entitlements').then((res) => {
-      if (res.ok) setEnts(res.data.filter((e) => e.mode === 'hosted' && e.status === 'active'));
+      if (res.ok) setEnts(res.data.filter((e) => e.mode === 'hosted' && e.status === 'active' && (e.free_instances ?? 0) > 0));
       else setError(res.error);
     });
   }, []);
