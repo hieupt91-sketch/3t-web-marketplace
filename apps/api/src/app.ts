@@ -212,6 +212,8 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
     reply.header('cache-control', 'no-store');
     reply.header('x-content-type-options', 'nosniff');
     reply.header('referrer-policy', 'no-referrer');
+    // HSTS alongside the portal's (audit UI-MED-02): one year, no preload.
+    reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
     if (!request.url.startsWith('/api/')) return;
     checkOrigin(request, deps.config.portalOrigin);
     await loadSession(request, deps.db);

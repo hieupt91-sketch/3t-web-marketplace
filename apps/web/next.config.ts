@@ -19,6 +19,35 @@ const config: NextConfig = {
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
           { key: 'X-Frame-Options', value: 'DENY' },
           { key: 'Permissions-Policy', value: 'camera=(), microphone=(), geolocation=()' },
+          // HSTS (audit UI-MED-02 / infra M2): one year + subdomains.
+          // No `preload` — joining the browser preload list is an owner
+          // decision, not a deploy default.
+          { key: 'Strict-Transport-Security', value: 'max-age=31536000; includeSubDomains' },
+          // CSP (audit UI-MED-01): the portal previously shipped none.
+          // script-src keeps 'unsafe-inline' because the App Router
+          // streams inline RSC bootstrap scripts (nonce support needs a
+          // per-request middleware and is a separate step); everything
+          // else is locked to 'self' plus the origins the product itself
+          // needs: https images (template previews live on the object
+          // store / preview hosts), data:/blob: (QR codes, upload
+          // previews), and https frames (live demo/site previews run on
+          // subdomains and buyer custom domains).
+          {
+            key: 'Content-Security-Policy',
+            value: [
+              "default-src 'self'",
+              "script-src 'self' 'unsafe-inline'",
+              "style-src 'self' 'unsafe-inline'",
+              "img-src 'self' data: blob: https:",
+              "font-src 'self' data:",
+              "connect-src 'self' https: wss:",
+              "frame-src 'self' https:",
+              "frame-ancestors 'none'",
+              "base-uri 'self'",
+              "form-action 'self'",
+              "object-src 'none'",
+            ].join('; '),
+          },
         ],
       },
       {

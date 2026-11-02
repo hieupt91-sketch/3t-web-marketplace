@@ -45,6 +45,12 @@ export function LiveThumb({ url, title }: { url: string; title: string }) {
           title={title}
           tabIndex={-1}
           scrolling="no"
+          // Same containment as the demo viewer (audit UI-MED-03): the
+          // thumbnail renders untrusted template code, so it gets script
+          // ability only — no same-origin access, no forms/navigation —
+          // and no referrer leaks to the preview origin.
+          sandbox="allow-scripts"
+          referrerPolicy="no-referrer"
           onLoad={() => setLoaded(true)}
           style={{
             width: 1280,
