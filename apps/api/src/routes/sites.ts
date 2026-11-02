@@ -57,6 +57,22 @@ async function loadSiteForUser(db: { query: <T>(sql: string, params: unknown[]) 
   return row;
 }
 
+type DbQuery = { query: <T>(sql: string, params: unknown[]) => Promise<{ rows: T[] }> };
+
+/**
+ * Free-update deadline for a site (owner rule 2026-11-02): updates are
+ * free for 12 months from the purchase, anchored on the entitlement's
+ * creation. Sites created manually (no entitlement) have no deadline.
+ */
+export async function updatesFreeUntil(db: DbQuery, entitlementId: string | null): Promise<Date | null> {
+  if (!entitlementId) return null;
+  const { rows } = await db.query<{ free_until: Date }>(
+    `SELECT created_at + interval '12 months' AS free_until FROM entitlements WHERE id = $1`,
+    [entitlementId],
+  );
+  return rows[0]?.free_until ?? null;
+}
+
 
 /**
  * M5 hosting (docs/02 §5, docs/05 C05–C12/C15).
@@ -262,7 +278,8 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       db.query('SELECT * FROM subscriptions WHERE site_id = $1 ORDER BY created_at DESC LIMIT 1', [site.id]),
       db.query<{ template_id: string; manifest_json: { capabilities?: string[] } }>('SELECT template_id, manifest_json FROM template_versions WHERE id = $1', [site.template_version_id]),
     ]);
-    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, capabilities: template.rows[0]?.manifest_json?.capabilities ?? [], deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null } };
+    const freeUntil = await updatesFreeUntil(db, site.entitlement_id);
+    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, capabilities: template.rows[0]?.manifest_json?.capabilities ?? [], deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null, updates_free_until: freeUntil ? new Date(freeUntil).toISOString() : null } };
   });
 
   app.get<{ Params: { id: string } }>('/sites/:id/deployments', async (request) => {
@@ -298,6 +315,11 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       const auth = requireUser(request);
       const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
       if (site.status !== 'active') throw errors.conflict('site.not_active');
+      // Free-update window (owner rule 2026-11-02): 12 months from the
+      // purchase entitlement; past the deadline the update is refused
+      // before any deployment/job is created. No entitlement → no gate.
+      const freeUntil = await updatesFreeUntil(db, site.entitlement_id);
+      if (freeUntil && new Date(freeUntil).getTime() <= Date.now()) throw errors.conflict('site.update_window_expired');
       assertId(request.body.version_id);
       const version = await db.query<{ template_id: string; artifact_id: string }>('SELECT template_id, artifact_id FROM template_versions WHERE id = $1', [request.body.version_id]);
       const template = await db.query<{ template_id: string }>('SELECT template_id FROM template_versions WHERE id = $1', [site.template_version_id]);

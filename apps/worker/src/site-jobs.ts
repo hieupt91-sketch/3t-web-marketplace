@@ -2,7 +2,7 @@ import { execFile } from 'node:child_process';
 import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createReadStream } from 'node:fs';
+import { createReadStream, existsSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import {
   completeJob,
@@ -211,13 +211,16 @@ async function swapAndRespawn(deps: { config: PlatformConfig; db: Db; store: Loc
 }
 
 async function runRestore(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, backupId: string, deploymentId: string | null): Promise<void> {
-  const { db, store } = deps;
+  const { config, db, store } = deps;
   const backup = await db.query<{ artifact_key: string }>(
     `SELECT a.object_key AS artifact_key FROM backups b JOIN artifacts a ON a.id = b.artifact_id WHERE b.id = $1 AND b.status = 'succeeded'`,
     [backupId],
   );
   if (!backup.rows[0]) throw new Error('backup not restorable');
-  const tmp = await mkdtemp(join(tmpdir(), 'mp-restore-'));
+  // Same-filesystem staging as runUpdate: the swap renames the staged
+  // tree into place, which cannot cross filesystems.
+  await mkdir(join(config.workDir, 'tmp'), { recursive: true });
+  const tmp = await mkdtemp(join(config.workDir, 'tmp', 'mp-restore-'));
   try {
     if (deploymentId) await db.query("UPDATE deployments SET status = 'running' WHERE id = $1", [deploymentId]);
     const staged = join(tmp, 'staged');
@@ -234,14 +237,41 @@ async function runRestore(deps: { config: PlatformConfig; db: Db; store: LocalOb
   }
 }
 
+/**
+ * Copy the site's live `data/` tree over the staged tree's `data/` so an
+ * update never resets the customer's own data — edited content
+ * (content.json), consultation bookings, the site admin account, uploads
+ * and the Google Sheet integration file all live there, while the version
+ * artifact only ships code + seed. The customer's copy always wins: any
+ * `data/` the artifact might carry is removed first so no artifact file
+ * can shadow a customer file of the same name. No-op when the live site
+ * has no data directory (static sites, fresh trees).
+ */
+export async function carrySiteData(fromDir: string, toDir: string): Promise<void> {
+  const source = join(fromDir, 'data');
+  if (!existsSync(source)) return;
+  const target = join(toDir, 'data');
+  await rm(target, { recursive: true, force: true });
+  await cp(source, target, { recursive: true, dereference: false });
+}
+
 async function runUpdate(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, versionId: string, deploymentId: string | null): Promise<void> {
-  const { db, store } = deps;
+  const { config, db, store } = deps;
   const version = await loadVersion(db, versionId);
-  const tmp = await mkdtemp(join(tmpdir(), 'mp-update-'));
+  // Stage on the same filesystem as the site tree: swapAndRespawn swaps
+  // by rename(), which fails with EXDEV across filesystems (os tmpdir is
+  // typically a tmpfs while workDir is on disk).
+  await mkdir(join(config.workDir, 'tmp'), { recursive: true });
+  const tmp = await mkdtemp(join(config.workDir, 'tmp', 'mp-update-'));
   try {
     if (deploymentId) await db.query("UPDATE deployments SET status = 'running' WHERE id = $1", [deploymentId]);
     const staged = join(tmp, 'staged');
     await materialize(store, version, staged);
+    // The staged tree is code-only; carry the customer's live data/ into
+    // it before the swap so the new version boots with their data intact.
+    // The kept old tree still holds its own copy, so a failed swap rolls
+    // back with data untouched (swapAndRespawn semantics unchanged).
+    await carrySiteData(siteDir(config, site.id), staged);
     await writeSiteMeta(staged, { display_name: site.display_name, locale: site.default_locale, subdomain: site.subdomain, version_id: version.id });
     await swapAndRespawn(deps, site, staged, version);
     await db.query('UPDATE sites SET template_version_id = $2 WHERE id = $1', [site.id, versionId]);

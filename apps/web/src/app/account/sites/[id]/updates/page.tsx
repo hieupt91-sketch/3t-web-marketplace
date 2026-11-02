@@ -8,7 +8,7 @@ import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
 interface Deployment { id: string; operation: string; status: string; version_id: string; error_code: string | null; created_at: string }
-interface Site { id: string; template_version_id: string; deployments: Deployment[] }
+interface Site { id: string; template_version_id: string; deployments: Deployment[]; updates_free_until?: string | null }
 
 /** C11 — updates: current/available, progress, rollback via restore. */
 export default function SiteUpdatesPage() {
@@ -32,18 +32,21 @@ export default function SiteUpdatesPage() {
   if (error && !site) return <ErrorState error={error} onRetry={() => void load()} />;
   if (!site) return <Loading />;
   const others = versions.filter((v) => v.id !== site.template_version_id);
+  const windowExpired = site.updates_free_until ? new Date(site.updates_free_until).getTime() <= Date.now() : false;
   return (
     <div className="stack">
       <p><Link href={`/account/sites/${params.id}`}>← {t('ui.sites.back_site')}</Link></p>
       <h1>{t('ui.sites.updates_title')}</h1>
       <p className="muted">{t('ui.sites.updates_current', { version: site.template_version_id.slice(0, 8) })}</p>
+      {site.updates_free_until ? <p className="muted">{t('ui.sites.updates_free_until', { date: dt(site.updates_free_until) })}</p> : null}
+      {windowExpired ? <p className="muted">{t('ui.sites.updates_window_expired')}</p> : null}
       {others.length > 0 ? (
         <div className="stack">
           <p>{t('ui.sites.updates_available')}</p>
           {others.map((v) => (
             <div key={v.id} className="row">
               <span className="mono">{v.semver}</span>
-              <button type="button" className="button button--secondary" onClick={() => void api(`/sites/${params.id}/update`, { method: 'POST', body: { version_id: v.id } }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.sites.update_action')}</button>
+              <button type="button" className="button button--secondary" disabled={windowExpired} onClick={() => void api(`/sites/${params.id}/update`, { method: 'POST', body: { version_id: v.id } }).then((res) => { if (!res.ok) setError(res.error); else void load(); })}>{t('ui.sites.update_action')}</button>
             </div>
           ))}
         </div>
