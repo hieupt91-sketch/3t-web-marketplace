@@ -1,0 +1,25 @@
+{
+  "name": "3t-web-marketplace",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "engines": {
+    "node": ">=22.12 <23"
+  },
+  "scripts": {
+    "docs:check": "python3 scripts/validate_docs.py",
+    "db:start": "bash scripts/dev-db.sh start",
+    "db:stop": "bash scripts/dev-db.sh stop",
+    "db:migrate": "pnpm --filter @3t/api run migrate",
+    "owner:create": "pnpm --filter @3t/api run create-owner",
+    "dev:api": "pnpm --filter @3t/api run dev",
+    "dev:worker": "pnpm --filter @3t/worker run dev",
+    "dev:preview": "pnpm --filter @3t/preview run dev",
+    "dev:web": "pnpm --filter @3t/web run dev",
+    "typecheck": "pnpm -r run typecheck",
+    "lint": "pnpm -r run lint",
+    "test": "pnpm -r run test",
+    "check": "pnpm run docs:check && pnpm run typecheck && pnpm run lint && pnpm run test",
+    "dev": "bash scripts/dev-all.sh",
+    "test:integration": "pnpm --filter @3t/tests run test"
+  }
+}

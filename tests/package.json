@@ -1,0 +1,24 @@
+{
+  "name": "@3t/tests",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "lint": "echo 'no lint rules beyond typecheck'",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@3t/api": "workspace:*",
+    "@3t/core": "workspace:*",
+    "@3t/preview": "workspace:*",
+    "@3t/template-sdk": "workspace:*",
+    "@3t/worker": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.20.5",
+    "tsx": "4.23.15",
+    "typescript": "5.9.3",
+    "vitest": "3.2.4"
+  }
+}

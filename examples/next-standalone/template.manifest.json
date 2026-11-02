@@ -1,0 +1,54 @@
+{
+  "schemaVersion": 1,
+  "name": {
+    "en": "Next standalone fixture",
+    "vi": "Mẫu Next standalone"
+  },
+  "slug": "next-standalone-fixture",
+  "version": "1.0.0",
+  "adapter": "next-standalone",
+  "projectRoot": ".",
+  "summary": {
+    "en": "A fixture for the next-standalone adapter.",
+    "vi": "Mẫu kiểm thử adapter next-standalone."
+  },
+  "build": {
+    "script": "build",
+    "outputDir": ".next/standalone",
+    "toolchain": "node22",
+    "packageManager": "npm",
+    "lockfile": "package-lock.json"
+  },
+  "runtime": {
+    "port": 3000,
+    "start": [
+      "node",
+      "server.js"
+    ],
+    "healthPath": "/__health"
+  },
+  "database": {
+    "engine": "none"
+  },
+  "demo": {
+    "mode": "publicReadonly",
+    "ttlHours": 24
+  },
+  "locales": {
+    "default": "vi",
+    "supported": [
+      "vi"
+    ],
+    "contentMode": "static"
+  },
+  "capabilities": [
+    "landing"
+  ],
+  "export": {
+    "modes": [
+      "hosted"
+    ],
+    "sourceRoot": "."
+  },
+  "env": []
+}

@@ -2,7 +2,7 @@
 
 Nền tảng bán website/landing page, tự tạo demo từ tài nguyên chuẩn, bàn giao bộ cài hoặc vận hành hosting, có API cộng tác viên và đa ngôn ngữ.
 
-**Bản đặc tả:** 1.0 — 23/10/2026 — tiếng Việt. **Trạng thái:** tài liệu triển khai và bộ hợp đồng mẫu; chưa phải phần mềm thương mại đã chạy.
+**Bản đặc tả:** 1.0 — 23/10/2026 — tiếng Việt. **Trạng thái:** đặc tả + mã nền tảng M1 và lát cắt nhập mẫu tĩnh M2; chưa phải phần mềm thương mại đã chạy.
 
 ## Bắt đầu đọc
 
@@ -24,17 +24,44 @@ Quản trị viên đưa ZIP hoặc commit GitHub vào → hệ thống đọc m
 
 **“Tự nhận diện” có phạm vi:** HTML tĩnh đủ tệp có thể chạy ngay; source Vite/Next/Node phải khớp adapter và có cấu hình. Ảnh thiết kế, SQL dump hoặc source thiếu dependency không tự biến thành website. Mẫu chuẩn hóa một lần; các phiên bản sau nhập và dựng demo tự động.
 
-## Tệp có thể dùng ngay
+## Mã nguồn hiện có (M1 + lát cắt M2)
 
-- `contracts/template-manifest.schema.json`: cấu trúc manifest phiên bản 1.
-- `examples/static-landing/`: fixture HTML rất nhỏ để kiểm thử import, không phải giao diện hoàn thiện của cửa hàng.
-- `contracts/examples/`: manifest minh họa các adapter khác; chỉ là hợp đồng, không chứa ứng dụng backend.
-- `scripts/validate_docs.py`: kiểm tra liên kết, JSON, quy tắc manifest của bộ tài liệu.
-- `PROJECT_STATUS.md`, `DECISIONS.md`: ghi việc đã làm và điểm bắt đầu khi đổi máy.
+| Thư mục | Nội dung |
+|---|---|
+| `apps/api` | API Fastify `/api/v1`: tài khoản, phiên, RBAC, CSRF, idempotency, ETag; nhập ZIP; danh mục |
+| `apps/worker` | Worker xử lý job nhập mẫu `static-html` (kiểm tra gói → bản xem trước → bản nháp) |
+| `apps/preview` | Origin xem trước riêng, phục vụ artifact bất biến theo hostname |
+| `apps/web` | Next.js: cửa hàng (P01–P03), đăng nhập (U01–U06 một phần), tài khoản (C01), quản trị nhập mẫu (A01–A05) |
+| `packages/core` | Cấu hình, PostgreSQL, migration runner, job queue lease/fencing, audit/outbox, object store |
+| `packages/template-sdk` | Kiểm tra manifest v1, giải nén ZIP an toàn, quét bí mật, nhận diện adapter |
+| `packages/i18n` | Gói ngôn ngữ VI/EN và kiểm tra khóa |
+| `migrations/` | SQL nền tảng (forward-only) |
+| `tests/` | Kiểm thử tích hợp API → worker → preview |
+
+Chỉ adapter `static-html` chạy được; `vite-static`, `next-standalone`, `node-http` được nhận diện nhưng báo “chưa triển khai”. Chi tiết: `PROJECT_STATUS.md`.
+
+### Chạy trên máy dev
+
+Yêu cầu: Node 22 LTS, pnpm 10 (`corepack enable`), PostgreSQL 16 (binary cục bộ) và Python 3 cho kiểm tra tài liệu.
 
 ```bash
+pnpm install --frozen-lockfile
+pnpm db:start                      # PostgreSQL cục bộ ở 127.0.0.1:55432 (runtime-data/pg)
+pnpm db:migrate
+OWNER_EMAIL=ban@example.com pnpm owner:create   # hỏi mật khẩu, cấp vai trò platform_owner
+pnpm dev                           # API :4000, worker, preview :4100, web http://localhost:3000
+```
+
+Email phát triển được ghi vào `runtime-data/dev-mail/` (không gửi ra ngoài). Ảnh chụp demo cần `SCREENSHOTS=on` và `CHROMIUM_PATH`. Xem `.env.example`.
+
+### Kiểm tra
+
+```bash
+pnpm run check        # docs + typecheck + kiểm tra khóa i18n + toàn bộ test (cần PostgreSQL đang chạy)
 python3 scripts/validate_docs.py
 ```
+
+Bộ hợp đồng gốc vẫn ở `contracts/` và fixture `examples/static-landing/` (dùng trong test tích hợp).
 
 ## Quy ước triển khai
 
@@ -47,4 +74,4 @@ python3 scripts/validate_docs.py
 
 ## Trạng thái thực hiện
 
-Đọc `PROJECT_STATUS.md` trước khi code. Bộ này chưa chứa API production, cổng thanh toán tích hợp, hệ thống chạy container hay frontend hoàn chỉnh. Không mô tả kiểm tra tài liệu là kiểm thử toàn bộ nền tảng.
+Đọc `PROJECT_STATUS.md` trước khi code. Chưa có thanh toán, entitlement, hosting, CTV, executor build cách ly cho source cần build, hay triển khai staging/production. Kiểm thử hiện có chứng minh lát cắt nhập HTML tĩnh trên máy dev, không phải toàn bộ nền tảng.

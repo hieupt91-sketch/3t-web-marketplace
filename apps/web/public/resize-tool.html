@@ -1,0 +1,155 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Tool resize ảnh — Web Marketplace</title>
+<style>
+  :root { --brand: #1d4ed8; --brand-2: #7c3aed; --text: #0f172a; --muted: #475569; --bg: #f8fafc; }
+  * { box-sizing: border-box; }
+  body { margin: 0; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; background: var(--bg); color: var(--text); font-size: 16px; line-height: 1.5; }
+  .wrap { max-width: 720px; margin: 0 auto; padding: 24px 16px 48px; }
+  h1 { font-size: 28px; margin: 0 0 4px; }
+  .muted { color: var(--muted); }
+  .card { background: #fff; border: 1px solid #e2e8f0; border-radius: 20px; padding: 20px; margin-top: 16px; }
+  label { display: block; font-weight: 600; margin-top: 12px; }
+  label:first-child { margin-top: 0; }
+  input[type="file"], select, input[type="range"] { width: 100%; margin-top: 6px; }
+  select, input[type="file"] { padding: 10px; font-size: 16px; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; }
+  .row { display: flex; gap: 12px; flex-wrap: wrap; }
+  .row > div { flex: 1 1 200px; }
+  button { min-height: 44px; padding: 10px 20px; font-size: 16px; border: 0; border-radius: 10px; color: #fff; background: linear-gradient(135deg, var(--brand), var(--brand-2)); cursor: pointer; }
+  button:disabled { opacity: .5; cursor: default; }
+  .lang { text-align: right; }
+  .lang button { background: #fff; color: var(--text); border: 1px solid #cbd5e1; padding: 6px 12px; min-height: 36px; }
+  .lang button[aria-pressed="true"] { background: var(--brand); color: #fff; border-color: var(--brand); }
+  #preview { max-width: 100%; border-radius: 12px; margin-top: 12px; display: none; }
+  .note { font-size: 14px; }
+  a { color: var(--brand); }
+  @media (prefers-reduced-motion: reduce) { * { scroll-behavior: auto !important; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="lang">
+    <button type="button" id="btn-vi" aria-pressed="true">Tiếng Việt</button>
+    <button type="button" id="btn-en" aria-pressed="false">English</button>
+  </div>
+  <h1 data-i18n="title">Tool resize ảnh</h1>
+  <p class="muted" data-i18n="lead">Chạy hoàn toàn trên trình duyệt của bạn, không tải ảnh lên máy chủ nào.</p>
+
+  <div class="card">
+    <label for="file" data-i18n="step1">1. Chọn ảnh</label>
+    <input type="file" id="file" accept="image/*">
+    <p class="muted note" id="srcInfo"></p>
+
+    <label for="slot" data-i18n="step2">2. Chọn khung</label>
+    <select id="slot">
+      <option value="1600x900" data-i18n="slot_hero">Hero — 1600 × 900 (16:9, dưới 300KB)</option>
+      <option value="800x600" data-i18n="slot_card">Ảnh thẻ — 800 × 600 (4:3, dưới 200KB)</option>
+      <option value="400x400" data-i18n="slot_avatar">Avatar — 400 × 400 (1:1, dưới 100KB)</option>
+      <option value="orig" data-i18n="slot_orig">Giữ tỉ lệ gốc, chỉ thu nhỏ (cạnh dài nhất 1600px)</option>
+    </select>
+
+    <div class="row">
+      <div>
+        <label for="fmt" data-i18n="fmt">Định dạng xuất</label>
+        <select id="fmt">
+          <option value="image/webp">WebP</option>
+          <option value="image/jpeg">JPG</option>
+        </select>
+      </div>
+      <div>
+        <label for="q"><span data-i18n="quality">Chất lượng</span> <span id="qVal">0.82</span></label>
+        <input type="range" id="q" min="0.5" max="0.95" step="0.01" value="0.82">
+      </div>
+    </div>
+
+    <p style="margin-top:16px"><button type="button" id="run" disabled data-i18n="run">Cắt và xuất ảnh</button></p>
+    <p class="muted note" id="outInfo"></p>
+    <p><a id="dl" style="display:none" data-i18n="download">Tải ảnh đã resize xuống</a></p>
+    <img id="preview" alt="">
+  </div>
+
+  <p class="muted note" data-i18n="rights">Chỉ dùng ảnh bạn có quyền sử dụng. Đặt tên file không dấu, không khoảng trắng trước khi đăng lên web.</p>
+  <p class="muted note" data-i18n="noupscale">Ảnh gốc nhỏ hơn khung sẽ giữ nguyên kích thước, không bị phóng to làm mờ.</p>
+</div>
+<script>
+const STR = {
+  vi: { title: "Tool resize ảnh", lead: "Chạy hoàn toàn trên trình duyệt của bạn, không tải ảnh lên máy chủ nào.",
+    step1: "1. Chọn ảnh", step2: "2. Chọn khung",
+    slot_hero: "Hero — 1600 × 900 (16:9, dưới 300KB)", slot_card: "Ảnh thẻ — 800 × 600 (4:3, dưới 200KB)",
+    slot_avatar: "Avatar — 400 × 400 (1:1, dưới 100KB)", slot_orig: "Giữ tỉ lệ gốc, chỉ thu nhỏ (cạnh dài nhất 1600px)",
+    fmt: "Định dạng xuất", quality: "Chất lượng", run: "Cắt và xuất ảnh", download: "Tải ảnh đã resize xuống",
+    rights: "Chỉ dùng ảnh bạn có quyền sử dụng. Đặt tên file không dấu, không khoảng trắng trước khi đăng lên web.",
+    noupscale: "Ảnh gốc nhỏ hơn khung sẽ giữ nguyên kích thước, không bị phóng to làm mờ.",
+    src: "Ảnh gốc: ", out: "Ảnh xuất: ", px: "px", kb: "KB", pickfirst: "Hãy chọn ảnh trước." },
+  en: { title: "Image resize tool", lead: "Runs entirely in your browser. Your photos are never uploaded anywhere.",
+    step1: "1. Pick an image", step2: "2. Pick a frame",
+    slot_hero: "Hero — 1600 × 900 (16:9, under 300KB)", slot_card: "Card — 800 × 600 (4:3, under 200KB)",
+    slot_avatar: "Avatar — 400 × 400 (1:1, under 100KB)", slot_orig: "Keep original ratio, only shrink (longest side 1600px)",
+    fmt: "Export format", quality: "Quality", run: "Crop and export", download: "Download the resized image",
+    rights: "Only use images you have the rights to use. Name files without diacritics or spaces before publishing.",
+    noupscale: "Images smaller than the frame keep their original size and are never upscaled.",
+    src: "Original: ", out: "Exported: ", px: "px", kb: "KB", pickfirst: "Pick an image first." }
+};
+let lang = "vi", img = null, imgURL = "";
+const $ = (id) => document.getElementById(id);
+function setLang(l) {
+  lang = l;
+  document.documentElement.lang = l;
+  document.querySelectorAll("[data-i18n]").forEach((el) => { el.textContent = STR[l][el.dataset.i18n]; });
+  $("btn-vi").setAttribute("aria-pressed", l === "vi");
+  $("btn-en").setAttribute("aria-pressed", l === "en");
+}
+$("btn-vi").onclick = () => setLang("vi");
+$("btn-en").onclick = () => setLang("en");
+$("q").oninput = () => { $("qVal").textContent = $("q").value; };
+$("file").onchange = () => {
+  const f = $("file").files[0];
+  if (!f) return;
+  if (imgURL) URL.revokeObjectURL(imgURL);
+  imgURL = URL.createObjectURL(f);
+  img = new Image();
+  img.onload = () => {
+    const s = STR[lang];
+    $("srcInfo").textContent = s.src + img.naturalWidth + " × " + img.naturalHeight + " " + s.px + " (" + (f.size / 1024).toFixed(1) + " " + s.kb + ")";
+    $("run").disabled = false;
+  };
+  img.src = imgURL;
+};
+$("run").onclick = () => {
+  if (!img) { $("outInfo").textContent = STR[lang].pickfirst; return; }
+  const slot = $("slot").value;
+  const sw = img.naturalWidth, sh = img.naturalHeight;
+  let cw = sw, ch = sh, cx = 0, cy = 0, tw, th;
+  if (slot === "orig") {
+    const scale = Math.min(1, 1600 / Math.max(sw, sh));
+    tw = Math.round(sw * scale); th = Math.round(sh * scale);
+  } else {
+    const parts = slot.split("x"); tw = +parts[0]; th = +parts[1];
+    const aspect = tw / th;
+    if (sw / sh > aspect) { ch = sh; cw = Math.round(sh * aspect); cx = Math.round((sw - cw) / 2); }
+    else { cw = sw; ch = Math.round(sw / aspect); cy = Math.round((sh - ch) / 2); }
+    // Never upscale: if the cropped area is smaller than the target, keep it.
+    if (cw < tw || ch < th) { tw = cw; th = ch; }
+  }
+  const canvas = document.createElement("canvas");
+  canvas.width = tw; canvas.height = th;
+  canvas.getContext("2d").drawImage(img, cx, cy, cw, ch, 0, 0, tw, th);
+  canvas.toBlob((blob) => {
+    if (!blob) return;
+    const s = STR[lang];
+    const url = URL.createObjectURL(blob);
+    const prev = $("preview");
+    prev.src = url; prev.style.display = "block";
+    $("outInfo").textContent = s.out + tw + " × " + th + " " + s.px + " (" + (blob.size / 1024).toFixed(1) + " " + s.kb + ")";
+    const dl = $("dl");
+    dl.href = url;
+    dl.download = "resized." + ($("fmt").value === "image/webp" ? "webp" : "jpg");
+    dl.style.display = "inline";
+  }, $("fmt").value, parseFloat($("q").value));
+};
+</script>
+</body>
+</html>
