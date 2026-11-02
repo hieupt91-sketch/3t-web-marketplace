@@ -118,10 +118,6 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
   return config;
 }
 
-export function siteOrigin(config: PlatformConfig, subdomain: string): string {
-  return config.siteOriginTemplate.replace('{label}', subdomain);
-}
-
 export function previewOrigin(config: PlatformConfig, label: string): string {
   return config.previewOriginTemplate.replace('{label}', label);
 }

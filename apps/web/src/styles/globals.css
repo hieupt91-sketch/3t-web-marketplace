@@ -353,14 +353,6 @@ h3 {
   white-space: nowrap;
   font-size: 15px;
 }
-.site-nav a.nav-dropdown__item--all {
-  grid-column: 1 / -1;
-  min-height: 48px;
-  margin-top: 4px;
-  border-top: 1px solid var(--color-border);
-  border-radius: 0 0 10px 10px;
-  color: var(--color-primary);
-}
 /* On small screens the panel escapes the horizontally scrolling nav
  * (which would clip it) as a fixed sheet under the header. */
 @media (max-width: 900px) {
@@ -1279,15 +1271,6 @@ table.table {
   z-index: 2;
   box-shadow: var(--shadow-card);
 }
-/* Static/dynamic kind badge: bottom-left of the cover, so a dynamic
- * template (with its own admin) is never mistaken for a static one. */
-.template-card__kind {
-  position: absolute;
-  bottom: var(--space-2);
-  left: var(--space-2);
-  z-index: 2;
-  box-shadow: var(--shadow-card);
-}
 /* One action row per card, never wrapping: save (icon), demo, detail —
  * pinned to the card's bottom edge so rows line up across a shelf. */
 .template-card__actions {
@@ -1564,18 +1547,6 @@ table.table {
     flex: 0 0 128px;
     scroll-snap-align: start;
   }
-}
-.step-number {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 50%;
-  background: var(--color-bg-accent);
-  color: #1d4ed8;
-  font-size: 18px;
-  font-weight: 700;
 }
 .cta-band {
   padding: var(--space-6);
