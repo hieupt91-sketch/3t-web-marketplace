@@ -4,12 +4,14 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestContext, sessionCookie, type TestContext } from './test-helpers.ts';
 
 /** Production gate for the sandbox payment provider (go-live hardening):
- *  in production a plain buyer can never create or settle a mock payment —
- *  no real method configured means "not payable yet", not a free checkout.
- *  Staff accounts keep the sandbox for test purchases. */
+ *  in production the mock provider is ENTIRELY unavailable (audit
+ *  payments L1, wave 3) — no account, whatever roles it holds, can create
+ *  or settle a mock payment or refund. No real method configured means
+ *  "not payable yet", never a free checkout, not even for staff. */
 const PROD_ORIGIN = 'https://webmaket.com';
 let ctx: TestContext;
 let ownerCookie: string;
+let supportCookie: string;
 let buyerCookie: string;
 let templateId: string;
 let planId: string;
@@ -46,6 +48,8 @@ beforeAll(async () => {
   });
   const owner = await prodUser('prod-owner@example.com', 'platform_owner');
   ownerCookie = owner.cookie;
+  const support = await prodUser('prod-support@example.com', 'support');
+  supportCookie = support.cookie;
   const buyer = await prodUser('prod-buyer@example.com');
   buyerCookie = buyer.cookie;
 
@@ -108,21 +112,41 @@ describe('sandbox payments in production', () => {
     expect(named.statusCode).toBe(409);
   });
 
-  it('still lets staff test-buy, but settling requires the staff session', async () => {
+  it('refuses a role-holding staff account (owner) a mock session in production', async () => {
     const orderId = await newOrder(ownerCookie);
     const session = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, ownerCookie);
-    expect(session.statusCode, session.body).toBe(201);
-    expect(session.json().data.provider).toBe('mock');
-    const ref = session.json().data.provider_ref as string;
-
-    const anon = await post(`/api/v1/payments/mock/${ref}/confirm`, {});
-    expect(anon.statusCode).toBe(401);
-    const asBuyer = await post(`/api/v1/payments/mock/${ref}/confirm`, {}, buyerCookie);
-    expect(asBuyer.statusCode).toBe(404);
+    expect(session.statusCode, session.body).toBe(409);
+    expect(session.json().error.code).toBe('payment.method_unavailable');
+    const named = await post(`/api/v1/orders/${orderId}/payment-sessions`, { provider: 'mock' }, ownerCookie);
+    expect(named.statusCode).toBe(409);
     expect((await get(`/api/v1/orders/${orderId}`, ownerCookie)).json().data.payment_status).toBe('awaiting_payment');
+  });
 
-    const asOwner = await post(`/api/v1/payments/mock/${ref}/confirm`, {}, ownerCookie);
-    expect(asOwner.statusCode, asOwner.body).toBe(202);
-    expect((await get(`/api/v1/orders/${orderId}`, ownerCookie)).json().data.payment_status).toBe('paid');
+  it('refuses a limited-role account (support) a mock session in production', async () => {
+    const orderId = await newOrder(supportCookie);
+    const session = await post(`/api/v1/orders/${orderId}/payment-sessions`, {}, supportCookie);
+    expect(session.statusCode, session.body).toBe(409);
+    expect(session.json().error.code).toBe('payment.method_unavailable');
+    const named = await post(`/api/v1/orders/${orderId}/payment-sessions`, { provider: 'mock' }, supportCookie);
+    expect(named.statusCode).toBe(409);
+  });
+
+  it('mock confirm/settle and mock refund endpoints are gone in production for every role', async () => {
+    const ref = 'mockpay_00000000-0000-0000-0000-000000000000';
+    for (const cookie of [ownerCookie, supportCookie, buyerCookie, undefined]) {
+      const confirm = await post(`/api/v1/payments/mock/${ref}/confirm`, {}, cookie);
+      expect(confirm.statusCode).toBe(404);
+      const refundOk = await post('/api/v1/payments/mock/refunds/mockrefund_x/confirm', {}, cookie);
+      expect(refundOk.statusCode).toBe(404);
+      const refundFail = await post('/api/v1/payments/mock/refunds/mockrefund_x/fail', {}, cookie);
+      expect(refundFail.statusCode).toBe(404);
+    }
+  });
+
+  it('mock payment and refund webhooks are gone in production', async () => {
+    const hook = await post('/api/v1/payments/webhooks/mock', {}, ownerCookie);
+    expect(hook.statusCode).toBe(404);
+    const refundHook = await post('/api/v1/payments/refund-webhooks/mock', {}, ownerCookie);
+    expect(refundHook.statusCode).toBe(404);
   });
 });

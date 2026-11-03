@@ -383,7 +383,7 @@ describe('step-up for admin money actions (code H-02 + M-03)', () => {
 
     await stepUp(fresh.cookie);
     const ok = await post('/api/v1/admin/settings/payment', {
-      enabled: true, bank_name: 'Vietcombank', bank_bin: '970436', account_number: '0123456789', account_holder: 'WEBMAKET TEST',
+      enabled: true, bank_name: 'Vietcombank', bank_bin: '970436', account_number: '0123456789', account_holder: 'WEBMAKET TEST', hub_api_key: HUB_KEY,
     }, fresh.cookie);
     expect(ok.statusCode, ok.body).toBe(200);
     const audits = await ctx.db.query<{ n: string }>(

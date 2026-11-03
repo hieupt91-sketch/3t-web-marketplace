@@ -1,6 +1,7 @@
 import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
+import { Readable } from 'node:stream';
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { PoolClient } from '@3t/core';
 import {
@@ -560,7 +561,11 @@ export async function processPaymentEvent(db: Db, provider: string, rawBody: str
     await client.query('UPDATE payment_events SET order_id = $3 WHERE provider = $1 AND provider_event_id = $2', [provider, event.providerEventId, pa.order_id]);
 
     if (event.status !== 'settled') {
-      await client.query("UPDATE payment_attempts SET status = 'failed' WHERE id = $1", [pa.id]);
+      // A late/out-of-order failure report must never overwrite a settled
+      // attempt (audit payments L2): only a non-final attempt (created /
+      // pending) may move to 'failed'; a settled attempt — and the paid
+      // order behind it — stays exactly as recorded.
+      await client.query("UPDATE payment_attempts SET status = 'failed' WHERE id = $1 AND status IN ('pending', 'created')", [pa.id]);
       await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
       return 'processed';
     }
@@ -599,6 +604,40 @@ export async function processPaymentEvent(db: Db, provider: string, rawBody: str
     await client.query("UPDATE payment_events SET processing_status = 'processed' WHERE provider = $1 AND provider_event_id = $2", [provider, event.providerEventId]);
     return 'processed';
   });
+}
+
+declare module 'fastify' {
+  interface FastifyRequest {
+    /** Exact raw request bytes, captured by the webhook routes (L-01). */
+    rawBody?: string;
+  }
+}
+
+/**
+ * Capture the exact raw request bytes before Fastify's JSON parser runs
+ * (audit code L-01): webhook HMACs must be verified over the bytes the
+ * sender actually signed, not over a re-serialisation of the parsed JSON
+ * (duplicate keys, unicode escapes and number formatting do not survive
+ * a parse → stringify round-trip). The buffered bytes are replayed into
+ * the normal parser, so `request.body` behaves exactly as before for
+ * every handler; only the `raw` string used for verification changes.
+ */
+async function captureRawBody(request: FastifyRequest, _reply: FastifyReply, payload: Readable): Promise<Readable> {
+  const chunks: Buffer[] = [];
+  for await (const chunk of payload) {
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk as Uint8Array));
+  }
+  const raw = Buffer.concat(chunks);
+  request.rawBody = raw.toString('utf8');
+  return Readable.from([raw]);
+}
+
+/** The raw bytes for a webhook request: the captured bytes when the
+ *  route captured them, else the legacy fallback (string body as-is, or
+ *  a re-serialisation) for paths that never signed over a body. */
+function rawBodyOf(request: FastifyRequest): string {
+  if (typeof request.rawBody === 'string') return request.rawBody;
+  return typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
 }
 
 export async function commerceRoutes(app: FastifyInstance): Promise<void> {
@@ -875,13 +914,35 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
           if (!q || q.buyer_id !== auth.userId) throw errors.notFound();
           if (q.expired) throw errors.conflict('quote.expired');
           if (request.body.terms_version !== currentTerms) throw errors.conflict('terms.version_stale');
-          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean; kind?: string; lines?: QuoteLine[]; storage_gb?: number; storage_rate_per_gb?: number };
-          const order = await client.query<{ id: string }>(
-            `INSERT INTO orders (buyer_id, quote_id, currency, subtotal_minor, total_minor, locale, terms_version, payment_window_expires_at)
-             VALUES ($1, $2, $3, $4, $4, $5, $6, now() + make_interval(mins => $7)) RETURNING id`,
-            [auth.userId, q.id, q.currency, q.total_minor, request.locale, request.body.terms_version, config.paymentWindowMinutes],
+          // A quote is consumed by its first live order (audit payments
+          // L3): while any non-cancelled order exists for it, no second
+          // order may be created from it — a different Idempotency-Key
+          // does not mint a second obligation from the same priced quote.
+          // A cancelled order frees the quote (the buyer backed out
+          // before paying), matching the partial unique index
+          // orders_quote_single_live_uq (migration 0042), which is the
+          // backstop for paths that do not take this quote lock.
+          const consumed = await client.query<{ id: string }>(
+            "SELECT id FROM orders WHERE quote_id = $1 AND status <> 'cancelled' LIMIT 1",
+            [q.id],
           );
-          const orderId = order.rows[0]!.id;
+          if (consumed.rows[0]) throw errors.conflict('order.quote_consumed');
+          const snap = q.snapshot_json as { template_id: string; version_id: string; plan_id: string; deployment_mode: string; plan_name: Record<string, string>; limits: Record<string, unknown>; site_request?: SiteRequest; billing_interval?: string; installation?: boolean; kind?: string; lines?: QuoteLine[]; storage_gb?: number; storage_rate_per_gb?: number };
+          let orderId: string;
+          try {
+            const order = await client.query<{ id: string }>(
+              `INSERT INTO orders (buyer_id, quote_id, currency, subtotal_minor, total_minor, locale, terms_version, payment_window_expires_at)
+               VALUES ($1, $2, $3, $4, $4, $5, $6, now() + make_interval(mins => $7)) RETURNING id`,
+              [auth.userId, q.id, q.currency, q.total_minor, request.locale, request.body.terms_version, config.paymentWindowMinutes],
+            );
+            orderId = order.rows[0]!.id;
+          } catch (error) {
+            // Backstop race (another path created the live order first):
+            // the partial unique index fires — surface the same API
+            // error as the pre-check above, never a 500.
+            if (isUniqueViolation(error, 'orders_quote_single_live_uq')) throw errors.conflict('order.quote_consumed');
+            throw error;
+          }
           // The standalone domain package has no template item: the
           // order is a single fee line against an existing site, and
           // fulfilment extends that site's domain paid period instead.
@@ -962,8 +1023,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
 
   // Create a payment session. The buyer may name a provider; the default is
   // bank transfer when the owner has enabled and configured it, otherwise
-  // the sandbox mock. In production the mock can never be chosen while a
-  // real method is available — nobody may check out for free by naming it.
+  // the sandbox mock. In production the mock can never be chosen at all —
+  // nobody may check out for free by naming it, whatever their roles.
   app.post<{ Params: { id: string }; Body: { provider?: string } }>('/orders/:id/payment-sessions', async (request, reply) => {
     const auth = requireUser(request);
     assertId(request.params.id);
@@ -989,7 +1050,6 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const paypalAvailable = payPalAvailable(paypalSettings);
     const usdSettings = await loadUsdTransferSettings(db);
     const usdAvailable = usdTransferAvailable(usdSettings);
-    const anyRealMethod = bankAvailable || vnpayAvailable || momoAvailable || paypalAvailable || usdAvailable;
     const requested = typeof request.body?.provider === 'string' ? request.body.provider : null;
     const chosen = requested ?? (bankAvailable ? 'bank_transfer' : vnpayAvailable ? 'vnpay' : momoAvailable ? 'momo' : paypalAvailable ? 'paypal' : usdAvailable ? 'usd_transfer' : payment.name);
     const expiresAt = new Date(Date.now() + config.paymentWindowMinutes * 60_000);
@@ -1136,12 +1196,12 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       throw errors.conflict('payment.method_unavailable');
     }
     if (chosen !== payment.name) throw errors.conflict('payment.method_unavailable');
-    if (config.env === 'production' && anyRealMethod) throw errors.conflict('payment.method_unavailable');
-    // Production: the sandbox is for staff test purchases only. A plain
-    // buyer must never settle an order without real money moving; while no
-    // real method is configured the honest answer is "not payable yet",
-    // never a free checkout through the mock.
-    if (config.env === 'production' && auth.roles.length === 0) throw errors.conflict('payment.method_unavailable');
+    // Production: the mock provider is ENTIRELY unavailable (audit
+    // payments L1, wave 3). No account — whatever roles it holds — may
+    // create a mock session, so nobody can free-"test-buy" an entitlement
+    // while no real method is configured; the honest answer is "not
+    // payable yet". Staff test purchases happen in non-production only.
+    if (config.env === 'production') throw errors.conflict('payment.method_unavailable');
     const session = payment.createSession({ orderId: o.id, amountMinor: o.total_minor, currency: o.currency, returnUrl: `${config.portalOrigin}/checkout/orders/${o.id}/result`, expiresAt });
     await db.query(
       "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status) VALUES ($1, $2, $3, $4, $5, 'pending')",
@@ -1227,11 +1287,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!payment.sandbox) throw errors.notFound();
-      // Production: settling a sandbox payment is a staff test action.
-      if (config.env === 'production') {
-        const auth = requireUser(request);
-        if (auth.roles.length === 0) throw errors.notFound();
-      }
+      // Production: the mock provider is entirely unavailable (audit
+      // payments L1, wave 3) — no role may settle a mock payment/refund.
+      if (config.env === 'production') throw errors.notFound();
       const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
         'SELECT amount_minor::text, currency, status FROM payment_attempts WHERE provider = $1 AND provider_ref = $2',
         [payment.name, request.params.ref],
@@ -1252,11 +1310,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!payment.sandbox) throw errors.notFound();
-      // Production: settling a sandbox payment is a staff test action.
-      if (config.env === 'production') {
-        const auth = requireUser(request);
-        if (auth.roles.length === 0) throw errors.notFound();
-      }
+      // Production: the mock provider is entirely unavailable (audit
+      // payments L1, wave 3) — no role may settle a mock payment/refund.
+      if (config.env === 'production') throw errors.notFound();
       const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
         'SELECT amount_minor::text, currency, status FROM refunds WHERE provider = $1 AND provider_ref = $2',
         [payment.name, request.params.ref],
@@ -1276,11 +1332,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     { config: { rateLimit: { max: 30, timeWindow: '1 minute' } } },
     async (request, reply) => {
       if (!payment.sandbox) throw errors.notFound();
-      // Production: settling a sandbox payment is a staff test action.
-      if (config.env === 'production') {
-        const auth = requireUser(request);
-        if (auth.roles.length === 0) throw errors.notFound();
-      }
+      // Production: the mock provider is entirely unavailable (audit
+      // payments L1, wave 3) — no role may settle a mock payment/refund.
+      if (config.env === 'production') throw errors.notFound();
       const { rows } = await db.query<{ amount_minor: string; currency: string; status: string }>(
         'SELECT amount_minor::text, currency, status FROM refunds WHERE provider = $1 AND provider_ref = $2',
         [payment.name, request.params.ref],
@@ -1296,10 +1350,14 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // Real provider refund webhook: verify, dedupe, process (server-to-server, signature-authenticated).
-  app.post('/payments/refund-webhooks/:provider', async (request, reply) => {
+  // The signature is verified over the exact raw bytes captured by the
+  // preParsing hook (audit code L-01), never a re-serialised body.
+  app.post('/payments/refund-webhooks/:provider', { preParsing: captureRawBody }, async (request, reply) => {
     const providerName = (request.params as { provider: string }).provider;
     if (providerName !== payment.name) throw errors.notFound();
-    const raw = typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
+    // Production: the mock provider is entirely unavailable (audit payments L1).
+    if (config.env === 'production') throw errors.notFound();
+    const raw = rawBodyOf(request);
     let event: ReturnType<typeof payment.verifyRefundWebhook>;
     try {
       event = payment.verifyRefundWebhook(raw, request.headers as Record<string, string | undefined>);
@@ -1311,8 +1369,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   });
 
   // Real webhook endpoint: verify, dedupe, process. Returns 2xx after a durable record.
-  // Note: the mock re-serialises the parsed JSON deterministically; a real provider needs the
-  // exact raw bytes (a raw-body capture) wired in at the integration milestone.
+  // Signatures are verified over the exact raw bytes captured by the
+  // preParsing hook below (audit code L-01) for every provider on this
+  // route — mock, bank hub, Casso, VNPay and MoMo alike.
 
   // VNPay IPN (GET or POST): always HTTP 200 with VNPay's own RspCode body.
   async function handleVnPayIpn(params: Record<string, string>, reply: FastifyReply) {
@@ -1340,9 +1399,9 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     return handleVnPayIpn(params, reply);
   });
 
-  app.post('/payments/webhooks/:provider', async (request: FastifyRequest, reply) => {
+  app.post('/payments/webhooks/:provider', { preParsing: captureRawBody }, async (request: FastifyRequest, reply) => {
     const providerName = (request.params as { provider: string }).provider;
-    const raw = typeof request.body === 'string' ? request.body : JSON.stringify(request.body ?? {});
+    const raw = rawBodyOf(request);
     // Bank transfer hub (SePay-compatible): the provider is configured from
     // admin settings at request time, so rotating the hub key needs no deploy.
     if (providerName === 'bank_transfer') {
@@ -1397,6 +1456,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       return reply.status(204).send();
     }
     if (providerName !== payment.name) throw errors.notFound();
+    // Production: the mock provider is entirely unavailable (audit payments L1).
+    if (config.env === 'production') throw errors.notFound();
     let event: NormalizedEvent;
     try {
       event = payment.verifyWebhook(raw, request.headers as Record<string, string | undefined>);

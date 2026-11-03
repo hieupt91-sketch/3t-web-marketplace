@@ -442,6 +442,10 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
         account_number: s.account_number,
         account_holder: s.account_holder,
         hub_configured: s.hub_api_key !== '',
+        // Older data can hold enabled=true with no hub key (saving that
+        // state is rejected now — audit payments L5): surface it loudly
+        // so staff fix it instead of wondering why no webhook settles.
+        enabled_without_hub_key: s.enabled && s.hub_api_key === '',
         webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/bank_transfer`,
         casso_webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/casso`,
       },
@@ -493,6 +497,16 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
         if (!/^[0-9]{6,30}$/.test(next.account_number)) problems.push({ field: 'account_number', code: 'invalid' });
         if (!next.account_holder) problems.push({ field: 'account_holder', code: 'required' });
         if (problems.length > 0) throw errors.validation(problems);
+        // Enabling bank transfer without a hub key opens a checkout
+        // whose webhooks can never authenticate (audit payments L5):
+        // money would arrive and never settle automatically. The key
+        // may come from this payload or from the stored setting —
+        // `current` was opened from its sealed-at-rest form above, so a
+        // stored sealed value counts as set; only a truly empty result
+        // blocks the save.
+        if (next.hub_api_key === '') {
+          throw errors.validation([{ field: 'hub_api_key', code: 'required' }], 'settings.bank_transfer_hub_key_required');
+        }
       }
       await db.query(
         `INSERT INTO settings (key, value_json) VALUES ('payment.bank_transfer', $1::jsonb)
@@ -519,6 +533,7 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
           account_number: next.account_number,
           account_holder: next.account_holder,
           hub_configured: next.hub_api_key !== '',
+          enabled_without_hub_key: next.enabled && next.hub_api_key === '',
           webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/bank_transfer`,
           casso_webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/casso`,
         },

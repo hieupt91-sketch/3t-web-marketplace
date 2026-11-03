@@ -2,7 +2,7 @@ import { randomUUID } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
 import { tx, writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
-import { errors } from '../errors.ts';
+import { AppError, errors } from '../errors.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { fulfillOrder, processPaymentEvent, recomputeOrderRefundStatus } from './commerce.ts';
 
@@ -101,9 +101,13 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
 
   // Resolve a needs_reconciliation order: 'paid' fulfils it (entitlements, once, via the
   // same fulfillOrder used by payment settlement); 'cancelled' closes it without fulfilment.
-  app.post<{ Params: { id: string }; Body: { resolution: string; reason: string } }>(
+  // Resolving 'paid' must reconcile amounts first (audit payments L4):
+  // the money actually received for the order is compared with the order
+  // total, and a shortfall fulfils only when the staffer explicitly
+  // accepts it (accept_shortfall: true, on top of the mandatory reason).
+  app.post<{ Params: { id: string }; Body: { resolution: string; reason: string; accept_shortfall?: boolean } }>(
     '/reconciliation/orders/:id/resolve',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['resolution', 'reason'], properties: { resolution: { type: 'string', enum: ['paid', 'cancelled'] }, reason: { type: 'string', minLength: 3, maxLength: 500 } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, required: ['resolution', 'reason'], properties: { resolution: { type: 'string', enum: ['paid', 'cancelled'] }, reason: { type: 'string', minLength: 3, maxLength: 500 }, accept_shortfall: { type: 'boolean' } } } } },
     async (request) => {
       const auth = requirePermission(request, 'payment:confirm');
       // Resolving as 'paid' fulfils an order with no provider proof —
@@ -111,22 +115,55 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
       // 'cancelled' only closes the order and stays permission-only.
       if (request.body.resolution === 'paid') await requireStepUp(db, auth);
       assertId(request.params.id);
+      const acceptShortfall = request.body.accept_shortfall === true;
+      let expectedMinor = '0';
+      let receivedMinor = '0';
       await tx(db, async (client) => {
-        const order = await client.query<{ status: string; buyer_id: string }>(
-          "SELECT status, buyer_id FROM orders WHERE id = $1 FOR UPDATE",
+        const order = await client.query<{ status: string; buyer_id: string; total_minor: string }>(
+          "SELECT status, buyer_id, total_minor::text FROM orders WHERE id = $1 FOR UPDATE",
           [request.params.id],
         );
         const o = order.rows[0];
         if (!o) throw errors.notFound();
         if (o.status !== 'needs_reconciliation') throw errors.conflict('reconciliation.not_pending');
+        // Received = what the schema actually records as received money
+        // for this order: the amounts of its SETTLED payment attempts.
+        // (payment_events store only a hash of the raw body — no amount
+        // column — and an attempt is marked settled only by a verified
+        // provider event or a staff manual confirmation.) Expected is
+        // the order total frozen at purchase time.
+        const sums = await client.query<{ received: string }>(
+          "SELECT COALESCE(SUM(amount_minor), 0)::text AS received FROM payment_attempts WHERE order_id = $1 AND status = 'settled'",
+          [request.params.id],
+        );
+        expectedMinor = o.total_minor;
+        receivedMinor = sums.rows[0]!.received;
         if (request.body.resolution === 'paid') {
+          if (BigInt(receivedMinor) < BigInt(expectedMinor) && !acceptShortfall) {
+            // The amounts ride in field_errors so the caller sees the
+            // exact shortfall in the (error) response, not just a code.
+            throw new AppError(409, 'reconciliation.shortfall_override_required', [
+              { field: 'accept_shortfall', code: 'required' },
+              { field: 'expected_minor', code: expectedMinor },
+              { field: 'received_minor', code: receivedMinor },
+            ]);
+          }
           await fulfillOrder(client, request.params.id, o.buyer_id, request.id);
         } else {
           await client.query("UPDATE orders SET status = 'cancelled', row_version = row_version + 1 WHERE id = $1", [request.params.id]);
         }
-        await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'reconciliation.resolved', resourceType: 'order', resourceId: request.params.id, traceId: request.id, diff: { resolution: request.body.resolution, reason: request.body.reason } });
+        await writeAudit(client, {
+          actorType: 'user', actorId: auth.userId, action: 'reconciliation.resolved', resourceType: 'order', resourceId: request.params.id, traceId: request.id,
+          diff: {
+            resolution: request.body.resolution,
+            reason: request.body.reason,
+            expected_minor: expectedMinor,
+            received_minor: receivedMinor,
+            accept_shortfall: request.body.resolution === 'paid' ? acceptShortfall : false,
+          },
+        });
       });
-      return { data: { id: request.params.id, resolution: request.body.resolution } };
+      return { data: { id: request.params.id, resolution: request.body.resolution, expected_minor: expectedMinor, received_minor: receivedMinor, accept_shortfall: request.body.resolution === 'paid' ? acceptShortfall : false } };
     },
   );
 
