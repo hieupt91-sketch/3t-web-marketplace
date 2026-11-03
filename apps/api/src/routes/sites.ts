@@ -753,7 +753,18 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
     await requireStepUp(db, auth);
     const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
     if (site.status === 'purged' || site.status === 'delete_scheduled') throw errors.conflict('site.not_deletable');
-    await db.query("UPDATE sites SET previous_status = $2, status = 'delete_scheduled', purge_at = now() + interval '30 days' WHERE id = $1", [site.id, site.status]);
+    // Same stop path as admin suspend (sandbox Phase 1 follow-up): the
+    // status flip carries a row_version bump and the worker's fenced
+    // site.stop job kills the process in the runner namespace. A bare
+    // status flip used to leave the process running for the whole
+    // 30-day purge window — the router 410s the hostname, but nothing
+    // ever stopped the process itself.
+    const bumped = await db.query<{ row_version: number }>(
+      "UPDATE sites SET previous_status = $2, status = 'delete_scheduled', purge_at = now() + interval '30 days', row_version = row_version + 1 WHERE id = $1 RETURNING row_version",
+      [site.id, site.status],
+    );
+    const newRowVersion = bumped.rows[0]!.row_version;
+    await enqueueJob(db, { type: 'site.stop', dedupeKey: `site.stop:${site.id}:${newRowVersion}`, payload: { site_id: site.id, row_version: newRowVersion }, resourceType: 'site', resourceId: site.id, ownerId: site.owner_id });
     return { data: { status: 'delete_scheduled' } };
   });
 
@@ -761,7 +772,22 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
     const auth = requireUser(request);
     const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
     if (site.status !== 'delete_scheduled') throw errors.conflict('site.not_scheduled');
-    await db.query("UPDATE sites SET status = COALESCE(previous_status, 'active'), previous_status = NULL, purge_at = NULL WHERE id = $1", [site.id]);
+    const restored = await db.query<{ status: string; runtime_pid: number | null }>(
+      "UPDATE sites SET status = COALESCE(previous_status, 'active'), previous_status = NULL, purge_at = NULL WHERE id = $1 RETURNING status, runtime_pid",
+      [site.id],
+    );
+    const row = restored.rows[0]!;
+    // If the fenced stop job from the delete-request already killed the
+    // process (runtime fields cleared), bring the site back the way the
+    // admin resume path does — a site.restart carrying revive:true. If
+    // the process is still alive (stop still queued, or fenced out by
+    // this very restore) nothing needs doing: the router serves it
+    // again as soon as the status flips back, and the pending stop
+    // no-ops on the restored status. A site restored TO 'suspended' is
+    // never revived here — lifting a suspension stays an admin call.
+    if ((row.status === 'active' || row.status === 'grace') && row.runtime_pid === null) {
+      await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${site.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: site.id, revive: true }, resourceType: 'site', resourceId: site.id, ownerId: site.owner_id });
+    }
     return { data: { status: 'restored' } };
   });
 }

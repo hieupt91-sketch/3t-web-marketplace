@@ -982,7 +982,21 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
             );
           }
           await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'order.created', resourceType: 'order', resourceId: orderId, traceId: request.id });
-          return { status: 201, body: { data: { id: orderId, status: 'awaiting_payment', total_minor: q.total_minor, currency: q.currency } } };
+          // A zero-total order has nothing to collect: no payment
+          // attempt will ever settle it, so settle it right here through
+          // the SAME fulfilment pipeline a verified payment event uses —
+          // entitlement (and the checkout-chosen site) granted in this
+          // transaction, order marked paid, system audit + outbox event
+          // written by fulfillOrder. Without this, a 100%-off promotion
+          // or a genuinely free package would strand the buyer at
+          // awaiting_payment until staff confirmed money that never
+          // moves (found live 2026-11-03). Orders above zero are
+          // untouched: they keep the normal payment window.
+          const zeroTotal = BigInt(q.total_minor) === 0n;
+          if (zeroTotal) {
+            await fulfillOrder(client, orderId, auth.userId, request.id);
+          }
+          return { status: 201, body: { data: { id: orderId, status: zeroTotal ? 'paid' : 'awaiting_payment', total_minor: q.total_minor, currency: q.currency } } };
         },
       );
       return reply.status(result.status).send(result.body);

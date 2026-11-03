@@ -607,20 +607,24 @@ async function runPurge(deps: { config: PlatformConfig; db: Db; store: LocalObje
 /**
  * site.stop (sandbox Phase 1 follow-up): admin suspend used to killPid
  * from the API process — after Phase 1 the site process lives in the
- * site-runner's PID namespace, so the API only flips the row to
- * 'suspended' with a row_version bump and enqueues this job. The stop is
- * fenced on that exact version: if the site has since been resumed or
- * restarted (status no longer 'suspended', or a newer row_version), a
- * newer lifecycle action owns the process and this job is a no-op. Only
- * after stopSiteProcess has run are the runtime fields cleared — again
- * guarded on the same version — so a stop can never erase the record of
- * a process a newer action spawned.
+ * site-runner's PID namespace, so the API only flips the row with a
+ * row_version bump and enqueues this job. Two producers enqueue it:
+ * admin suspend (status 'suspended') and the owner's delete-request
+ * (status 'delete_scheduled') — the latter used to flip the status
+ * alone, leaving the process running until purge up to 30 days later.
+ * The stop is fenced on the exact version: if the site has since been
+ * resumed, restarted or un-deleted (status no longer the one the stop
+ * was issued for, or a newer row_version), a newer lifecycle action
+ * owns the process and this job is a no-op. Only after stopSiteProcess
+ * has run are the runtime fields cleared — again guarded on the same
+ * version — so a stop can never erase the record of a process a newer
+ * action spawned.
  */
 async function runStop(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, rowVersion: number | undefined): Promise<void> {
-  if (site.status !== 'suspended' || rowVersion === undefined || site.row_version !== rowVersion) return;
+  if ((site.status !== 'suspended' && site.status !== 'delete_scheduled') || rowVersion === undefined || site.row_version !== rowVersion) return;
   await stopSiteProcess(deps.config, { key: site.id, rowVersion, localPid: site.runtime_pid });
   await deps.db.query(
-    "UPDATE sites SET runtime_port = NULL, runtime_pid = NULL WHERE id = $1 AND row_version = $2 AND status = 'suspended'",
+    "UPDATE sites SET runtime_port = NULL, runtime_pid = NULL WHERE id = $1 AND row_version = $2 AND status IN ('suspended', 'delete_scheduled')",
     [site.id, rowVersion],
   );
 }

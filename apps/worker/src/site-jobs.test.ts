@@ -482,4 +482,40 @@ describe('site.stop job (Phase 1 follow-up)', () => {
       sleeper.kill('SIGKILL');
     }
   });
+
+  it('stops the process for an owner delete-request (status delete_scheduled) at the fenced version', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-stop-delete-'));
+    const sleeper = spawnSleeper();
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow({ status: 'delete_scheduled', row_version: 3, runtime_pid: sleeper.pid, runtime_port: 4104 }), captured);
+    const config = { workDir } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.stop', 'site-1', { row_version: 3 }));
+
+    expect(await childExited(sleeper, 3000)).toBe(true);
+    const cleared = captured.find((u) => u.sql.includes('runtime_port = NULL'));
+    expect(cleared).toBeTruthy();
+    expect(cleared!.params).toEqual(['site-1', 3]);
+    expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+  });
+
+  it('is a no-op for a delete_scheduled site when the payload fencing version is stale', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-stop-delete-stale-'));
+    const sleeper = spawnSleeper();
+    try {
+      const captured: CapturedUpdate[] = [];
+      const db = fakeSiteJobDb(siteRow({ status: 'delete_scheduled', row_version: 5, runtime_pid: sleeper.pid, runtime_port: 4105 }), captured);
+      const config = { workDir } as unknown as PlatformConfig;
+      const store = {} as unknown as LocalObjectStore;
+
+      await runSiteJob({ config, db, store }, makeRunningJob('site.stop', 'site-1', { row_version: 3 }));
+
+      expect(captured.some((u) => u.sql.startsWith('UPDATE sites'))).toBe(false);
+      expect(await childExited(sleeper, 300)).toBe(false);
+      expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
 });

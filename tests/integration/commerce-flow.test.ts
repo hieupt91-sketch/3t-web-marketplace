@@ -82,6 +82,17 @@ async function quote(user = buyer) {
   const res = await ctx.app.inject({ method: 'POST', url: '/api/v1/quotes', headers: as(user), payload: { plan_id: planId, template_id: templateId } });
   return res;
 }
+
+let freePlanId = '';
+/** Add a second self-host plan priced at exactly 0 to the same template and activate it. */
+async function publishFreePlan() {
+  const plan = await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/templates/${templateId}/plans`, headers: admin(), payload: { code: 'selfhost-free', deployment_mode: 'selfhost', name: { vi: 'Miễn phí' }, limits: { instance_limit: 1, updates_months: 12 } } });
+  freePlanId = plan.json().data.id;
+  await ctx.app.inject({ method: 'POST', url: `/api/v1/admin/plans/${freePlanId}/prices`, headers: admin(), payload: { amount_minor: '0', interval: 'one_time' } });
+  const detail = await ctx.app.inject({ method: 'GET', url: `/api/v1/admin/templates/${templateId}/detail`, headers: admin() });
+  const free = (detail.json().data.plans as { id: string; row_version: number }[]).find((p) => p.id === freePlanId)!;
+  await ctx.app.inject({ method: 'PATCH', url: `/api/v1/admin/plans/${freePlanId}`, headers: { ...admin(), 'if-match': `"${free.row_version}"` }, payload: { status: 'active' } });
+}
 async function orderFromQuote(quoteId: string, user = buyer, terms = TERMS) {
   return ctx.app.inject({ method: 'POST', url: '/api/v1/orders', headers: { ...as(user), 'idempotency-key': randomUUID() }, payload: { quote_id: quoteId, terms_version: terms } });
 }
@@ -120,6 +131,55 @@ describe('quote and order', () => {
     const order = await orderFromQuote(q.json().data.id);
     expect(order.statusCode).toBe(409);
     expect(order.json().error.code).toBe('quote.expired');
+  });
+});
+
+describe('zero-total orders', () => {
+  // A dedicated buyer: the entitlement this flow grants must not leak
+  // into the shared buyer's list, which AT-15 asserts is empty while an
+  // order is unpaid.
+  let freeBuyer: { id: string; cookie: string };
+  beforeAll(async () => {
+    await publishFreePlan();
+    freeBuyer = await createUser(ctx, `free-buyer-${randomUUID().slice(0, 8)}@example.com`);
+  });
+
+  it('settles a zero-total order immediately: paid + active entitlement, no payment attempt needed', async () => {
+    const q = await ctx.app.inject({ method: 'POST', url: '/api/v1/quotes', headers: as(freeBuyer), payload: { plan_id: freePlanId, template_id: templateId } });
+    expect(q.statusCode, q.body).toBe(201);
+    expect(q.json().data.total_minor).toBe('0');
+
+    const order = await orderFromQuote(q.json().data.id, freeBuyer);
+    expect(order.statusCode, order.body).toBe(201);
+    expect(order.json().data).toMatchObject({ status: 'paid', total_minor: '0' });
+    const orderId = order.json().data.id as string;
+
+    const after = await ctx.app.inject({ method: 'GET', url: `/api/v1/orders/${orderId}`, headers: as(freeBuyer) });
+    expect(after.json().data.payment_status).toBe('paid');
+    expect(after.json().data.paid_at).not.toBeNull();
+
+    // Fulfilment ran exactly like a settled payment: one active
+    // entitlement for the order's item, and no payment attempt exists.
+    const ent = await ctx.db.query<{ status: string }>('SELECT e.status FROM entitlements e JOIN order_items oi ON oi.id = e.order_item_id WHERE oi.order_id = $1', [orderId]);
+    expect(ent.rows).toEqual([{ status: 'active' }]);
+    const attempts = await ctx.db.query<{ n: number }>('SELECT count(*)::int AS n FROM payment_attempts WHERE order_id = $1', [orderId]);
+    expect(attempts.rows[0]!.n).toBe(0);
+    // The settlement is recorded as a system action, like the webhook path.
+    const audit = await ctx.db.query<{ actor_type: string }>("SELECT actor_type FROM audit_logs WHERE action = 'order.paid' AND resource_id = $1", [orderId]);
+    expect(audit.rows).toEqual([{ actor_type: 'system' }]);
+  });
+
+  it('leaves a non-zero order awaiting payment exactly as before', async () => {
+    const q = await quote();
+    expect(q.json().data.total_minor).toBe('1500000');
+    const order = await orderFromQuote(q.json().data.id);
+    expect(order.statusCode, order.body).toBe(201);
+    expect(order.json().data.status).toBe('awaiting_payment');
+    const orderId = order.json().data.id as string;
+    const after = await ctx.app.inject({ method: 'GET', url: `/api/v1/orders/${orderId}`, headers: as(buyer) });
+    expect(after.json().data.payment_status).toBe('awaiting_payment');
+    const ent = await ctx.db.query<{ n: number }>('SELECT count(*)::int AS n FROM entitlements e JOIN order_items oi ON oi.id = e.order_item_id WHERE oi.order_id = $1', [orderId]);
+    expect(ent.rows[0]!.n).toBe(0);
   });
 });
 
