@@ -33,11 +33,12 @@ services:
         APP: api
     # H2: run as the non-root "app" user created in Dockerfile.node.
     # Requires the one-time appdata chown in the H2 cutover notes first.
-    # H2 HOLD (parent, 2026-11-03): non-root activation is staged, not live.
-    # Do not enable until the VPS staging test passes AND the three gating
-    # fixes land (admin-setup token hand-off, worker-side purge deletes,
-    # storage ownership for worker-created files). See h2-cutover-notes.md.
-    # user: "10001:10001"
+    # H2 ACTIVE: the three gating fixes have landed (worker token
+    # hand-off, worker-side purge, shared storage group — see the
+    # h2-cutover-notes). Requires the one-time appdata chown from those
+    # notes BEFORE first boot. Rollback: comment the user: line out
+    # and `up -d` (the images also run as root).
+    user: "10001:10001"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -84,11 +85,12 @@ services:
         APP: preview
     # H2: non-root "app" user (see api). Preview only READS the shared
     # appdata volume (object store), it never writes it.
-    # H2 HOLD (parent, 2026-11-03): non-root activation is staged, not live.
-    # Do not enable until the VPS staging test passes AND the three gating
-    # fixes land (admin-setup token hand-off, worker-side purge deletes,
-    # storage ownership for worker-created files). See h2-cutover-notes.md.
-    # user: "10001:10001"
+    # H2 ACTIVE: the three gating fixes have landed (worker token
+    # hand-off, worker-side purge, shared storage group — see the
+    # h2-cutover-notes). Requires the one-time appdata chown from those
+    # notes BEFORE first boot. Rollback: comment the user: line out
+    # and `up -d` (the images also run as root).
+    user: "10001:10001"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -111,11 +113,12 @@ services:
         APP: site-router
     # H2: non-root "app" user (see api). The router holds no volume and
     # writes nothing — routing state is an in-memory cache + Postgres.
-    # H2 HOLD (parent, 2026-11-03): non-root activation is staged, not live.
-    # Do not enable until the VPS staging test passes AND the three gating
-    # fixes land (admin-setup token hand-off, worker-side purge deletes,
-    # storage ownership for worker-created files). See h2-cutover-notes.md.
-    # user: "10001:10001"
+    # H2 ACTIVE: the three gating fixes have landed (worker token
+    # hand-off, worker-side purge, shared storage group — see the
+    # h2-cutover-notes). Requires the one-time appdata chown from those
+    # notes BEFORE first boot. Rollback: comment the user: line out
+    # and `up -d` (the images also run as root).
+    user: "10001:10001"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -145,11 +148,12 @@ services:
         API_INTERNAL_URL: http://api:4000
     # H2: non-root "app" user created in Dockerfile.web. The image chowns
     # /app (incl. apps/web/.next) so Next's runtime caches stay writable.
-    # H2 HOLD (parent, 2026-11-03): non-root activation is staged, not live.
-    # Do not enable until the VPS staging test passes AND the three gating
-    # fixes land (admin-setup token hand-off, worker-side purge deletes,
-    # storage ownership for worker-created files). See h2-cutover-notes.md.
-    # user: "10001:10001"
+    # H2 ACTIVE: the three gating fixes have landed (worker token
+    # hand-off, worker-side purge, shared storage group — see the
+    # h2-cutover-notes). Requires the one-time appdata chown from those
+    # notes BEFORE first boot. Rollback: comment the user: line out
+    # and `up -d` (the images also run as root).
+    user: "10001:10001"
     env_file: .env
     environment:
       - API_INTERNAL_URL=http://api:4000
