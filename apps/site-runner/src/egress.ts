@@ -64,8 +64,13 @@ export function buildEgressScript(uids: number[]): string {
     '    chain out {',
     '        type filter hook output priority 0; policy accept;',
     rule('ct state established,related accept'),
-    rule('udp dport 53 ip daddr 127.0.0.11 accept'),
-    rule('tcp dport 53 ip daddr 127.0.0.11 accept'),
+    // Docker's embedded DNS lives at 127.0.0.11 but the query is REDIRECTed
+    // to a local listener on a rewritten port before the filter chain sees
+    // it — a dport-53 match never fires for it (proven live on the VPS:
+    // uid-20001 lookups timed out until this rule existed). 127.0.0.11 is
+    // exclusively the embedded resolver, so accept all site-UID traffic to
+    // it. Direct queries to public resolvers stay allowed on dport 53.
+    rule('ip daddr 127.0.0.11 accept'),
     rule('udp dport 53 accept'),
     rule('tcp dport 53 accept'),
     rule('ip daddr 127.0.0.0/8 drop'),
