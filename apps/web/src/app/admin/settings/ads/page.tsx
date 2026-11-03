@@ -75,7 +75,9 @@ function AdsSettingsInner() {
   const urlOk = (v: string) => {
     const s = v.trim();
     if (s === '') return true;
-    if (s.startsWith('/')) return !s.startsWith('//');
+    // Site-relative only as a single `/` not followed by `/` or `\` —
+    // `/\evil.com` is protocol-relative too (UI-LOW-01 family).
+    if (s.startsWith('/')) return s[1] !== '/' && s[1] !== '\\';
     try {
       const u = new URL(s);
       return u.protocol === 'https:' || u.protocol === 'http:';

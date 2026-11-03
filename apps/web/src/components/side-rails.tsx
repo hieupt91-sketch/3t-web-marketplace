@@ -13,12 +13,19 @@ interface PublicAds {
 }
 
 function Rail({ side, position }: { side: AdSide; position: 'left' | 'right' }) {
-  const external = side.link_url !== null && /^https?:\/\//i.test(side.link_url);
+  const link = side.link_url;
+  // Same classification as RichText (UI-LOW-01 family): internal is a single
+  // leading `/` not followed by `/` or `\`; protocol-relative URLs (`//host`,
+  // `/\host`) are external and must get the sponsored _blank treatment, and
+  // non-http(s) schemes (javascript:/data:…) never render as a link at all —
+  // the banner then shows unlinked, like RichText degrading unsafe links.
+  const internal = link !== null && link.startsWith('/') && link[1] !== '/' && link[1] !== '\\';
+  const external = link !== null && !internal && (/^https?:\/\//i.test(link) || link.startsWith('//') || link.startsWith('/\\'));
   const img = <img src={side.image_url} alt={side.alt} width={160} height={600} loading="lazy" />;
   return (
     <aside className={`side-rail side-rail--${position}`} aria-label={side.alt || 'Advertisement'}>
-      {side.link_url ? (
-        <a href={side.link_url} {...(external ? { target: '_blank', rel: 'sponsored noopener noreferrer' } : {})}>
+      {internal || external ? (
+        <a href={link!} {...(external ? { target: '_blank', rel: 'sponsored noopener noreferrer' } : {})}>
           {img}
         </a>
       ) : (

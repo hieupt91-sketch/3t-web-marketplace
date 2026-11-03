@@ -5,6 +5,17 @@ import type { ReactNode } from 'react';
  * all text), so stored content cannot inject scripts (docs/05 RichText: sanitized, no arbitrary script).
  * Supported: # / ## / ### headings, - bullet lists, blank-line paragraphs, **bold**, [text](url).
  */
+/**
+ * Site-internal hrefs only: a single leading `/` NOT followed by `/` or `\`.
+ * `//evil.com`, `///evil.com` and `/\evil.com` are protocol-relative URLs that
+ * browsers resolve to another host, so they must be classified (and rel'd) as
+ * external — a bare startsWith('/') would let them masquerade as internal and
+ * skip the external-link rel (audit UI-LOW-01). Pure + exported for testing.
+ */
+export function isInternalHref(href: string): boolean {
+  return href.startsWith('/') && href[1] !== '/' && href[1] !== '\\';
+}
+
 function renderInline(text: string, keyPrefix: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   // Tokenise bold and links; everything else is plain (escaped) text.
@@ -18,9 +29,10 @@ function renderInline(text: string, keyPrefix: string): ReactNode[] {
       nodes.push(<strong key={`${keyPrefix}-b${i}`}>{match[1]}</strong>);
     } else {
       const href = match[3] ?? '';
-      // Only http(s) and site-relative links; no javascript:/data: URLs.
+      // Only http(s) and site-relative links (protocol-relative included, as
+      // external); no javascript:/data: URLs.
       const safe = /^https?:\/\//.test(href) || href.startsWith('/');
-      nodes.push(safe ? <a key={`${keyPrefix}-l${i}`} href={href} rel={href.startsWith('/') ? undefined : 'noopener noreferrer nofollow'}>{match[2]}</a> : match[2]);
+      nodes.push(safe ? <a key={`${keyPrefix}-l${i}`} href={href} rel={isInternalHref(href) ? undefined : 'noopener noreferrer nofollow'}>{match[2]}</a> : match[2]);
     }
     last = pattern.lastIndex;
     i++;
