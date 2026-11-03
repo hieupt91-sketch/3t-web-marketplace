@@ -70,7 +70,7 @@ export const GUIDE_VIDEOS: GuideVideo[] = [
   {
     slug: 'cai-dat-google-sheet',
     part: 7,
-    youtubeId: '',
+    youtubeId: 'RuaOMAEkbhQ',
     titleKey: 'ui.help.video.7.title',
     descriptionKey: 'ui.help.video.7.description',
   },
