@@ -50,6 +50,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     );
   }
   entries.push(...pairEntry('/help', LOCALES, BASE, { changeFrequency: 'weekly', priority: 0.7 }));
+  entries.push(...pairEntry('/help/videos', LOCALES, BASE, { changeFrequency: 'monthly', priority: 0.6 }));
   entries.push(...pairEntry('/plans/compare', LOCALES, BASE, { changeFrequency: 'weekly', priority: 0.7 }));
   entries.push(...pairEntry('/contact', LOCALES, BASE, { priority: 0.5 }));
 

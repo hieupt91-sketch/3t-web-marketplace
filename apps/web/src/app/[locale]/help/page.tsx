@@ -18,6 +18,10 @@ export default async function HelpIndex({ params }: Props) {
   return (
     <div className="container container--form stack">
       <h1>{t('ui.help.title')}</h1>
+      <div className="help-videos-entry">
+        <Link className="help-videos-entry__link" href={`/${locale}/help/videos`}>{t('ui.help.videos_title')}</Link>
+        <p className="muted">{t('ui.help.videos_intro')}</p>
+      </div>
       {!result.ok ? (
         <div className="alert alert--error" role="alert"><p>{t('ui.content.unavailable')}</p></div>
       ) : result.data.length === 0 ? (

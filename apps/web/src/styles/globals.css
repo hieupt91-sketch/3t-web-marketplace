@@ -1934,3 +1934,63 @@ dl.details dd {
     position: static;
   }
 }
+
+/* Help — tutorial videos page (/{locale}/help/videos) */
+.help-videos-entry {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-card);
+  padding: var(--space-5, 24px) var(--space-4);
+}
+.help-videos-entry__link {
+  font-size: 20px;
+  font-weight: 700;
+}
+.help-videos-entry p {
+  margin: var(--space-2, 8px) 0 0;
+}
+.video-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: var(--space-6);
+}
+@media (max-width: 900px) {
+  .video-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+.video-card h2 {
+  font-size: 18px;
+  margin: var(--space-4) 0 var(--space-2, 8px);
+}
+.video-card p {
+  margin: 0;
+}
+.video-card__part {
+  color: var(--color-text-muted);
+  font-weight: 600;
+}
+.video-embed {
+  position: relative;
+  aspect-ratio: 16 / 9;
+  border-radius: var(--radius-card);
+  overflow: hidden;
+  background: var(--color-bg);
+  box-shadow: var(--shadow-card);
+}
+.video-embed iframe {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.video-embed--placeholder {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px dashed var(--color-border);
+  box-shadow: none;
+  color: var(--color-text-muted);
+  text-align: center;
+  padding: var(--space-4);
+}
