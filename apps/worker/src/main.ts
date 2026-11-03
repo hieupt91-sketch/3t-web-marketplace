@@ -4,7 +4,7 @@ import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
 import { SITE_JOB_TYPES, backfillSandboxFencing, runSiteJob, sweepExpiredReservations } from './site-jobs.ts';
 import { DEMO_JOB_TYPES, runDemoJob } from './demo-jobs.ts';
 import { logSandboxStatus, reapOrphanProcesses } from './sandbox.ts';
-import { expireStalePaymentOrders, refundStuckWalletSales } from './order-jobs.ts';
+import { expireStalePaymentOrders, refundStuckWalletSales, revalidateVerifiedDomains } from './order-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
 
 const config = loadConfig();
@@ -122,6 +122,15 @@ while (!stopping) {
           if (refunded > 0 || reconciled > 0) logLine('wallet_sale_sweep', { refunded, reconciled });
         })
         .catch((error: Error) => logLine('wallet_sale_sweep_failed', { error: error.message }));
+      // Wave 3 (payments L6): re-validate verified custom domains' TXT
+      // records; a token that stays missing past the grace window moves the
+      // domain out of 'verified' (the router only serves that status). The
+      // sweep self-throttles to domains not conclusively rechecked in 24h.
+      await revalidateVerifiedDomains(db)
+        .then((r) => {
+          if (r.lost > 0 || r.graceStarted > 0) logLine('domain_recheck_sweep', { ...r });
+        })
+        .catch((error: Error) => logLine('domain_recheck_sweep_failed', { error: error.message }));
       // Sandbox Phase 0 reaper: kill processes whose DB record says they
       // should no longer exist (expired/cancelled demo sessions, purged
       // sites) — the API's own killPid cannot reach across containers, so

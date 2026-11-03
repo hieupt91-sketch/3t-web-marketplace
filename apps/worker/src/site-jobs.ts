@@ -14,6 +14,7 @@ import {
   type LocalObjectStore,
   type PlatformConfig,
 } from '@3t/core';
+import { extractArchive } from '@3t/template-sdk';
 import { httpStatus, killPid, siteLimitsOf, spawnServer, writeSiteMeta, type SpawnSpec } from './runtime-agent.ts';
 import { allocateSiteUid, fenceSiteTree, sandboxEnabled } from './sandbox.ts';
 
@@ -284,6 +285,25 @@ async function swapAndRespawn(deps: { config: PlatformConfig; db: Db; store: Loc
   await rm(kept, { recursive: true, force: true });
 }
 
+/**
+ * Extract a site backup into an (existing, empty) staging directory via
+ * the platform's verified extractor — the same `extractArchive` the
+ * import pipeline uses (audit code L-02). It validates the WHOLE central
+ * directory before writing a single byte and rejects symlink/special
+ * entries, `../`/absolute/drive-letter names, encrypted entries and
+ * name collisions, so a crafted backup (site trees are influenced by
+ * template code) cannot write through a symlink out of the staging dir
+ * the way the old system-`unzip` call could. One behavioural note versus
+ * `unzip`: a backup whose entries all live under a single top-level
+ * directory has that wrapper stripped (the extractor's documented rule);
+ * platform backups are zipped from the site root (`zip -r .`), whose
+ * trees always carry several top-level entries, so this never triggers
+ * for a platform-made backup. Exported for tests.
+ */
+export async function extractBackupArchive(zipPath: string, destination: string): Promise<void> {
+  await extractArchive(zipPath, destination);
+}
+
 async function runRestore(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, backupId: string, deploymentId: string | null): Promise<void> {
   const { config, db, store } = deps;
   const backup = await db.query<{ artifact_key: string }>(
@@ -299,7 +319,7 @@ async function runRestore(deps: { config: PlatformConfig; db: Db; store: LocalOb
     if (deploymentId) await db.query("UPDATE deployments SET status = 'running' WHERE id = $1", [deploymentId]);
     const staged = join(tmp, 'staged');
     await mkdir(staged, { recursive: true });
-    await execFileAsync('unzip', ['-q', store.pathFor(backup.rows[0]!.artifact_key), '-d', staged], tmp);
+    await extractBackupArchive(store.pathFor(backup.rows[0]!.artifact_key), staged);
     const version = await loadVersion(db, site.template_version_id);
     await swapAndRespawn(deps, site, staged, version);
     if (deploymentId) await db.query("UPDATE deployments SET status = 'succeeded', finished_at = now() WHERE id = $1", [deploymentId]);
@@ -329,8 +349,65 @@ export async function carrySiteData(fromDir: string, toDir: string): Promise<voi
   await cp(source, target, { recursive: true, dereference: false });
 }
 
-async function runUpdate(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, versionId: string, deploymentId: string | null): Promise<void> {
+/** A site-job failure carrying the machine code recorded on the job row. */
+export class SiteJobError extends Error {
+  constructor(
+    public readonly code: string,
+    message: string,
+  ) {
+    super(message);
+  }
+}
+
+/**
+ * Free-update deadline — PARITY with the API's `updatesFreeUntil`
+ * (apps/api/src/routes/sites.ts; keep the two in step). Updates are free
+ * for 12 months from the purchase, anchored on the entitlement's
+ * creation; a site with no entitlement has no deadline (the API
+ * intentionally does not gate those). A non-active entitlement (revoked
+ * by a full refund) carries no update right: its deadline collapses to
+ * the purchase instant, i.e. always already expired.
+ */
+export async function siteUpdateFreeUntil(db: Db, entitlementId: string | null): Promise<Date | null> {
+  if (!entitlementId) return null;
+  const { rows } = await db.query<{ free_until: Date }>(
+    `SELECT CASE WHEN status = 'active' THEN created_at + interval '12 months' ELSE created_at END AS free_until
+     FROM entitlements WHERE id = $1`,
+    [entitlementId],
+  );
+  return rows[0]?.free_until ?? null;
+}
+
+/**
+ * Worker-side re-check of the 12-month free-update window (audit
+ * payments L7). The API gates POST /sites/:id/update at enqueue time,
+ * but a queued job can run after the deadline passes; the worker is the
+ * point of execution, so it re-derives the window from the DB before
+ * touching anything. Throws SiteJobError('site_update_window_expired').
+ */
+export async function assertSiteUpdateAllowed(db: Db, site: Pick<SiteRow, 'entitlement_id'>, now: Date = new Date()): Promise<void> {
+  const freeUntil = await siteUpdateFreeUntil(db, site.entitlement_id);
+  if (freeUntil && new Date(freeUntil).getTime() <= now.getTime()) {
+    throw new SiteJobError(
+      'site_update_window_expired',
+      `free update window for site entitlement ${site.entitlement_id} expired at ${new Date(freeUntil).toISOString()}`,
+    );
+  }
+}
+
+export async function runUpdate(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, versionId: string, deploymentId: string | null): Promise<void> {
   const { config, db, store } = deps;
+  // Window re-check FIRST (audit payments L7): an expired job fails
+  // before any staging directory is made and the site's files are never
+  // touched. No entitlement → no gate, exactly as at the API.
+  try {
+    await assertSiteUpdateAllowed(db, site);
+  } catch (error) {
+    if (deploymentId) {
+      await db.query("UPDATE deployments SET status = 'failed', finished_at = now(), error_code = 'site_update_window_expired' WHERE id = $1", [deploymentId]);
+    }
+    throw error;
+  }
   const version = await loadVersion(db, versionId);
   // Stage on the same filesystem as the site tree: swapAndRespawn swaps
   // by rename(), which fails with EXDEV across filesystems (os tmpdir is
@@ -463,7 +540,9 @@ export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: 
     // Business failure is recorded on the job/site rows (provision_failed etc.);
     // like runImportJob, the runner does not rethrow it. LeaseLostError from
     // failJob still propagates so another worker's ownership is respected.
-    await failJob(deps.db, job, 'site_job_failed', false);
+    // A SiteJobError carries its own machine code (e.g. the update-window
+    // refusal, audit payments L7) so the job row says WHY it failed.
+    await failJob(deps.db, job, error instanceof SiteJobError ? error.code : 'site_job_failed', false);
   }
 }
 

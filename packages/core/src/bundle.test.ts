@@ -78,6 +78,39 @@ describe('buildSelfhostBundle', () => {
     expect(files['CHECKSUMS.txt']!.toString()).toContain('app/server.js');
   });
 
+  it('excludes build junk (.npm-cache, .tmp, caches, *.log) and ships only real files', async () => {
+    // Functional audit 2026-11-02: a real selfhost bundle carried
+    // 603/620 files of executor build junk (.npm-cache/**, .tmp/**).
+    const dir = await mkdtemp(join(tmpdir(), 'bundle-junk-'));
+    const app = join(dir, 'app');
+    await mkdir(join(app, '.npm-cache', '_cacache', 'content-v2'), { recursive: true });
+    await mkdir(join(app, '.tmp', 'node-compile-cache', 'v22'), { recursive: true });
+    await mkdir(join(app, '.cache', 'tool'), { recursive: true });
+    await mkdir(join(app, 'lib'), { recursive: true });
+    await writeFile(join(app, 'server.mjs'), 'console.log("up")');
+    await writeFile(join(app, 'package.json'), JSON.stringify({ name: 'cafe' }));
+    await writeFile(join(app, 'lib', 'real.js'), 'export {}');
+    await writeFile(join(app, '.npm-cache', '_cacache', 'content-v2', 'blob'), 'cache-bytes');
+    await writeFile(join(app, '.npm-cache', 'debug.log'), 'npm debug');
+    await writeFile(join(app, '.tmp', 'node-compile-cache', 'v22', 'blob'), 'compiled');
+    await writeFile(join(app, '.cache', 'tool', 'blob'), 'cache');
+    await writeFile(join(app, '2026-11-02T00_00_00_000Z-debug-0.log'), 'npm debug log');
+    await writeFile(join(app, 'stray.log'), 'stray log');
+    const meta = {
+      slug: 'cafe', version: '1.1.0', title: 'Cafe',
+      manifest: { schemaVersion: 1, adapter: 'node-http', runtime: { start: ['node', 'server.mjs'], port: 3000 }, env: [] },
+    };
+    const out = join(dir, 'b.zip');
+    await buildSelfhostBundle(app, out, meta);
+    const files = await entries(out);
+    const names = Object.keys(files).sort();
+    // Only the real application files ride under app/; every junk path is gone.
+    expect(names.filter((n) => n.startsWith('app/'))).toEqual(['app/lib/real.js', 'app/package.json', 'app/server.mjs']);
+    expect(names.some((n) => n.includes('.npm-cache') || n.includes('.tmp') || n.includes('.cache') || n.endsWith('.log'))).toBe(false);
+    expect(files['CHECKSUMS.txt']!.toString()).not.toContain('.npm-cache');
+    expect(files['CHECKSUMS.txt']!.toString()).toContain('app/server.mjs');
+  });
+
   it('packages a node-http runtime tree with a sqlite volume and no db service', async () => {
     const dir = await mkdtemp(join(tmpdir(), 'bundle-sqlite-'));
     const app = join(dir, 'app');

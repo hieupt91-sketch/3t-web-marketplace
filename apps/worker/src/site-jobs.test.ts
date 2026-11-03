@@ -1,9 +1,20 @@
-import { mkdtemp, mkdir, readFile, writeFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { carrySiteData, stripDemoCredentials } from './site-jobs.js';
+import { ArchiveError } from '@3t/template-sdk';
+import { buildZip } from '@3t/template-sdk/testing';
+import type { Db, JobRow, LocalObjectStore, PlatformConfig } from '@3t/core';
+import {
+  SiteJobError,
+  assertSiteUpdateAllowed,
+  carrySiteData,
+  extractBackupArchive,
+  runUpdate,
+  siteUpdateFreeUntil,
+  stripDemoCredentials,
+} from './site-jobs.js';
 
 /**
  * v44: an update swaps the site's whole tree for the new version artifact
@@ -102,5 +113,136 @@ describe('stripDemoCredentials', () => {
     await stripDemoCredentials(site);
 
     await expect(readFile(join(site, 'data', 'content.json'), 'utf8')).resolves.toBe('{"seed":true}');
+  });
+});
+
+/**
+ * Audit code L-02: restore must extract the backup through the verified
+ * `extractArchive` (via extractBackupArchive), not the system `unzip`.
+ * A crafted backup carrying a symlink entry or a `../` entry is rejected
+ * during central-directory validation — before anything is written —
+ * while a normal platform backup restores byte-for-byte.
+ */
+describe('extractBackupArchive (site restore)', () => {
+  async function setupZip(entries: Parameters<typeof buildZip>[0]) {
+    const dir = await mkdtemp(join(tmpdir(), 'mp-restore-'));
+    const zip = join(dir, 'backup.zip');
+    await writeFile(zip, buildZip(entries));
+    const staged = join(dir, 'staged');
+    await mkdir(staged, { recursive: true });
+    return { dir, zip, staged };
+  }
+
+  it('restores a normal backup tree', async () => {
+    const { zip, staged } = await setupZip([
+      { name: 'index.html', data: '<h1>site</h1>' },
+      { name: 'server.mjs', data: 'console.log("up")' },
+      { name: 'data/content.json', data: '{"edited":true}' },
+      { name: 'data/uploads/a.txt', data: 'upload-bytes' },
+    ]);
+    await extractBackupArchive(zip, staged);
+    await expect(readFile(join(staged, 'index.html'), 'utf8')).resolves.toBe('<h1>site</h1>');
+    await expect(readFile(join(staged, 'data', 'content.json'), 'utf8')).resolves.toBe('{"edited":true}');
+    await expect(readFile(join(staged, 'data', 'uploads', 'a.txt'), 'utf8')).resolves.toBe('upload-bytes');
+  });
+
+  it('rejects a backup containing a symlink entry and writes nothing', async () => {
+    const { dir, zip, staged } = await setupZip([
+      { name: 'index.html', data: 'ok' },
+      { name: 'evil-link', data: '/etc/passwd', mode: 0o120777 },
+    ]);
+    const error = await extractBackupArchive(zip, staged).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ArchiveError);
+    expect((error as ArchiveError).issues.map((i) => i.reason)).toContain('symlink');
+    expect(await readdir(staged)).toEqual([]);
+    expect(existsSync(join(dir, 'evil-link'))).toBe(false);
+  });
+
+  it('rejects a backup containing a ../ entry and writes nothing outside staging', async () => {
+    const { dir, zip, staged } = await setupZip([
+      { name: 'index.html', data: 'ok' },
+      { name: '../escape.txt', data: 'pwned' },
+    ]);
+    const error = await extractBackupArchive(zip, staged).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(ArchiveError);
+    expect((error as ArchiveError).issues.map((i) => i.reason)).toContain('parent_segment');
+    expect(await readdir(staged)).toEqual([]);
+    expect(existsSync(join(dir, 'escape.txt'))).toBe(false);
+  });
+});
+
+/**
+ * Audit payments L7: the API's 12-month gate is re-checked by the worker
+ * before an update job touches the site. Fake Db answers only the
+ * entitlement query (the gate's single read) plus deployment updates.
+ */
+function fakeEntitlementDb(freeUntil: Date | null, deploymentUpdates: string[] = []): Db {
+  const query = async (sql: string) => {
+    if (sql.includes('FROM entitlements')) {
+      return { rows: freeUntil ? [{ free_until: freeUntil }] : [], rowCount: freeUntil ? 1 : 0 };
+    }
+    if (sql.includes('UPDATE deployments')) {
+      deploymentUpdates.push(sql);
+      return { rows: [], rowCount: 1 };
+    }
+    throw new Error(`unexpected query in fake db: ${sql.slice(0, 80)}`);
+  };
+  return { query } as unknown as Db;
+}
+
+const DAY = 24 * 60 * 60 * 1000;
+
+describe('site update window re-check (worker)', () => {
+  it('siteUpdateFreeUntil returns null without an entitlement and never queries', async () => {
+    const db = fakeEntitlementDb(new Date());
+    await expect(siteUpdateFreeUntil(db, null)).resolves.toBeNull();
+  });
+
+  it('refuses an update whose 12-month window has expired', async () => {
+    const db = fakeEntitlementDb(new Date(Date.now() - DAY));
+    const error = await assertSiteUpdateAllowed(db, { entitlement_id: 'ent-1' }).then(() => null, (e: unknown) => e);
+    expect(error).toBeInstanceOf(SiteJobError);
+    expect((error as SiteJobError).code).toBe('site_update_window_expired');
+  });
+
+  it('allows an update still inside the window', async () => {
+    const db = fakeEntitlementDb(new Date(Date.now() + 30 * DAY));
+    await expect(assertSiteUpdateAllowed(db, { entitlement_id: 'ent-1' })).resolves.toBeUndefined();
+  });
+
+  it('allows a site with no entitlement (the API intentionally does not gate those)', async () => {
+    const db = fakeEntitlementDb(new Date(Date.now() - DAY));
+    await expect(assertSiteUpdateAllowed(db, { entitlement_id: null })).resolves.toBeUndefined();
+  });
+
+  it('runUpdate refuses an expired-window job before touching the site files', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mp-update-gate-'));
+    const workDir = join(base, 'work');
+    const siteId = 'site-1';
+    const siteDirPath = join(workDir, 'sites', siteId);
+    await mkdir(join(siteDirPath, 'data'), { recursive: true });
+    await writeFile(join(siteDirPath, 'data', 'content.json'), '{"mine":true}');
+    await writeFile(join(siteDirPath, 'server.mjs'), 'original');
+    const deploymentUpdates: string[] = [];
+    const db = fakeEntitlementDb(new Date(Date.now() - DAY), deploymentUpdates);
+    const site = {
+      id: siteId, owner_id: 'owner-1', entitlement_id: 'ent-1', template_version_id: 'v1',
+      display_name: 'Site', subdomain: 'site-1', default_locale: 'vi', status: 'active',
+      demo_session_id: null, runtime_kind: 'runtime', runtime_port: null, runtime_pid: null, runtime_uid: null,
+    };
+    const job = { id: 'job-1', type: 'site.update', payload_json: { site_id: siteId } } as unknown as JobRow;
+    const config = { workDir } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    const error = await runUpdate({ config, db, store }, job, site, 'v2', 'dep-1').then(() => null, (e: unknown) => e);
+
+    expect(error).toBeInstanceOf(SiteJobError);
+    expect((error as SiteJobError).code).toBe('site_update_window_expired');
+    // The refusal is recorded on the deployment with its own error code…
+    expect(deploymentUpdates.some((sql) => sql.includes("error_code = 'site_update_window_expired'"))).toBe(true);
+    // …and the site tree is byte-identical, with no staging dir created.
+    await expect(readFile(join(siteDirPath, 'server.mjs'), 'utf8')).resolves.toBe('original');
+    await expect(readFile(join(siteDirPath, 'data', 'content.json'), 'utf8')).resolves.toBe('{"mine":true}');
+    expect(existsSync(join(workDir, 'tmp'))).toBe(false);
   });
 });

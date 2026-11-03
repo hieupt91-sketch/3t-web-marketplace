@@ -1,5 +1,6 @@
 import { spawn, type ChildProcess } from 'node:child_process';
-import { access } from 'node:fs/promises';
+import { access, mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { dirname, join } from 'node:path';
 
 export interface ExecutorOptions {
   /** Working directory; the command cannot be given any other cwd. */
@@ -63,8 +64,13 @@ const PRLIMIT = '/usr/bin/prlimit';
  *
  * Guarantees in this implementation (process-level, NOT a VM):
  * - argv only, never a shell string, so manifest values cannot inject shell commands;
- * - scrubbed environment (PATH, HOME/TMPDIR inside the workdir, NODE_ENV, plus an
- *   explicit caller allowlist — no host secrets, no proxy credentials leak in);
+ * - scrubbed environment (PATH, NODE_ENV, plus an explicit caller allowlist —
+ *   no host secrets, no proxy credentials leak in). HOME, TMPDIR and the npm
+ *   cache point at a per-run scratch directory OUTSIDE the project tree
+ *   (a sibling of the workdir, deleted when the run ends): builds used to
+ *   run with all three inside the workdir, so `.npm-cache/`, `.tmp/`
+ *   (node-compile-cache) and npm debug logs landed in the tree and were
+ *   packed into buyers' selfhost bundles (functional audit 2026-11-02);
  * - wall-clock timeout with whole-process-group kill;
  * - captured output capped, so a chatty build cannot fill the disk;
  * - optional network namespace for build phases and prlimit resource caps when the
@@ -74,58 +80,78 @@ const PRLIMIT = '/usr/bin/prlimit';
  * unprivileged uid and, for full tenant isolation, inside a real VM/sandbox with a
  * dependency proxy allowlist. This module is the seam where that executor plugs in.
  */
+/**
+ * The environment a build command runs with. HOME, TMPDIR and the npm
+ * cache live under `scratchDir` — never inside `cwd` (the project tree) —
+ * so cache/log junk cannot land in the tree that later gets packed into
+ * an artifact or a buyer's bundle. Exported for tests.
+ */
+export function executorEnv(cwd: string, scratchDir: string, extra?: Record<string, string>): Record<string, string> {
+  void cwd; // cwd is deliberately NOT referenced by any path below.
+  return {
+    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
+    HOME: scratchDir,
+    TMPDIR: join(scratchDir, 'tmp'),
+    NODE_ENV: 'production',
+    npm_config_cache: join(scratchDir, 'npm-cache'),
+    npm_config_audit: 'false',
+    npm_config_fund: 'false',
+    ...(extra ?? {}),
+  };
+}
+
 export async function runIsolated(argv: string[], opts: ExecutorOptions): Promise<ExecutorResult> {
   if (argv.length === 0) throw new ExecutorError('executor.empty_argv', 'no command given');
   const timeoutMs = opts.timeoutMs ?? 10 * 60 * 1000;
   const maxOutputBytes = opts.maxOutputBytes ?? 1024 * 1024;
   const allowNetwork = opts.allowNetwork ?? false;
 
-  // Base command without the network-namespace wrapper.
-  let baseCommand = argv;
-  let limitsApplied = false;
-  if (opts.limits && (await exists(PRLIMIT))) {
-    const args: string[] = [];
-    if (opts.limits.cpuSeconds !== undefined) args.push(`--cpu=${opts.limits.cpuSeconds}`);
-    if (opts.limits.addressSpaceMb !== undefined) args.push(`--as=${opts.limits.addressSpaceMb * 1024 * 1024}`);
-    if (opts.limits.maxProcesses !== undefined) args.push(`--nproc=${opts.limits.maxProcesses}`);
-    if (args.length) {
-      baseCommand = [PRLIMIT, ...args, '--', ...baseCommand];
-      limitsApplied = true;
+  // Per-run scratch as a SIBLING of the workdir (same filesystem, outside
+  // the tree), removed when the run ends — success, failure or timeout.
+  const scratchDir = await mkdtemp(join(dirname(opts.cwd), '.mp-exec-'));
+  try {
+    await mkdir(join(scratchDir, 'tmp'), { recursive: true });
+
+    // Base command without the network-namespace wrapper.
+    let baseCommand = argv;
+    let limitsApplied = false;
+    if (opts.limits && (await exists(PRLIMIT))) {
+      const args: string[] = [];
+      if (opts.limits.cpuSeconds !== undefined) args.push(`--cpu=${opts.limits.cpuSeconds}`);
+      if (opts.limits.addressSpaceMb !== undefined) args.push(`--as=${opts.limits.addressSpaceMb * 1024 * 1024}`);
+      if (opts.limits.maxProcesses !== undefined) args.push(`--nproc=${opts.limits.maxProcesses}`);
+      if (args.length) {
+        baseCommand = [PRLIMIT, ...args, '--', ...baseCommand];
+        limitsApplied = true;
+      }
     }
-  }
 
-  const env: Record<string, string> = {
-    PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
-    HOME: opts.cwd,
-    TMPDIR: `${opts.cwd}/.tmp`,
-    NODE_ENV: 'production',
-    npm_config_cache: `${opts.cwd}/.npm-cache`,
-    npm_config_audit: 'false',
-    npm_config_fund: 'false',
-    ...(opts.env ?? {}),
-  };
+    const env = executorEnv(opts.cwd, scratchDir, opts.env);
 
-  const runOnce = (command: string[], networkIsolated: boolean): Promise<ExecutorResult> =>
-    runCommand(command, { cwd: opts.cwd, env, timeoutMs, maxOutputBytes, networkIsolated, limitsApplied });
+    const runOnce = (command: string[], networkIsolated: boolean): Promise<ExecutorResult> =>
+      runCommand(command, { cwd: opts.cwd, env, timeoutMs, maxOutputBytes, networkIsolated, limitsApplied });
 
-  if (!allowNetwork && (await exists(UN_SHARE))) {
-    const wrapped = await runOnce([UN_SHARE, '-n', ...baseCommand], true);
-    // `unshare -n` needs CAP_SYS_ADMIN, so on a non-root host (for example a
-    // GitHub-hosted runner) it fails before the command runs, with its own
-    // "unshare: ... Operation not permitted" error on stderr. That is not a
-    // build failure: fall back to running without the namespace, exactly as
-    // when the tool is absent, and report networkIsolated=false. Any other
-    // failure (including a real build error) is returned as-is, unretried.
-    if (
-      wrapped.code !== 0 &&
-      /unshare:/.test(wrapped.stderr) &&
-      /Operation not permitted|Permission denied/.test(wrapped.stderr)
-    ) {
-      return runOnce(baseCommand, false);
+    if (!allowNetwork && (await exists(UN_SHARE))) {
+      const wrapped = await runOnce([UN_SHARE, '-n', ...baseCommand], true);
+      // `unshare -n` needs CAP_SYS_ADMIN, so on a non-root host (for example a
+      // GitHub-hosted runner) it fails before the command runs, with its own
+      // "unshare: ... Operation not permitted" error on stderr. That is not a
+      // build failure: fall back to running without the namespace, exactly as
+      // when the tool is absent, and report networkIsolated=false. Any other
+      // failure (including a real build error) is returned as-is, unretried.
+      if (
+        wrapped.code !== 0 &&
+        /unshare:/.test(wrapped.stderr) &&
+        /Operation not permitted|Permission denied/.test(wrapped.stderr)
+      ) {
+        return await runOnce(baseCommand, false);
+      }
+      return wrapped;
     }
-    return wrapped;
+    return await runOnce(baseCommand, false);
+  } finally {
+    await rm(scratchDir, { recursive: true, force: true });
   }
-  return runOnce(baseCommand, false);
 }
 
 interface RunCommandOptions {

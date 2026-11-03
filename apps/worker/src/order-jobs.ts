@@ -1,3 +1,5 @@
+import { createHash } from 'node:crypto';
+import { resolveTxt } from 'node:dns/promises';
 import { emitEvent, tx, writeAudit, type Db } from '@3t/core';
 
 /**
@@ -83,4 +85,123 @@ export async function expireStalePaymentOrders(db: Db): Promise<number> {
     });
   }
   return expired;
+}
+
+/* ------------------------------------------------------------------ *
+ * Custom-domain revalidation (audit payments L6, migration 0043).
+ *
+ * A domain was verified once — TXT `_3t-verify.<host>` holding a token
+ * whose sha256 hex matches domains.verification_token_hash — and then
+ * stayed 'verified' forever, so removing the TXT record never removed
+ * service (the site-router serves exactly status='verified' rows).
+ * This sweep re-resolves the record for verified domains whose last
+ * conclusive re-check is older than DOMAIN_RECHECK_INTERVAL_MS
+ * (default 24h; main.ts calls the sweeps about once a minute while
+ * idle, and the staleness filter is what sets the real cadence):
+ *   - token present  → stay verified; fail state cleared,
+ *     last_recheck_at stamped.
+ *   - record missing or token mismatch (DEFINITIVE failure) →
+ *     recheck_fail_since is stamped if unset and last_recheck_at
+ *     advances; once the failure is older than the 7-day grace the
+ *     domain transitions to 'verification_lost' (and stops being
+ *     primary), which is what removes it from the router. The grace
+ *     absorbs DNS propagation slips and registrar mishaps: a buyer who
+ *     restores the record within the week never loses service.
+ *   - transient DNS errors (SERVFAIL, timeout, refused, …) are
+ *     INCONCLUSIVE: nothing is stamped and nothing changes, so a DNS
+ *     outage can never start — or extend — anyone's grace clock.
+ * The token comparison mirrors the API verify route exactly: flatten
+ * the TXT chunks and compare sha256(value) hex against the stored hash.
+ * ------------------------------------------------------------------ */
+
+export type TxtResolver = (name: string) => Promise<string[][]>;
+
+export const DOMAIN_RECHECK_GRACE_MS = 7 * 24 * 60 * 60 * 1000;
+export const DOMAIN_RECHECK_INTERVAL_MS = 24 * 60 * 60 * 1000;
+
+/** DNS answers that prove the record is gone; everything else is weather. */
+const DEFINITIVE_DNS_CODES = new Set(['ENODATA', 'ENOTFOUND']);
+
+export interface DomainRecheckResult {
+  checked: number;
+  kept: number;
+  graceStarted: number;
+  lost: number;
+  inconclusive: number;
+}
+
+interface VerifiedDomainRow {
+  id: string;
+  hostname_ascii: string;
+  verification_token_hash: string;
+  recheck_fail_since: Date | null;
+}
+
+export async function revalidateVerifiedDomains(
+  db: Db,
+  opts: { now?: Date; resolveTxt?: TxtResolver; graceMs?: number; intervalMs?: number; limit?: number } = {},
+): Promise<DomainRecheckResult> {
+  const now = opts.now ?? new Date();
+  const resolver: TxtResolver = opts.resolveTxt ?? ((name) => resolveTxt(name));
+  const graceMs = opts.graceMs ?? DOMAIN_RECHECK_GRACE_MS;
+  const intervalMs = opts.intervalMs ?? DOMAIN_RECHECK_INTERVAL_MS;
+  const staleBefore = new Date(now.getTime() - intervalMs);
+  const { rows } = await db.query<VerifiedDomainRow>(
+    `SELECT id, hostname_ascii, verification_token_hash, recheck_fail_since FROM domains
+     WHERE status = 'verified' AND (last_recheck_at IS NULL OR last_recheck_at <= $2)
+     ORDER BY last_recheck_at ASC NULLS FIRST LIMIT $1`,
+    [opts.limit ?? 100, staleBefore],
+  );
+  const result: DomainRecheckResult = { checked: 0, kept: 0, graceStarted: 0, lost: 0, inconclusive: 0 };
+  for (const domain of rows) {
+    let records: string[][] | null = null;
+    try {
+      records = await resolver(`_3t-verify.${domain.hostname_ascii}`);
+    } catch (error) {
+      const code = (error as { code?: string }).code ?? '';
+      if (!DEFINITIVE_DNS_CODES.has(code)) {
+        // Transient DNS trouble: inconclusive — change nothing at all.
+        result.inconclusive++;
+        continue;
+      }
+      records = null; // definitive: the name/record does not exist
+    }
+    result.checked++;
+    const tokenOk =
+      records !== null &&
+      records.flat().some((value) => createHash('sha256').update(value).digest('hex') === domain.verification_token_hash);
+    if (tokenOk) {
+      await db.query("UPDATE domains SET last_recheck_at = $2, recheck_fail_since = NULL WHERE id = $1 AND status = 'verified'", [
+        domain.id,
+        now,
+      ]);
+      result.kept++;
+      continue;
+    }
+    // Definitive failure: no record, or no chunk hashes to the token.
+    const failSince = domain.recheck_fail_since ? new Date(domain.recheck_fail_since) : now;
+    if (now.getTime() - failSince.getTime() > graceMs) {
+      await db.query(
+        "UPDATE domains SET status = 'verification_lost', is_primary = false, last_recheck_at = $2 WHERE id = $1 AND status = 'verified'",
+        [domain.id, now],
+      );
+      await writeAudit(db, {
+        actorType: 'system',
+        actorId: null,
+        action: 'domain.verification_lost',
+        resourceType: 'domain',
+        resourceId: domain.id,
+        traceId: 'worker-sweep',
+        diff: { hostname_ascii: domain.hostname_ascii, fail_since: failSince.toISOString() },
+      });
+      result.lost++;
+    } else {
+      await db.query(
+        "UPDATE domains SET last_recheck_at = $2, recheck_fail_since = COALESCE(recheck_fail_since, $2) WHERE id = $1 AND status = 'verified'",
+        [domain.id, now],
+      );
+      if (!domain.recheck_fail_since) result.graceStarted++;
+    }
+  }
+  return result;
 }

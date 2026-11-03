@@ -37,12 +37,39 @@ function isRuntimeAdapter(adapter: string | undefined): boolean {
   return adapter === 'node-http' || adapter === 'next-standalone';
 }
 
+/**
+ * Build junk that must never ship in a selfhost bundle (functional audit
+ * 2026-11-02: 603/620 files in a real bundle were `.npm-cache/**` and
+ * `.tmp/**`). The import build executor used to run with HOME, TMPDIR and
+ * the npm cache inside the project tree, so npm's cache, node's compile
+ * cache and stray build logs landed in the runnable tree and were packed
+ * verbatim. The executor now keeps that state in a per-run scratch dir
+ * outside the tree; this filter is the second line of defence for trees
+ * built before that fix (or by any other tool) — a buyer's bundle holds
+ * only real template files, never the build machine's caches or logs.
+ */
+const JUNK_DIR_SEGMENTS = new Set(['.npm-cache', '.tmp', '.cache', 'node-compile-cache']);
+
+export function isSelfhostJunkPath(relPath: string): boolean {
+  const segments = relPath.split('/');
+  if (segments.some((segment) => JUNK_DIR_SEGMENTS.has(segment))) return true;
+  const base = segments[segments.length - 1] ?? '';
+  // Any log file (npm debug logs included) is build-machine state.
+  return base.endsWith('.log');
+}
+
 async function listFiles(root: string, prefix = ''): Promise<string[]> {
   const out: string[] = [];
   for (const entry of await readdir(join(root, prefix), { withFileTypes: true })) {
     const rel = prefix ? posix.join(prefix, entry.name) : entry.name;
-    if (entry.isDirectory()) out.push(...(await listFiles(root, rel)));
-    else if (entry.isFile()) out.push(rel);
+    if (entry.isDirectory()) {
+      // Prune junk directories whole: never descend into a cache tree.
+      if (JUNK_DIR_SEGMENTS.has(entry.name)) continue;
+      out.push(...(await listFiles(root, rel)));
+    } else if (entry.isFile()) {
+      if (isSelfhostJunkPath(rel)) continue;
+      out.push(rel);
+    }
   }
   return out;
 }
