@@ -58,23 +58,62 @@ services:
       dockerfile: deploy/Dockerfile.node
       args:
         APP: worker
-    # NO `user:` here — INTENTIONAL. The worker is the v48 sandbox
-    # privilege boundary: it chowns site fences and setuids spawned site
-    # processes into the 20000-20499 UID pool (plus 19998 demo / 19999
-    # import), and SANDBOX_UID_MODE=on refuses to start without euid 0.
-    # It must keep running as root until spawn privilege moves to the
-    # Phase 1 site-runner. Every other platform service runs non-root.
+    # NO `user:` here — INTENTIONAL. The worker still performs the v48
+    # tree fencing (chown/chmod of site trees, worker-side purges) which
+    # needs root. SPAWNING template code is no longer the worker's job:
+    # that privilege moved to the site-runner (sandbox Phase 1, audit
+    # C-01) via RUNTIME_AGENT_URL below — the worker fails closed rather
+    # than spawning locally when the agent URL is set.
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
       - PREVIEW_INTERNAL_URL=http://preview:4100
       # Site servers must be reachable by the site-router container.
       - RUNTIME_BIND_HOST=0.0.0.0
+      # Sandbox Phase 1: all template-code spawns go through the runner.
+      - RUNTIME_AGENT_URL=http://site-runner:4300
     volumes:
       - appdata:/app/runtime-data
     depends_on:
       postgres:
         condition: service_healthy
+      site-runner:
+        condition: service_started
+    restart: unless-stopped
+
+  site-runner:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.node
+      args:
+        APP: site-runner
+    # The sandbox Phase 1 spawner (audit C-01). NO `user:` and NO env_file
+    # — INTENTIONAL on both counts:
+    # - It runs as root because it setuids site processes into the
+    #   20000-20499 UID pool and holds NET_ADMIN for the per-UID nftables
+    #   egress rules in its own network namespace.
+    # - Its environment is ONLY the explicit list below (RUNNER_TOKEN is
+    #   interpolated from .env by compose; the file itself is never loaded
+    #   into this container). It must never see DATABASE_URL, MFA_KEY or
+    #   any other platform secret — that absence is the point of Phase 1.
+    # It mounts the shared appdata like the other services; the VPS
+    # override additionally binds the host work/ subtree over
+    # /app/runtime-data/work so site trees resolve at identical paths.
+    cap_add:
+      - NET_ADMIN
+    environment:
+      - RUNNER_TOKEN=${RUNNER_TOKEN}
+      - RUNNER_PORT=4300
+      - RUNNER_WORK_ROOT=/app/runtime-data/work
+      - RUNNER_SITE_GID=19990
+      - RUNNER_EGRESS=on
+    volumes:
+      - appdata:/app/runtime-data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:4300/healthz').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
     restart: unless-stopped
 
   preview:
@@ -124,11 +163,12 @@ services:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
       - SITE_ROUTER_HOST=0.0.0.0
       - SITE_ROUTER_PORT=4200
-      # Site AND demo session processes both live in the worker container
-      # (sandbox Phase 0: the API no longer spawns template code); both bind
-      # 0.0.0.0 inside the stack so the site router can reach them.
-      - SITE_ROUTER_SITES_HOST=worker
-      - SITE_ROUTER_SESSIONS_HOST=worker
+      # Site AND demo session processes both live in the site-runner
+      # container (sandbox Phase 1: the runner is the only component that
+      # spawns template code); both bind 0.0.0.0 inside the stack so the
+      # site router can reach them.
+      - SITE_ROUTER_SITES_HOST=site-runner
+      - SITE_ROUTER_SESSIONS_HOST=site-runner
     ports:
       - "127.0.0.1:4200:4200"
     depends_on:
@@ -137,6 +177,8 @@ services:
       api:
         condition: service_started
       worker:
+        condition: service_started
+      site-runner:
         condition: service_started
     restart: unless-stopped
 
