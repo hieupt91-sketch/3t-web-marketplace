@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { createReadStream } from 'node:fs';
 import { access, constants } from 'node:fs/promises';
 import { resolve, sep } from 'node:path';
-import { loadActivePlans, previewOrigin, startingPrices, type PlatformConfig } from '@3t/core';
+import { loadActivePlans, previewOrigin, startingPrices, usdAppliedRate, type PlatformConfig } from '@3t/core';
 import { DEFAULT_LOCALE, LOCALES, type Locale } from '@3t/i18n';
 import { ADAPTERS, IMPLEMENTED_ADAPTERS } from '@3t/template-sdk';
 import { errors } from '../errors.ts';
@@ -235,9 +235,13 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const ppRow = await db.query<{ value_json: { enabled?: boolean; email?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.paypal'");
     const ppRaw = ppRow.rows[0]?.value_json;
     const paypal_enabled = ppRaw?.enabled === true && typeof ppRaw.email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ppRaw.email.trim());
-    const usdRow = await db.query<{ value_json: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; usd_rate?: number } }>("SELECT value_json FROM settings WHERE key = 'payment.usd_transfer'");
+    const usdRow = await db.query<{ value_json: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; usd_rate?: number; fee_percent?: number } }>("SELECT value_json FROM settings WHERE key = 'payment.usd_transfer'");
     const usdRaw = usdRow.rows[0]?.value_json;
-    const usd_enabled = usdRaw?.enabled === true && typeof usdRaw.bank_name === 'string' && usdRaw.bank_name.trim() !== '' && typeof usdRaw.account_number === 'string' && usdRaw.account_number.trim() !== '' && typeof usdRaw.account_holder === 'string' && usdRaw.account_holder.trim() !== '' && typeof usdRaw.usd_rate === 'number' && usdRaw.usd_rate > 0;
+    const usdApplied = usdAppliedRate(
+      typeof usdRaw?.usd_rate === 'number' && Number.isFinite(usdRaw.usd_rate) ? usdRaw.usd_rate : 0,
+      typeof usdRaw?.fee_percent === 'number' && Number.isFinite(usdRaw.fee_percent) ? usdRaw.fee_percent : 0,
+    );
+    const usd_enabled = usdRaw?.enabled === true && typeof usdRaw.bank_name === 'string' && usdRaw.bank_name.trim() !== '' && typeof usdRaw.account_number === 'string' && usdRaw.account_number.trim() !== '' && typeof usdRaw.account_holder === 'string' && usdRaw.account_holder.trim() !== '' && usdApplied > 0;
     // Side-rail ads: a side is exposed only when ads are enabled and the
     // side carries an image URL — unconfigured slots stay invisible.
     const adsRow = await db.query<{ value_json: { enabled?: boolean; left?: { image_url?: string; link_url?: string; alt?: string }; right?: { image_url?: string; link_url?: string; alt?: string } } }>("SELECT value_json FROM settings WHERE key = 'ads.side_rails'");

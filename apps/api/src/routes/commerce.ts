@@ -22,6 +22,7 @@ import {
   randomToken,
   tx,
   usdAmountFor,
+  usdAppliedRate,
   writeAudit,
   type Db,
   type NormalizedEvent,
@@ -174,28 +175,44 @@ export function payPalAvailable(s: PayPalSettings): boolean {
 }
 
 /** Owner-configured USD bank account (settings key 'payment.usd_transfer').
- *  The buyer wires USD from abroad; the quote uses the owner's own rate
- *  (VND per 1 USD) frozen into the attempt's instructions, and staff confirm
- *  settlement in reconciliation. SWIFT is optional (some accounts receive
- *  via an intermediary without one), the rate is not: no rate, no quote. */
+ *  The buyer wires USD from abroad; the quote uses the APPLIED rate frozen
+ *  into the attempt's instructions, and staff confirm settlement in
+ *  reconciliation. SWIFT is optional (some accounts receive via an
+ *  intermediary without one), the rate is not: no rate, no quote.
+ *  The stored `usd_rate` is the BASE rate, pegged by the owner to the
+ *  State Bank of Vietnam's daily central rate (`base_rate_date` records
+ *  the day it was last set); `usd_rate` on this interface is the APPLIED
+ *  rate = base adjusted by `fee_percent` (may be negative). */
 export interface UsdTransferSettings {
   enabled: boolean;
   bank_name: string;
   account_number: string;
   account_holder: string;
   swift_code: string;
+  /** Applied rate (VND per 1 USD) quoted to buyers: base + fee. */
   usd_rate: number;
+  base_rate: number;
+  fee_percent: number;
+  base_rate_date: string;
 }
 
 export async function loadUsdTransferSettings(db: Db): Promise<UsdTransferSettings> {
-  const raw = (await getSetting(db, 'payment.usd_transfer').catch(() => null)) as Partial<UsdTransferSettings> | null;
+  const raw = (await getSetting(db, 'payment.usd_transfer').catch(() => null)) as {
+    enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string;
+    swift_code?: string; usd_rate?: number; fee_percent?: number; base_rate_date?: string;
+  } | null;
+  const base = typeof raw?.usd_rate === 'number' && Number.isFinite(raw.usd_rate) ? raw.usd_rate : 0;
+  const fee = typeof raw?.fee_percent === 'number' && Number.isFinite(raw.fee_percent) ? raw.fee_percent : 0;
   return {
     enabled: raw?.enabled === true,
     bank_name: typeof raw?.bank_name === 'string' ? raw.bank_name : '',
     account_number: typeof raw?.account_number === 'string' ? raw.account_number : '',
     account_holder: typeof raw?.account_holder === 'string' ? raw.account_holder : '',
     swift_code: typeof raw?.swift_code === 'string' ? raw.swift_code : '',
-    usd_rate: typeof raw?.usd_rate === 'number' && Number.isFinite(raw.usd_rate) ? raw.usd_rate : 0,
+    usd_rate: usdAppliedRate(base, fee),
+    base_rate: base,
+    fee_percent: fee,
+    base_rate_date: typeof raw?.base_rate_date === 'string' ? raw.base_rate_date : '',
   };
 }
 

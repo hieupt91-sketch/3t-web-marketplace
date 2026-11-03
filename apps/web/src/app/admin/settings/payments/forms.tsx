@@ -256,7 +256,7 @@ export function VnPayForm() {
 interface MoMoSettings {
   enabled: boolean;
   partner_code: string;
-  access_key: string;
+  access_key_configured: boolean;
   secret_configured: boolean;
   sandbox: boolean;
   ipn_url: string;
@@ -281,7 +281,6 @@ export function MoMoForm() {
         setSettings(res.data);
         setEnabled(res.data.enabled);
         setPartnerCode(res.data.partner_code);
-        setAccessKey(res.data.access_key);
         setSandbox(res.data.sandbox);
       } else setError(res.error);
     });
@@ -291,17 +290,18 @@ export function MoMoForm() {
     event.preventDefault();
     if (busy) return;
     setFormError(false); setSaved(false); setError(null);
-    if (enabled && (!partnerCode.trim() || !accessKey.trim() || (!settings?.secret_configured && secretKey.trim() === ''))) {
+    if (enabled && (!partnerCode.trim() || (!settings?.access_key_configured && !accessKey.trim()) || (!settings?.secret_configured && secretKey.trim() === ''))) {
       setFormError(true);
       return;
     }
     setBusy(true);
-    const body: Record<string, unknown> = { enabled, partner_code: partnerCode, access_key: accessKey, sandbox };
+    const body: Record<string, unknown> = { enabled, partner_code: partnerCode, sandbox };
+    if (accessKey.trim() !== '') body.access_key = accessKey.trim();
     if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
     const res = await api<MoMoSettings>('/admin/settings/payment-momo', { method: 'POST', body });
     setBusy(false);
     if (!res.ok) setError(res.error);
-    else { setSettings(res.data); setSecretKey(''); setSaved(true); }
+    else { setSettings(res.data); setAccessKey(''); setSecretKey(''); setSaved(true); }
   }
 
   if (error && !settings) return <ErrorState error={error} />;
@@ -324,16 +324,18 @@ export function MoMoForm() {
         <span>{t('ui.payment_settings.partner_code')}</span>
         <input className="input" value={partnerCode} onChange={(e) => setPartnerCode(e.target.value)} disabled={busy} autoComplete="off" />
       </label>
-      <label className="field">
-        <span>{t('ui.payment_settings.access_key')}</span>
-        <input className="input" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} disabled={busy} autoComplete="off" />
-      </label>
       <dl className="details">
         <dt>{t('ui.payment_settings.ipn_url')}</dt>
         <dd className="mono">{settings.ipn_url}</dd>
+        <dt>{t('ui.payment_settings.access_key')}</dt>
+        <dd>{settings.access_key_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
         <dt>{t('ui.payment_settings.secret_status')}</dt>
         <dd>{settings.secret_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
       </dl>
+      <label className="field">
+        <span>{t('ui.payment_settings.access_key')}</span>
+        <input className="input" type="password" value={accessKey} onChange={(e) => setAccessKey(e.target.value)} disabled={busy} autoComplete="new-password" placeholder={t('ui.payment_settings.hub_api_key_hint')} />
+      </label>
       <label className="field">
         <span>{t('ui.payment_settings.secret_key')}</span>
         <input className="input" type="password" value={secretKey} onChange={(e) => setSecretKey(e.target.value)} disabled={busy} autoComplete="new-password" placeholder={t('ui.payment_settings.hub_api_key_hint')} />
@@ -427,10 +429,13 @@ interface UsdSettings {
   account_holder: string;
   swift_code: string;
   usd_rate: number;
+  fee_percent: number;
+  base_rate_date: string;
+  applied_rate: number;
 }
 
 export function UsdForm() {
-  const { t } = useT();
+  const { t, locale } = useT();
   const [settings, setSettings] = useState<UsdSettings | null>(null);
   const [enabled, setEnabled] = useState(false);
   const [bankName, setBankName] = useState('');
@@ -438,6 +443,7 @@ export function UsdForm() {
   const [accountHolder, setAccountHolder] = useState('');
   const [swiftCode, setSwiftCode] = useState('');
   const [rate, setRate] = useState('');
+  const [fee, setFee] = useState('');
   const [error, setError] = useState<ApiError | null>(null);
   const [formError, setFormError] = useState(false);
   const [saved, setSaved] = useState(false);
@@ -453,6 +459,7 @@ export function UsdForm() {
         setAccountHolder(res.data.account_holder);
         setSwiftCode(res.data.swift_code);
         setRate(res.data.usd_rate > 0 ? String(res.data.usd_rate) : '');
+        setFee(String(res.data.fee_percent));
       } else setError(res.error);
     });
   }, []);
@@ -466,15 +473,25 @@ export function UsdForm() {
     setBusy(true);
     const res = await api<UsdSettings>('/admin/settings/payment-usd', {
       method: 'POST',
-      body: { enabled, bank_name: bankName, account_number: accountNumber, account_holder: accountHolder, swift_code: swiftCode, usd_rate: rateNum },
+      body: { enabled, bank_name: bankName, account_number: accountNumber, account_holder: accountHolder, swift_code: swiftCode, usd_rate: rateNum, fee_percent: Number(fee) || 0 },
     });
     setBusy(false);
     if (!res.ok) setError(res.error);
-    else { setSettings(res.data); setSaved(true); }
+    else { setSettings(res.data); setFee(String(res.data.fee_percent)); setSaved(true); }
   }
 
   if (error && !settings) return <ErrorState error={error} />;
   if (!settings) return <Loading />;
+
+  // Live preview of the buyer-facing rate: same formula as the server
+  // (base adjusted by the fee percentage, fee quantized to 2 decimals).
+  const previewBase = Number(rate.replace(/[^\d]/g, ''));
+  const previewFee = Number(fee);
+  const previewApplied = previewBase > 0 && Number.isFinite(previewFee)
+    ? Math.round(previewBase * (10000 + Math.round(previewFee * 100)) / 10000)
+    : 0;
+  const todayHere = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+  const baseDateStale = settings.base_rate_date !== '' && settings.base_rate_date !== todayHere;
   return (
     <form className="stack card" onSubmit={submit}>
       <div className="row" style={{ justifyContent: 'space-between' }}>
@@ -506,9 +523,23 @@ export function UsdForm() {
         <input className="input" value={swiftCode} onChange={(e) => setSwiftCode(e.target.value)} disabled={busy} autoComplete="off" />
       </label>
       <label className="field">
-        <span>{t('ui.payment_settings.usd_rate')}</span>
+        <span>{t('ui.payment_settings.usd_base_rate')}</span>
         <input className="input" value={rate} onChange={(e) => setRate(e.target.value)} disabled={busy} autoComplete="off" inputMode="numeric" placeholder="26000" />
       </label>
+      <p className="muted" style={{ margin: 0 }}>
+        <a href="https://www.sbv.gov.vn/TyGia/faces/TyGia.jspx" target="_blank" rel="noreferrer">{t('ui.payment_settings.usd_sbv_link')}</a>
+      </p>
+      {settings.base_rate_date ? (
+        baseDateStale
+          ? <Alert tone="warning"><p>{t('ui.payment_settings.usd_base_rate_stale', { date: settings.base_rate_date })}</p></Alert>
+          : <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.usd_base_rate_date', { date: settings.base_rate_date })}</p>
+      ) : null}
+      <label className="field">
+        <span>{t('ui.payment_settings.usd_fee')}</span>
+        <input className="input" type="number" step={0.25} min={-10} max={100} value={fee} onChange={(e) => setFee(e.target.value)} disabled={busy} autoComplete="off" inputMode="decimal" placeholder="0" />
+      </label>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.usd_fee_hint')}</p>
+      {previewApplied > 0 ? <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.usd_applied_rate', { rate: previewApplied.toLocaleString(locale) })}</p> : null}
       <div className="row">
         <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
       </div>

@@ -1,5 +1,5 @@
 import type { FastifyInstance } from 'fastify';
-import { writeAudit } from '@3t/core';
+import { usdAppliedRate, writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 import { requireStepUp } from '../lib/step-up.ts';
@@ -304,7 +304,16 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
  *  bank account for overseas buyers. Neither has an automatic settlement
  *  feed into the platform — staff confirm arrivals in reconciliation —
  *  so these settings only describe where the money goes and (for USD)
- *  the owner's own exchange rate used to quote the amount. */
+ *  the exchange rate used to quote the amount: a base rate the owner
+ *  pegs to the State Bank of Vietnam's daily central rate, plus an
+ *  adjustable fee percentage on top. */
+
+/** Today (YYYY-MM-DD) in Vietnam — the date stamped on the USD base rate
+ *  at every save so a stale peg is visible in the admin form. */
+function todayInVietnam(): string {
+  return new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+}
+
 export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<void> {
   const { db } = app.deps;
 
@@ -364,6 +373,8 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
   app.get('/settings/payment-usd', async (request) => {
     requirePermission(request, 'settings:manage');
     const s = await load('payment.usd_transfer');
+    const base = typeof s.usd_rate === 'number' ? s.usd_rate : 0;
+    const fee = typeof s.fee_percent === 'number' && Number.isFinite(s.fee_percent) ? s.fee_percent : 0;
     return {
       data: {
         enabled: s.enabled === true,
@@ -371,12 +382,15 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
         account_number: str(s.account_number),
         account_holder: str(s.account_holder),
         swift_code: str(s.swift_code),
-        usd_rate: typeof s.usd_rate === 'number' ? s.usd_rate : 0,
+        usd_rate: base,
+        fee_percent: fee,
+        base_rate_date: str(s.base_rate_date),
+        applied_rate: usdAppliedRate(base, fee),
       },
     };
   });
 
-  app.post<{ Body: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; swift_code?: string; usd_rate?: number } }>(
+  app.post<{ Body: { enabled?: boolean; bank_name?: string; account_number?: string; account_holder?: string; swift_code?: string; usd_rate?: number; fee_percent?: number } }>(
     '/settings/payment-usd',
     {
       schema: {
@@ -390,6 +404,7 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
             account_holder: { type: 'string', maxLength: 120 },
             swift_code: { type: 'string', maxLength: 11 },
             usd_rate: { type: 'number', minimum: 0, maximum: 100000000 },
+            fee_percent: { type: 'number', minimum: -10, maximum: 100 },
           },
         },
       },
@@ -404,6 +419,12 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
         account_holder: str(request.body.account_holder),
         swift_code: str(request.body.swift_code).toUpperCase(),
         usd_rate: typeof request.body.usd_rate === 'number' ? Math.round(request.body.usd_rate) : 0,
+        fee_percent: typeof request.body.fee_percent === 'number' && Number.isFinite(request.body.fee_percent)
+          ? Math.round(request.body.fee_percent * 100) / 100
+          : 0,
+        // Every save re-pegs the base rate to today: the stored date tells
+        // the owner (and this form) how fresh the SBV peg is.
+        base_rate_date: todayInVietnam(),
       };
       if (next.enabled) {
         const problems: { field: string; code: string }[] = [];
@@ -415,12 +436,13 @@ export async function adminManualPaymentRoutes(app: FastifyInstance): Promise<vo
         if (problems.length > 0) throw errors.validation(problems);
       }
       await save('payment.usd_transfer', next);
+      const applied = usdAppliedRate(next.usd_rate, next.fee_percent);
       await writeAudit(db, {
         actorType: 'user', actorId: auth.userId, action: 'settings.payment_usd_updated',
         resourceType: 'settings', resourceId: null, traceId: request.id,
-        diff: { enabled: next.enabled, bank_name: next.bank_name, usd_rate: next.usd_rate },
+        diff: { enabled: next.enabled, bank_name: next.bank_name, usd_rate: next.usd_rate, fee_percent: next.fee_percent, applied_rate: applied },
       });
-      return reply.status(200).send({ data: next });
+      return reply.status(200).send({ data: { ...next, applied_rate: applied } });
     },
   );
 }
@@ -542,7 +564,8 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
   );
 }
 
-/** Gateway merchant settings (VNPay + MoMo). Secret keys are write-only:
+/** Gateway merchant settings (VNPay + MoMo). Secret keys — and MoMo's
+ *  access key, a credential of the same kind — are write-only:
  *  a POST replaces the stored key only when a non-empty value is sent, and
  *  GET never returns one — only whether it is configured. Sandbox defaults
  *  on so the owner can verify with the gateway's test merchant first. */
@@ -632,7 +655,7 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
       data: {
         enabled: raw.enabled === true,
         partner_code: clean(raw.partner_code),
-        access_key: clean(raw.access_key),
+        access_key_configured: clean(raw.access_key) !== '',
         secret_configured: clean(raw.secret_key) !== '',
         sandbox: raw.sandbox !== false,
         ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo`,
@@ -664,7 +687,7 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
       const next = {
         enabled: request.body.enabled === true,
         partner_code: clean(request.body.partner_code),
-        access_key: clean(request.body.access_key),
+        access_key: clean(request.body.access_key) !== '' ? clean(request.body.access_key) : clean(current.access_key),
         secret_key: clean(request.body.secret_key) !== '' ? clean(request.body.secret_key) : clean(current.secret_key),
         sandbox: request.body.sandbox !== false,
       };
@@ -679,10 +702,10 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
       await writeAudit(db, {
         actorType: 'user', actorId: auth.userId, action: 'settings.payment_momo_updated',
         resourceType: 'settings', resourceId: null, traceId: request.id,
-        diff: { enabled: next.enabled, partner_code: next.partner_code, sandbox: next.sandbox, secret_changed: next.secret_key !== clean(current.secret_key) },
+        diff: { enabled: next.enabled, partner_code: next.partner_code, sandbox: next.sandbox, access_key_changed: next.access_key !== clean(current.access_key), secret_changed: next.secret_key !== clean(current.secret_key) },
       });
       return reply.status(200).send({
-        data: { enabled: next.enabled, partner_code: next.partner_code, access_key: next.access_key, secret_configured: next.secret_key !== '', sandbox: next.sandbox, ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo` },
+        data: { enabled: next.enabled, partner_code: next.partner_code, access_key_configured: next.access_key !== '', secret_configured: next.secret_key !== '', sandbox: next.sandbox, ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo` },
       });
     },
   );

@@ -158,6 +158,7 @@ export async function adminSupportRoutes(app: FastifyInstance): Promise<void> {
         [request.params.id, auth.userId, request.body.body, ticket.rows[0]!.locale],
       );
       await db.query("UPDATE support_tickets SET status = CASE WHEN status IN ('open', 'assigned') THEN 'waiting' ELSE status END WHERE id = $1", [request.params.id]);
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'support.ticket_replied', resourceType: 'support_ticket', resourceId: request.params.id, traceId: request.id });
       return { data: { status: 'replied' } };
     },
   );
@@ -166,11 +167,12 @@ export async function adminSupportRoutes(app: FastifyInstance): Promise<void> {
     '/support/:id/status',
     { schema: { body: { type: 'object', additionalProperties: false, required: ['status'], properties: { status: { enum: ['resolved', 'closed', 'open'] } } } } },
     async (request) => {
-      requirePermission(request, 'support:reply');
+      const auth = requirePermission(request, 'support:reply');
       assertId(request.params.id);
       const ticket = await db.query('SELECT 1 FROM support_tickets WHERE id = $1', [request.params.id]);
       if (!ticket.rows[0]) throw errors.notFound();
       await db.query('UPDATE support_tickets SET status = $2 WHERE id = $1', [request.params.id, request.body.status]);
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'support.ticket_status_changed', resourceType: 'support_ticket', resourceId: request.params.id, traceId: request.id, diff: { status: request.body.status } });
       return { data: { status: request.body.status } };
     },
   );

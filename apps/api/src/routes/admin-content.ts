@@ -160,6 +160,10 @@ export async function adminContentRoutes(app: FastifyInstance): Promise<void> {
       const b = request.body;
       const { rows: pv } = await db.query<{ status: string }>('SELECT status FROM policy_versions WHERE id = $1', [id]);
       if (!pv[0]) throw errors.notFound();
+      // A published version is served live and its body is hash-stamped
+      // at publish time; translations must be edited on a new draft
+      // version, never in place under the published text.
+      if (pv[0]!.status === 'published') throw errors.conflict('policy.version_published');
       await db.query(
         `INSERT INTO policy_translations (policy_version_id, locale, title, body, review_status)
          VALUES ($1, $2, $3, $4, $5) ON CONFLICT (policy_version_id, locale)

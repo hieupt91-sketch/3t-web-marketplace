@@ -320,7 +320,7 @@ describe('7b. MoMo gateway settings', () => {
   it('returns disabled defaults, sandbox on, no secret', async () => {
     const res = await get('/api/v1/admin/settings/payment-momo', ownerCookie);
     expect(res.statusCode, res.body).toBe(200);
-    expect(res.json().data).toMatchObject({ enabled: false, partner_code: '', access_key: '', secret_configured: false, sandbox: true });
+    expect(res.json().data).toMatchObject({ enabled: false, partner_code: '', access_key_configured: false, secret_configured: false, sandbox: true });
     expect(res.body).not.toContain('secret_key');
   });
 
@@ -339,12 +339,24 @@ describe('7b. MoMo gateway settings', () => {
     }, ownerCookie);
     expect(saved.statusCode, saved.body).toBe(200);
     expect(saved.body).not.toContain(SECRET);
-    expect(saved.json().data).toMatchObject({ enabled: true, partner_code: 'MOMO123', access_key: 'AK-AUDIT', secret_configured: true, sandbox: false });
+    expect(saved.json().data).toMatchObject({ enabled: true, partner_code: 'MOMO123', access_key_configured: true, secret_configured: true, sandbox: false });
+    expect(saved.body).not.toContain('AK-AUDIT');
     const back = await get('/api/v1/admin/settings/payment-momo', ownerCookie);
     expect(back.body).not.toContain(SECRET);
+    expect(back.body).not.toContain('AK-AUDIT');
+    expect(back.json().data.access_key_configured).toBe(true);
     expect(back.json().data.secret_configured).toBe(true);
     const pub = await get('/api/v1/config/public');
     expect(pub.json().data.payment.momo).toBe(true);
+  });
+
+  it('keeps the stored access key and secret when a later POST omits them', async () => {
+    const resaved = await post('/api/v1/admin/settings/payment-momo', {
+      enabled: true, partner_code: 'MOMO123', sandbox: false,
+    }, ownerCookie);
+    expect(resaved.statusCode, resaved.body).toBe(200);
+    expect(resaved.json().data.access_key_configured).toBe(true);
+    expect(resaved.json().data.secret_configured).toBe(true);
   });
 });
 
@@ -373,11 +385,14 @@ describe('8. PayPal manual payment settings', () => {
 });
 
 describe('9. USD transfer payment settings', () => {
+  const todayVN = () => new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Ho_Chi_Minh' }).format(new Date());
+
   it('returns disabled defaults with a zero rate', async () => {
     const res = await get('/api/v1/admin/settings/payment-usd', ownerCookie);
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json().data).toEqual({
       enabled: false, bank_name: '', account_number: '', account_holder: '', swift_code: '', usd_rate: 0,
+      fee_percent: 0, base_rate_date: '', applied_rate: 0,
     });
   });
 
@@ -407,12 +422,65 @@ describe('9. USD transfer payment settings', () => {
     const expected = {
       enabled: true, bank_name: 'HSBC USA', account_number: '123456789',
       account_holder: 'WEBMAKET LLC', swift_code: 'HSBCUS33', usd_rate: 25500,
+      fee_percent: 0, base_rate_date: todayVN(), applied_rate: 25500,
     };
     expect(saved.json().data).toEqual(expected);
     const back = await get('/api/v1/admin/settings/payment-usd', ownerCookie);
     expect(back.json().data).toEqual(expected);
     const pub = await get('/api/v1/config/public');
     expect(pub.json().data.payment.usd_transfer).toBe(true);
+  });
+
+  it('rejects a fee percentage outside the -10..100 band at the schema', async () => {
+    // Schema failures surface as the platform's 422 validation error
+    // (the app maps Fastify schema errors to validation.failed).
+    const tooHigh = await post('/api/v1/admin/settings/payment-usd', {
+      enabled: true, bank_name: 'HSBC USA', account_number: '123456789', account_holder: 'WEBMAKET LLC',
+      usd_rate: 25500, fee_percent: 150,
+    }, ownerCookie);
+    expect(tooHigh.statusCode, tooHigh.body).toBe(422);
+    expect(tooHigh.json().error.field_errors).toEqual([{ field: 'fee_percent', code: 'invalid_maximum' }]);
+    const tooLow = await post('/api/v1/admin/settings/payment-usd', {
+      enabled: true, bank_name: 'HSBC USA', account_number: '123456789', account_holder: 'WEBMAKET LLC',
+      usd_rate: 25500, fee_percent: -10.5,
+    }, ownerCookie);
+    expect(tooLow.statusCode, tooLow.body).toBe(422);
+    expect(tooLow.json().error.field_errors).toEqual([{ field: 'fee_percent', code: 'invalid_minimum' }]);
+  });
+
+  it('saves a fee and round-trips the applied rate and today\'s base-rate date', async () => {
+    const saved = await post('/api/v1/admin/settings/payment-usd', {
+      enabled: true, bank_name: 'HSBC USA', account_number: '123456789', account_holder: 'WEBMAKET LLC',
+      swift_code: 'HSBCUS33', usd_rate: 25400, fee_percent: 2.5,
+    }, ownerCookie);
+    expect(saved.statusCode, saved.body).toBe(200);
+    const expected = {
+      enabled: true, bank_name: 'HSBC USA', account_number: '123456789',
+      account_holder: 'WEBMAKET LLC', swift_code: 'HSBCUS33', usd_rate: 25400,
+      fee_percent: 2.5, base_rate_date: todayVN(), applied_rate: 26035, // 25400 * 1.025
+    };
+    expect(saved.json().data).toEqual(expected);
+    const back = await get('/api/v1/admin/settings/payment-usd', ownerCookie);
+    expect(back.json().data).toEqual(expected);
+    const pub = await get('/api/v1/config/public');
+    expect(pub.json().data.payment.usd_transfer).toBe(true);
+  });
+
+  it('accepts the -10 boundary fee and normalizes extra decimals to 2', async () => {
+    const saved = await post('/api/v1/admin/settings/payment-usd', {
+      enabled: true, bank_name: 'HSBC USA', account_number: '123456789', account_holder: 'WEBMAKET LLC',
+      swift_code: 'HSBCUS33', usd_rate: 25400, fee_percent: -10,
+    }, ownerCookie);
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.json().data.fee_percent).toBe(-10);
+    expect(saved.json().data.applied_rate).toBe(22860); // 25400 * 0.90
+    const fractional = await post('/api/v1/admin/settings/payment-usd', {
+      enabled: true, bank_name: 'HSBC USA', account_number: '123456789', account_holder: 'WEBMAKET LLC',
+      swift_code: 'HSBCUS33', usd_rate: 25400, fee_percent: 2.567,
+    }, ownerCookie);
+    expect(fractional.statusCode, fractional.body).toBe(200);
+    expect(fractional.json().data.fee_percent).toBe(2.57);
+    expect(fractional.json().data.applied_rate).toBe(26053); // 25400 * 1.0257 = 26052.78 -> 26053
   });
 });
 

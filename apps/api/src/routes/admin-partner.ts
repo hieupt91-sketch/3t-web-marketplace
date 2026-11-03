@@ -50,7 +50,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
         [request.params.id, next, auth.userId, request.body.reason ?? ''],
       );
       if (rowCount === 0) throw errors.notFound();
-      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: `partner.${request.body.decision}`, resourceType: 'partner', resourceId: request.params.id, traceId: request.params.id });
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: `partner.${request.body.decision}`, resourceType: 'partner', resourceId: request.params.id, traceId: request.id });
       return reply.status(200).send({ data: { id: request.params.id, status: next } });
     },
   );
@@ -72,6 +72,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
         [request.params.id, request.body.amount_minor, request.body.reason],
       );
       if (!rows[0]) throw errors.conflict('partner.no_order_for_adjustment');
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'partner.commission_adjusted', resourceType: 'partner', resourceId: request.params.id, traceId: request.id, diff: { amount_minor: request.body.amount_minor, reason: request.body.reason } });
       return reply.status(201).send({ data: { id: rows[0].id } });
     },
   );
@@ -94,6 +95,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
       [request.params.id, auth.userId],
     );
     if (rowCount === 0) throw errors.conflict('payout.not_requested');
+    await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'partner.payout_approved', resourceType: 'payout_request', resourceId: request.params.id, traceId: request.id });
     return reply.status(200).send({ data: { id: request.params.id, status: 'approved' } });
   });
 
@@ -113,6 +115,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
       if (payout.status !== 'approved') throw errors.conflict('payout.not_approved');
       if (payout.approved_by === auth.userId) throw errors.forbidden('payout.same_actor');
       await db.query(`UPDATE payout_requests SET status = 'paid', settled_by = $2, evidence_ref = $3 WHERE id = $1`, [request.params.id, auth.userId, request.body.evidence_ref]);
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'partner.payout_settled', resourceType: 'payout_request', resourceId: request.params.id, traceId: request.id, diff: { evidence_ref: request.body.evidence_ref, amount_minor: payout.amount_minor } });
       await emitPartnerEvent(db, payout.partner_id, { type: 'payout.paid', data: { payout_id: request.params.id, amount_minor: payout.amount_minor, evidence_ref: request.body.evidence_ref } });
       return reply.status(200).send({ data: { id: request.params.id, status: 'paid' } });
     },
@@ -121,13 +124,14 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
   // Failed payout releases the reservation exactly once: allocations only count
   // while the payout is in an active state, so moving to failed frees them.
   app.post<{ Params: { id: string } }>('/payouts/:id/fail', async (request, reply) => {
-    requirePermission(request, 'payout:settle');
+    const auth = requirePermission(request, 'payout:settle');
     if (!UUID.test(request.params.id)) throw errors.notFound();
     const { rowCount } = await db.query(
       `UPDATE payout_requests SET status = 'failed' WHERE id = $1 AND status IN ('requested', 'approved', 'processing')`,
       [request.params.id],
     );
     if (rowCount === 0) throw errors.conflict('payout.not_active');
+    await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'partner.payout_failed', resourceType: 'payout_request', resourceId: request.params.id, traceId: request.id });
     return reply.status(200).send({ data: { id: request.params.id, status: 'failed' } });
   });
 
@@ -155,6 +159,7 @@ export async function adminPartnerRoutes(app: FastifyInstance): Promise<void> {
   // no-hub fallback, same as manual payment confirmation).
   app.post<{ Params: { id: string; topupId: string } }>('/partners/:id/wallet/topups/:topupId/confirm', async (request, reply) => {
     const auth = requirePermission(request, 'partner:manage');
+    await requireStepUp(db, auth);
     if (!UUID.test(request.params.id) || !UUID.test(request.params.topupId)) throw errors.notFound();
     const result = await tx(db, async (client) => {
       const topup = await client.query<{ id: string; partner_id: string; amount_points: string; code: string }>(

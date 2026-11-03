@@ -1,9 +1,8 @@
 import type { FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
-import { enqueueJob, isUniqueViolation } from '@3t/core';
+import { enqueueJob, isUniqueViolation, writeAudit } from '@3t/core';
 import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
-import { killPid } from '../lib/process.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function assertId(id: string) {
@@ -62,20 +61,33 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
       const row = site.rows[0]!;
       if (request.body.action === 'suspend') {
         if (row.status !== 'active') throw errors.conflict('site.not_active');
-        killPid(row.runtime_pid);
-        await db.query("UPDATE sites SET status = 'suspended', runtime_port = NULL, runtime_pid = NULL WHERE id = $1", [request.params.id]);
+        // Suspend bumps row_version and hands the actual process stop to
+        // the worker (site.stop job): the site process lives in the
+        // site-runner's PID namespace since sandbox Phase 1, so a signal
+        // from this process can never reach it — and nulling runtime_pid
+        // here would orphan it forever. The job no-ops if a newer
+        // lifecycle action (resume/restart) has superseded this version.
+        const bumped = await db.query<{ row_version: number }>(
+          "UPDATE sites SET status = 'suspended', row_version = row_version + 1 WHERE id = $1 RETURNING row_version",
+          [request.params.id],
+        );
+        const newRowVersion = bumped.rows[0]!.row_version;
+        const { job } = await enqueueJob(db, { type: 'site.stop', dedupeKey: `site.stop:${request.params.id}:${newRowVersion}`, payload: { site_id: request.params.id, row_version: newRowVersion }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
+        await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.operation', resourceType: 'site', resourceId: request.params.id, traceId: request.id, diff: { action: 'suspend', reason: request.body.reason, job_id: job.id } });
+        return { data: { action: 'suspend', job_id: job.id } };
       } else if (request.body.action === 'resume') {
         if (row.status !== 'suspended') throw errors.conflict('site.not_suspended');
         // revive:true marks deliberate admin intent — the only payload
         // the worker honours to lift a suspension (audit payments H3).
         const { job } = await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${request.params.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: request.params.id, revive: true }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
+        await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.operation', resourceType: 'site', resourceId: request.params.id, traceId: request.id, diff: { action: 'resume', reason: request.body.reason, job_id: job.id } });
         return { data: { action: 'resume', job_id: job.id } };
       } else {
         if (row.status !== 'active' && row.status !== 'suspended') throw errors.conflict('site.not_active');
         const { job } = await enqueueJob(db, { type: 'site.restart', dedupeKey: `site.restart:${request.params.id}:${Date.now()}:${randomBytes(4).toString('hex')}`, payload: { site_id: request.params.id, revive: true }, resourceType: 'site', resourceId: request.params.id, ownerId: row.owner_id });
+        await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.operation', resourceType: 'site', resourceId: request.params.id, traceId: request.id, diff: { action: 'restart', reason: request.body.reason, job_id: job.id } });
         return { data: { action: 'restart', job_id: job.id } };
       }
-      return { data: { action: request.body.action } };
     },
   );
 
@@ -131,13 +143,14 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
   });
 
   app.post<{ Params: { id: string } }>('/jobs/:id/retry', async (request) => {
-    requirePermission(request, 'ops:execute');
+    const auth = requirePermission(request, 'ops:execute');
     assertId(request.params.id);
     const job = await db.query<{ status: string; lease_until: Date | null }>('SELECT status, lease_until FROM jobs WHERE id = $1', [request.params.id]);
     if (!job.rows[0]) throw errors.notFound();
     if (job.rows[0]!.status === 'running' && job.rows[0]!.lease_until && new Date(job.rows[0]!.lease_until) > new Date()) throw errors.conflict('jobs.lease_active');
     if (job.rows[0]!.status === 'succeeded') throw errors.conflict('jobs.already_succeeded');
     await db.query("UPDATE jobs SET status = 'queued', next_run_at = now(), lease_until = NULL, lease_owner = NULL WHERE id = $1", [request.params.id]);
+    await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.job_retried', resourceType: 'site', resourceId: request.params.id, traceId: request.id });
     return { data: { status: 'queued' } };
   });
 
@@ -147,7 +160,7 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
     '/subscriptions/:id/apply-renewal',
     { schema: { body: { type: 'object', additionalProperties: false, required: ['order_item_id'], properties: { order_item_id: { type: 'string' } } } } },
     async (request) => {
-      requirePermission(request, 'payment:confirm');
+      const auth = requirePermission(request, 'payment:confirm');
       assertId(request.params.id);
       assertId(request.body.order_item_id);
       const sub = await db.query<{ site_id: string; status: string; current_period_end: Date; policy_snapshot: { period_days?: number } }>(
@@ -177,6 +190,7 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
         [request.params.id, start.toISOString(), end.toISOString()],
       );
       await db.query("UPDATE sites SET status = 'active' WHERE id = $1 AND status IN ('grace', 'suspended')", [sub.rows[0]!.site_id]);
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.subscription_renewed', resourceType: 'site', resourceId: sub.rows[0]!.site_id, traceId: request.id, diff: { subscription_id: request.params.id, order_item_id: request.body.order_item_id, period_start: start.toISOString(), period_end: end.toISOString() } });
       return { data: { period_start: start.toISOString(), period_end: end.toISOString() } };
     },
   );
@@ -199,9 +213,17 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
       const graceEnd = new Date(sub.current_period_end).getTime() + (sub.policy_snapshot.grace_days ?? 7) * 24 * 3600_000;
       if (graceEnd < now.getTime()) {
         await db.query("UPDATE subscriptions SET status = 'suspended' WHERE id = $1", [sub.id]);
-        const site = await db.query<{ runtime_pid: number | null }>('SELECT runtime_pid FROM sites WHERE id = $1', [sub.site_id]);
-        if (site.rows[0]) killPid(site.rows[0]!.runtime_pid);
-        await db.query("UPDATE sites SET status = 'suspended', runtime_port = NULL, runtime_pid = NULL WHERE id = $1", [sub.site_id]);
+        // Same stop path as the operations suspend: bump row_version and
+        // let the worker's site.stop job kill the process in the runner
+        // namespace — never a signal from this process (sandbox Phase 1).
+        const bumped = await db.query<{ row_version: number }>(
+          "UPDATE sites SET status = 'suspended', row_version = row_version + 1 WHERE id = $1 RETURNING row_version",
+          [sub.site_id],
+        );
+        if (bumped.rows[0]) {
+          const newRowVersion = bumped.rows[0]!.row_version;
+          await enqueueJob(db, { type: 'site.stop', dedupeKey: `site.stop:${sub.site_id}:${newRowVersion}`, payload: { site_id: sub.site_id, row_version: newRowVersion }, resourceType: 'site', resourceId: sub.site_id, ownerId: auth.userId });
+        }
         suspended += 1;
       }
     }
@@ -237,6 +259,7 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
       }
       purgeQueued += 1;
     }
+    await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.lifecycle_sweep', resourceType: 'site', resourceId: null, traceId: request.id, diff: { to_grace: toGrace.rowCount ?? 0, suspended, purge_queued: purgeQueued } });
     return { data: { to_grace: toGrace.rowCount ?? 0, suspended, purge_queued: purgeQueued } };
   });
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { BankTransferProvider, CassoHubProvider, MockPaymentProvider, WebhookVerificationError, buildVietQrPayload, manualTransferRef, usdAmountFor } from './payment.ts';
+import { BankTransferProvider, CassoHubProvider, MockPaymentProvider, WebhookVerificationError, buildVietQrPayload, manualTransferRef, usdAmountFor, usdAppliedRate } from './payment.ts';
 
 const provider = new MockPaymentProvider('test-secret', 'http://localhost:4000');
 
@@ -81,6 +81,23 @@ describe('manual transfer helpers (PayPal / USD)', () => {
     expect(usdAmountFor('12987', 26000)).toBe('0.50'); // 0.4995 -> 0.50
     expect(usdAmountFor('100000000', 25400)).toBe('3937.01');
     expect(usdAmountFor('500000', 0)).toBe('0.00');
+  });
+
+  it('applies the owner fee percentage on top of the base rate', () => {
+    expect(usdAppliedRate(25430, 0)).toBe(25430); // zero fee is the identity
+    expect(usdAppliedRate(25430, 2)).toBe(25939); // 25430 * 1.02 = 25938.6 -> 25939
+    expect(usdAppliedRate(25430, 1.5)).toBe(25811); // 25430 * 1.015 = 25811.45 -> 25811
+    expect(usdAppliedRate(25430, -5)).toBe(24159); // negative fee = discount: 25430 * 0.95 = 24158.5 -> 24159
+    expect(usdAppliedRate(25430, 2.567)).toBe(26084); // fee quantized to 2.57%: 25430 * 1.0257 = 26083.551 -> 26084
+  });
+
+  it('returns 0 for an unusable base rate or fee', () => {
+    expect(usdAppliedRate(0, 2)).toBe(0);
+    expect(usdAppliedRate(-25430, 2)).toBe(0);
+    expect(usdAppliedRate(Number.NaN, 2)).toBe(0);
+    expect(usdAppliedRate(Number.POSITIVE_INFINITY, 2)).toBe(0);
+    expect(usdAppliedRate(25430, Number.NaN)).toBe(0);
+    expect(usdAppliedRate(25430, Number.POSITIVE_INFINITY)).toBe(0);
   });
 });
 

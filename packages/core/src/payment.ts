@@ -218,6 +218,19 @@ export function usdAmountFor(totalMinorVnd: string, rateVndPerUsd: number): stri
   return `${cents / 100n}.${String(cents % 100n).padStart(2, '0')}`;
 }
 
+/** Rate actually quoted to USD buyers: the owner's base rate (pegged to
+ *  the State Bank of Vietnam central rate, maintained by hand in admin)
+ *  plus an adjustable fee percentage, which may be negative (a discount).
+ *  The fee is quantized to 2 decimals (basis-point style) before applying
+ *  so the integer result is stable for display and for the frozen quote.
+ *  Returns 0 when the base rate is not a positive finite number or the
+ *  fee is not finite — callers treat 0 as "no USD quote". */
+export function usdAppliedRate(baseRate: number, feePercent: number): number {
+  if (!Number.isFinite(baseRate) || baseRate <= 0) return 0;
+  if (!Number.isFinite(feePercent)) return 0;
+  return Math.round(baseRate * (10000 + Math.round(feePercent * 100)) / 10000);
+}
+
 /**
  * Bank transfer settled through a transaction hub (SePay-compatible).
  *

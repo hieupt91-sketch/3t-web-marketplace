@@ -21,7 +21,7 @@ import { httpStatus, siteLimitsOf, writeSiteMeta, type SpawnSpec } from './runti
 import { spawnSiteProcess, stopSiteProcess } from './process-agent.ts';
 import { allocateSiteUid, fenceSiteTree, releaseSiteUid, sandboxEnabled } from './sandbox.ts';
 
-export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore', 'site.setup-token', 'site.purge'] as const;
+export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore', 'site.setup-token', 'site.purge', 'site.stop'] as const;
 
 interface SiteRow {
   id: string;
@@ -604,9 +604,30 @@ async function runPurge(deps: { config: PlatformConfig; db: Db; store: LocalObje
   );
 }
 
+/**
+ * site.stop (sandbox Phase 1 follow-up): admin suspend used to killPid
+ * from the API process — after Phase 1 the site process lives in the
+ * site-runner's PID namespace, so the API only flips the row to
+ * 'suspended' with a row_version bump and enqueues this job. The stop is
+ * fenced on that exact version: if the site has since been resumed or
+ * restarted (status no longer 'suspended', or a newer row_version), a
+ * newer lifecycle action owns the process and this job is a no-op. Only
+ * after stopSiteProcess has run are the runtime fields cleared — again
+ * guarded on the same version — so a stop can never erase the record of
+ * a process a newer action spawned.
+ */
+async function runStop(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow, rowVersion: number | undefined): Promise<void> {
+  if (site.status !== 'suspended' || rowVersion === undefined || site.row_version !== rowVersion) return;
+  await stopSiteProcess(deps.config, { key: site.id, rowVersion, localPid: site.runtime_pid });
+  await deps.db.query(
+    "UPDATE sites SET runtime_port = NULL, runtime_pid = NULL WHERE id = $1 AND row_version = $2 AND status = 'suspended'",
+    [site.id, rowVersion],
+  );
+}
+
 /** Site job runner: owns job completion like runImportJob (no auto-retry for site jobs). */
 export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow): Promise<void> {
-  const payload = job.payload_json as { site_id: string; deployment_id?: string; backup_id?: string; version_id?: string };
+  const payload = job.payload_json as { site_id: string; deployment_id?: string; backup_id?: string; version_id?: string; row_version?: number };
   const site = await loadSite(deps.db, payload.site_id);
   try {
     if (job.type === 'site.provision') await runProvision(deps, job, site, payload.deployment_id ?? null);
@@ -618,6 +639,7 @@ export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: 
     else if (job.type === 'site.content-restore') await runContentRestore(deps, job, site, payload.backup_id!, payload.deployment_id ?? null);
     else if (job.type === 'site.setup-token') await runSetupToken(deps, job, site);
     else if (job.type === 'site.purge') await runPurge(deps, job, site);
+    else if (job.type === 'site.stop') await runStop(deps, job, site, payload.row_version);
     else throw new Error(`unknown site job type: ${job.type}`);
     await completeJob(deps.db, job);
   } catch (error) {

@@ -325,4 +325,22 @@ describe('partner wallet', () => {
       'SELECT status, paid_amount_minor::text FROM partner_topups WHERE code = $1', [code]);
     expect(row.rows[0]).toMatchObject({ status: 'paid', paid_amount_minor: '25000' });
   });
+
+  it('manual top-up confirmation requires step-up, like manual payment confirmation (H1)', async () => {
+    const t = await post('/api/v1/partner/wallet/topups', { amount_points: '25' }, partnerCookie);
+    expect(t.statusCode, t.body).toBe(201);
+    const topupId = t.json().data.id as string;
+    // A fresh platform owner who has NOT elevated is refused…
+    const fresh = await createUser(ctx, 'wallet-stepup@example.com', 'platform_owner');
+    const denied = await post(`/api/v1/admin/partners/${partnerId}/wallet/topups/${topupId}/confirm`, {}, fresh.cookie);
+    expect(denied.statusCode, denied.body).toBe(403);
+    expect(denied.body).toContain('auth.step_up_required');
+    const still = await ctx.db.query<{ status: string }>('SELECT status FROM partner_topups WHERE id = $1', [topupId]);
+    expect(still.rows[0]!.status).toBe('pending');
+    // …and the same owner confirms once elevated.
+    await stepUp(ctx, fresh.cookie);
+    const ok = await post(`/api/v1/admin/partners/${partnerId}/wallet/topups/${topupId}/confirm`, {}, fresh.cookie);
+    expect(ok.statusCode, ok.body).toBe(200);
+    expect(ok.json().data.status).toBe('paid');
+  });
 });

@@ -1,3 +1,4 @@
+import { spawn, type ChildProcess } from 'node:child_process';
 import { mkdtemp, mkdir, readFile, readdir, writeFile } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -275,9 +276,9 @@ function fakeSiteJobDb(siteRow: Record<string, unknown>, captured: CapturedUpdat
   return { query } as unknown as Db;
 }
 
-function makeRunningJob(type: string, siteId: string): JobRow {
+function makeRunningJob(type: string, siteId: string, payload: Record<string, unknown> = {}): JobRow {
   return {
-    id: 'job-1', type, payload_json: { site_id: siteId }, dedupe_key: 'k', resource_type: 'site',
+    id: 'job-1', type, payload_json: { site_id: siteId, ...payload }, dedupe_key: 'k', resource_type: 'site',
     resource_id: siteId, owner_id: 'owner-1', status: 'running', attempts: 1, max_attempts: 1,
     fencing_token: '7', lease_until: null, step: null, completed_steps: 0, total_steps: null,
     last_error_code: null, result_json: null, created_at: new Date(), updated_at: new Date(),
@@ -398,5 +399,87 @@ describe('site.purge job (H2 fix 2)', () => {
 
     expect(captured.some((u) => u.sql.startsWith('UPDATE sites'))).toBe(false);
     expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+  });
+});
+
+/**
+ * site.stop (Phase 1 follow-up): the admin suspend stop moved from the
+ * API's (wrong-namespace) killPid to this fenced worker job. Local mode
+ * delegates to killPid, so the tests run against a real sleeper process:
+ * the happy path must actually terminate it and clear the runtime
+ * fields; a stop superseded by a resume, or carrying a stale fencing
+ * version, must touch neither the process nor the row.
+ */
+function spawnSleeper(): ChildProcess {
+  const child = spawn(process.execPath, ['-e', 'setInterval(() => {}, 60_000)'], { stdio: 'ignore' });
+  child.unref();
+  return child;
+}
+
+function childExited(child: ChildProcess, waitMs: number): Promise<boolean> {
+  if (child.exitCode !== null || child.signalCode !== null) return Promise.resolve(true);
+  return new Promise((resolve) => {
+    const timer = setTimeout(() => resolve(false), waitMs);
+    child.once('exit', () => {
+      clearTimeout(timer);
+      resolve(true);
+    });
+  });
+}
+
+describe('site.stop job (Phase 1 follow-up)', () => {
+  it('stops the running process and clears the runtime fields at the fenced version', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-stop-'));
+    const sleeper = spawnSleeper();
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow({ status: 'suspended', row_version: 3, runtime_pid: sleeper.pid, runtime_port: 4101 }), captured);
+    const config = { workDir } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.stop', 'site-1', { row_version: 3 }));
+
+    expect(await childExited(sleeper, 3000)).toBe(true);
+    const cleared = captured.find((u) => u.sql.includes('runtime_port = NULL'));
+    expect(cleared).toBeTruthy();
+    expect(cleared!.params).toEqual(['site-1', 3]);
+    expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+  });
+
+  it('is a no-op when the site was resumed after the suspend (superseded)', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-stop-resumed-'));
+    const sleeper = spawnSleeper();
+    try {
+      const captured: CapturedUpdate[] = [];
+      const db = fakeSiteJobDb(siteRow({ status: 'active', row_version: 3, runtime_pid: sleeper.pid, runtime_port: 4102 }), captured);
+      const config = { workDir } as unknown as PlatformConfig;
+      const store = {} as unknown as LocalObjectStore;
+
+      await runSiteJob({ config, db, store }, makeRunningJob('site.stop', 'site-1', { row_version: 3 }));
+
+      expect(captured.some((u) => u.sql.startsWith('UPDATE sites'))).toBe(false);
+      expect(await childExited(sleeper, 300)).toBe(false);
+      expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
+  });
+
+  it('is a no-op when the payload fencing version is stale', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-stop-stale-'));
+    const sleeper = spawnSleeper();
+    try {
+      const captured: CapturedUpdate[] = [];
+      const db = fakeSiteJobDb(siteRow({ status: 'suspended', row_version: 5, runtime_pid: sleeper.pid, runtime_port: 4103 }), captured);
+      const config = { workDir } as unknown as PlatformConfig;
+      const store = {} as unknown as LocalObjectStore;
+
+      await runSiteJob({ config, db, store }, makeRunningJob('site.stop', 'site-1', { row_version: 3 }));
+
+      expect(captured.some((u) => u.sql.startsWith('UPDATE sites'))).toBe(false);
+      expect(await childExited(sleeper, 300)).toBe(false);
+      expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+    } finally {
+      sleeper.kill('SIGKILL');
+    }
   });
 });
