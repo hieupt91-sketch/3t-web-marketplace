@@ -2,6 +2,7 @@ import { chmod, chown, lstat, mkdir, readdir } from 'node:fs/promises';
 import { dirname, join } from 'node:path';
 import type { Db, PlatformConfig } from '@3t/core';
 import { killPid } from './runtime-agent.ts';
+import { processAgentMode, stopSiteProcess } from './process-agent.ts';
 
 /**
  * Sandbox Phase 0 (audit C-01) — OS-level fencing for spawned template code.
@@ -236,29 +237,35 @@ export async function fenceImportTree(config: PlatformConfig, dir: string): Prom
 
 /**
  * Orphan reaping by recorded runtime_pid (plan Phase 0 item 3): processes
- * whose DB record says they should no longer exist get killed by the
- * worker — the only platform process that shares a pid namespace with
- * them. This also covers the API-side lifecycle actions (demo cancel /
- * expire, site purge) whose own killPid cannot reach across containers.
+ * whose DB record says they should no longer exist get killed — in local
+ * mode by the worker (the platform process that shares a pid namespace
+ * with them); in Phase 1 remote mode the pid namespace belongs to the
+ * site-runner, so the worker asks the runner to stop the process by its
+ * key instead (a pid recorded in the DB is meaningless across containers).
+ * This also covers the API-side lifecycle actions (demo cancel / expire,
+ * site purge) whose own kill cannot reach across containers.
  * The site directory lifecycle is untouched: a purged site keeps its tree
  * on disk exactly as before, only its process and UID allocation go away.
  */
-export async function reapOrphanProcesses(db: Db): Promise<{ demos: number; sites: number }> {
+export async function reapOrphanProcesses(db: Db, config: PlatformConfig): Promise<{ demos: number; sites: number }> {
+  const remote = processAgentMode(config) === 'remote';
   let demos = 0;
   const deadDemos = await db.query<{ id: string; runtime_pid: number | null }>(
     "SELECT id, runtime_pid FROM demo_sessions WHERE status IN ('expired', 'cancelled') AND runtime_pid IS NOT NULL",
   );
   for (const row of deadDemos.rows) {
-    killPid(row.runtime_pid);
+    if (remote) await stopSiteProcess(config, { key: `demo-${row.id}`, rowVersion: 1, localPid: row.runtime_pid });
+    else killPid(row.runtime_pid);
     await db.query('UPDATE demo_sessions SET runtime_pid = NULL, runtime_port = NULL WHERE id = $1', [row.id]);
     demos++;
   }
   let sites = 0;
-  const deadSites = await db.query<{ id: string; runtime_pid: number | null }>(
-    "SELECT id, runtime_pid FROM sites WHERE status = 'purged' AND (runtime_pid IS NOT NULL OR runtime_uid IS NOT NULL)",
+  const deadSites = await db.query<{ id: string; runtime_pid: number | null; row_version: number }>(
+    "SELECT id, runtime_pid, row_version FROM sites WHERE status = 'purged' AND (runtime_pid IS NOT NULL OR runtime_uid IS NOT NULL)",
   );
   for (const row of deadSites.rows) {
-    killPid(row.runtime_pid);
+    if (remote) await stopSiteProcess(config, { key: row.id, rowVersion: row.row_version, localPid: row.runtime_pid });
+    else killPid(row.runtime_pid);
     await db.query('UPDATE sites SET runtime_pid = NULL, runtime_port = NULL, runtime_uid = NULL WHERE id = $1', [row.id]);
     sites++;
   }

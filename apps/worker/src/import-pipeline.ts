@@ -4,7 +4,8 @@ import { get as httpGet } from 'node:http';
 import { createServer } from 'node:net';
 import { join } from 'node:path';
 import { runIsolated, runIsolatedOrThrow, ExecutorError } from './executor.ts';
-import { siteLimitsOf, wrapWithLimits } from './runtime-agent.ts';
+import { siteLimitsOf, wrapWithLimits, type SpawnSpec } from './runtime-agent.ts';
+import { processAgentMode, spawnSiteProcess, stopSiteProcess } from './process-agent.ts';
 import { fenceImportTree } from './sandbox.ts';
 import {
   IMPORT_ERROR_OUTCOME,
@@ -106,7 +107,23 @@ interface Checkpoint {
 /** Steps whose completion is checkpointed (from `detect` onward). */
 const CHECKPOINT_STEPS = new Set<ImportStep>(['detect', 'validate_manifest', 'policy', 'build', 'inspect_output', 'record', 'provision_preview', 'init_db', 'health', 'smoke']);
 
+/**
+ * Handle for a spawned runtime-check server (sandbox Phase 1). Locally
+ * this wraps the ChildProcess the pipeline spawned itself; in runner
+ * mode the process lives in the site-runner container and the handle
+ * stops it by fencing key. `host` is where the pipeline's health/smoke
+ * probes reach it: 127.0.0.1 locally, the runner's host in remote mode.
+ */
+interface RuntimeServerHandle {
+  port: number;
+  dir: string;
+  host: string;
+  stop: () => Promise<void>;
+}
+
 interface RunState {
+  /** Stable per-run id (import id + job fencing token): the runner key suffix. */
+  runId: string;
   workspace: string;
   sourceDir: string;
   files: string[];
@@ -128,7 +145,7 @@ interface RunState {
   runtimeBundleKey?: string;
   runtimeStart?: string[];
   runtimeHealthPath?: string;
-  runtimeServer?: { proc: ChildProcess; port: number; dir: string };
+  runtimeServer?: RuntimeServerHandle;
 }
 
 /** Walk a directory, returning POSIX-relative file paths (symlinks skipped). */
@@ -164,9 +181,9 @@ async function freePort(): Promise<number> {
   });
 }
 
-function httpGetLocal(port: number, path: string): Promise<{ status: number; body: string }> {
+function httpGetLocal(host: string, port: number, path: string): Promise<{ status: number; body: string }> {
   return new Promise((resolve, reject) => {
-    const req = httpGet({ host: '127.0.0.1', port, path, timeout: 5000 }, (res) => {
+    const req = httpGet({ host, port, path, timeout: 5000 }, (res) => {
       const chunks: Buffer[] = [];
       res.on('data', (c: Buffer) => chunks.push(c));
       res.on('end', () => resolve({ status: res.statusCode ?? 0, body: Buffer.concat(chunks).toString('utf8') }));
@@ -293,7 +310,7 @@ async function buildAdapter(deps: PipelineDeps, state: RunState, manifest: Templ
 }
 
 /** Copy a runtime bundle out of the store into a writable dir and spawn its server. */
-async function spawnRuntimeServer(deps: PipelineDeps, state: RunState, manifest: TemplateManifest): Promise<{ proc: ChildProcess; port: number; dir: string }> {
+async function spawnRuntimeServer(deps: PipelineDeps, state: RunState, manifest: TemplateManifest): Promise<RuntimeServerHandle> {
   const dir = join(state.workspace, 'runtime');
   await rm(dir, { recursive: true, force: true });
   await mkdir(dir, { recursive: true });
@@ -317,8 +334,47 @@ async function spawnRuntimeServer(deps: PipelineDeps, state: RunState, manifest:
   // template code, so it gets the shared import UID + prlimit caps like
   // every other spawn point; the throwaway tree is handed to that UID.
   const fenced = await fenceImportTree(deps.config, dir);
-  const port = await freePort();
   const start = state.runtimeStart ?? manifest.runtime.start ?? ['node', 'server.js'];
+
+  // Sandbox Phase 1: in runner mode the site-runner owns the process.
+  // The tree preparation above is unchanged (the runner mounts the same
+  // work/ tree at the same absolute path); only the lifecycle moves.
+  // The spec's env carries just the manifest's public vars — the
+  // process-agent expands it through buildChildEnv, which sets
+  // HOST=config.runtimeBindHost, so the pipeline can probe the server
+  // through the runner host (see the handle's `host`).
+  if (processAgentMode(deps.config) === 'remote') {
+    const env: Record<string, string> = {};
+    for (const item of manifest.env) {
+      if (item.scope === 'public' && item.defaultValue !== undefined) env[item.name] = item.defaultValue;
+    }
+    const key = `import-${state.runId}`;
+    const spawned = await spawnSiteProcess(deps.config, {
+      key,
+      rowVersion: 1,
+      spec: {
+        kind: 'runtime',
+        dir,
+        start,
+        healthPath: state.runtimeHealthPath ?? manifest.runtime.healthPath ?? '/',
+        env,
+        uid: deps.config.importUid,
+        gid: deps.config.siteGid,
+        limits: siteLimitsOf(deps.config),
+        writableDir: dir,
+      },
+    });
+    return {
+      port: spawned.port,
+      dir,
+      host: new URL(deps.config.runtimeAgentUrl).hostname,
+      stop: async () => {
+        await stopSiteProcess(deps.config, { key, rowVersion: 1 });
+      },
+    };
+  }
+
+  const port = await freePort();
   const env: Record<string, string> = {
     PATH: process.env.PATH ?? '/usr/local/bin:/usr/bin:/bin',
     NODE_ENV: 'production',
@@ -341,28 +397,33 @@ async function spawnRuntimeServer(deps: PipelineDeps, state: RunState, manifest:
   // Drain output so a chatty server cannot block on a full pipe.
   proc.stdout?.on('data', () => undefined);
   proc.stderr?.on('data', () => undefined);
-  return { proc, port, dir };
+  return { port, dir, host: '127.0.0.1', stop: () => stopLocalRuntimeServer(proc) };
 }
 
-async function stopRuntimeServer(server: { proc: ChildProcess } | undefined): Promise<void> {
-  if (!server) return;
+/** Local-mode stop: SIGTERM the process group, SIGKILL after 3 s (pre-Phase 1 semantics, unchanged). */
+async function stopLocalRuntimeServer(proc: ChildProcess): Promise<void> {
   try {
-    if (server.proc.pid) process.kill(-server.proc.pid, 'SIGTERM');
+    if (proc.pid) process.kill(-proc.pid, 'SIGTERM');
   } catch {
-    server.proc.kill('SIGTERM');
+    proc.kill('SIGTERM');
   }
   await new Promise<void>((resolve) => {
     const done = () => resolve();
-    server.proc.once('exit', done);
+    proc.once('exit', done);
     setTimeout(() => {
       try {
-        if (server.proc.pid) process.kill(-server.proc.pid, 'SIGKILL');
+        if (proc.pid) process.kill(-proc.pid, 'SIGKILL');
       } catch {
-        server.proc.kill('SIGKILL');
+        proc.kill('SIGKILL');
       }
       resolve();
     }, 3000);
   });
+}
+
+async function stopRuntimeServer(server: RuntimeServerHandle | undefined): Promise<void> {
+  if (!server) return;
+  await server.stop();
 }
 
 export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<void> {
@@ -378,7 +439,15 @@ export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<voi
     return;
   }
   const workspace = join(config.workDir, importId, `run-${job.fencing_token}`);
-  const state: RunState = { workspace, sourceDir: join(workspace, 'src'), files: [], fileSizes: new Map(), directories: new Set(), declared: null };
+  const state: RunState = {
+    runId: `${importId}-${job.fencing_token}`,
+    workspace,
+    sourceDir: join(workspace, 'src'),
+    files: [],
+    fileSizes: new Map(),
+    directories: new Set(),
+    declared: null,
+  };
   // Checkpoint resume: a previous run's state is trusted only when it was produced from
   // the same source archive and the same configuration revision. The cheap head steps
   // (inspect/resolve/scan) always re-run and re-validate; `build` is only skipped when
@@ -777,7 +846,7 @@ export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<voi
         await stopRuntimeServer(state.runtimeServer);
         state.runtimeServer = await spawnRuntimeServer(deps, state, manifest);
         state.runtimeHealthPath = state.runtimeHealthPath ?? manifest.runtime.healthPath ?? '/';
-        await log(db, importId, 'provision_preview', 'info', 'runtime_spawned', `Runtime server spawned on 127.0.0.1:${state.runtimeServer.port} for health/smoke.`);
+        await log(db, importId, 'provision_preview', 'info', 'runtime_spawned', `Runtime server spawned on ${state.runtimeServer.host}:${state.runtimeServer.port} for health/smoke.`);
         return;
       }
       const label = randomLabel();
@@ -804,7 +873,7 @@ export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<voi
         let lastError = 'unreachable';
         for (let attempt = 0; attempt < 10; attempt++) {
           try {
-            const res = await httpGetLocal(state.runtimeServer.port, healthPath);
+            const res = await httpGetLocal(state.runtimeServer.host, state.runtimeServer.port, healthPath);
             if (res.status === 200) return;
             lastError = `status_${res.status}`;
           } catch {
@@ -833,7 +902,7 @@ export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<voi
         const failures: { path: string; status: number | string }[] = [];
         for (const path of ['/', state.runtimeHealthPath ?? '/']) {
           try {
-            const res = await httpGetLocal(state.runtimeServer.port, path);
+            const res = await httpGetLocal(state.runtimeServer.host, state.runtimeServer.port, path);
             if (res.status !== 200) failures.push({ path, status: res.status });
           } catch {
             failures.push({ path, status: 'unreachable' });
@@ -864,7 +933,7 @@ export async function runImportJob(deps: PipelineDeps, job: JobRow): Promise<voi
       'screenshots',
       async () => {
         if (!deps.screenshotter) return 'skipped';
-        const url = state.runtimeServer ? `http://127.0.0.1:${state.runtimeServer.port}/` : `${previewOrigin(config, state.previewLabel!)}/`;
+        const url = state.runtimeServer ? `http://${state.runtimeServer.host}:${state.runtimeServer.port}/` : `${previewOrigin(config, state.previewLabel!)}/`;
         try {
           const shots = await deps.screenshotter.capture(url, state.manifest!.locales.default);
           for (const shot of shots) {

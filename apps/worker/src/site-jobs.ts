@@ -17,7 +17,8 @@ import {
   type PlatformConfig,
 } from '@3t/core';
 import { extractArchive } from '@3t/template-sdk';
-import { httpStatus, killPid, siteLimitsOf, spawnServer, writeSiteMeta, type SpawnSpec } from './runtime-agent.ts';
+import { httpStatus, siteLimitsOf, writeSiteMeta, type SpawnSpec } from './runtime-agent.ts';
+import { spawnSiteProcess, stopSiteProcess } from './process-agent.ts';
 import { allocateSiteUid, fenceSiteTree, releaseSiteUid, sandboxEnabled } from './sandbox.ts';
 
 export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore', 'site.setup-token', 'site.purge'] as const;
@@ -36,6 +37,10 @@ interface SiteRow {
   runtime_port: number | null;
   runtime_pid: number | null;
   runtime_uid: number | null;
+  /** Fencing token for process-agent calls (sandbox Phase 1): the runner
+   *  rejects spawns/stops carrying a version older than the one it last
+   *  acted on for this site. */
+  row_version: number;
 }
 
 interface VersionRow {
@@ -134,7 +139,7 @@ async function spawnAndRecord(config: PlatformConfig, db: Db, site: SiteRow, ver
     writableDir: join(dir, 'data'),
     ...(uid !== null ? { uid, gid: config.siteGid } : {}),
   };
-  const spawned = await spawnServer(config, spec);
+  const spawned = await spawnSiteProcess(config, { key: site.id, rowVersion: site.row_version, spec });
   await db.query('UPDATE sites SET runtime_kind = $2, runtime_port = $3, runtime_pid = $4 WHERE id = $1', [
     site.id,
     base.kind,
@@ -187,7 +192,7 @@ async function runProvision(deps: { config: PlatformConfig; db: Db; store: Local
   const dir = siteDir(config, site.id);
   if (deploymentId) await db.query("UPDATE deployments SET status = 'running' WHERE id = $1", [deploymentId]);
   try {
-    if (site.runtime_pid) killPid(site.runtime_pid);
+    if (site.runtime_pid) await stopSiteProcess(config, { key: site.id, rowVersion: site.row_version, localPid: site.runtime_pid });
     // Demo promotion (D02->C05): a runtime demo session's directory becomes the
     // site volume verbatim, so demo edits survive; the session is then closed.
     // Static demos have no directory (they reuse a preview), so they fall
@@ -267,7 +272,7 @@ async function swapAndRespawn(deps: { config: PlatformConfig; db: Db; store: Loc
   const { config, db } = deps;
   const dir = siteDir(config, site.id);
   const kept = `${dir}.kept-${Date.now()}`;
-  if (site.runtime_pid) killPid(site.runtime_pid);
+  if (site.runtime_pid) await stopSiteProcess(config, { key: site.id, rowVersion: site.row_version, localPid: site.runtime_pid });
   await rename(dir, kept);
   try {
     await rename(staged, dir);
@@ -516,7 +521,7 @@ async function runRestart(deps: { config: PlatformConfig; db: Db; store: LocalOb
   // (resume / admin restart) — may lift a suspension.
   const revive = (job.payload_json as { revive?: boolean } | null)?.revive === true;
   if (site.status === 'suspended' && !revive) return;
-  if (site.runtime_pid) killPid(site.runtime_pid);
+  if (site.runtime_pid) await stopSiteProcess(config, { key: site.id, rowVersion: site.row_version, localPid: site.runtime_pid });
   const version = await loadVersion(db, site.template_version_id);
   const dir = siteDir(config, site.id);
   // Health-check the existing tree first: a restart never re-materializes.
@@ -590,7 +595,7 @@ export async function purgeSiteTree(config: PlatformConfig, site: Pick<SiteRow, 
  */
 async function runPurge(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow): Promise<void> {
   if (site.status === 'purged') return;
-  if (site.runtime_pid) killPid(site.runtime_pid);
+  if (site.runtime_pid) await stopSiteProcess(deps.config, { key: site.id, rowVersion: site.row_version, localPid: site.runtime_pid });
   await purgeSiteTree(deps.config, site);
   await releaseSiteUid(deps.db, site.id);
   await deps.db.query(

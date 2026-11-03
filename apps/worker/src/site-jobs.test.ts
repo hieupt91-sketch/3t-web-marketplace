@@ -231,6 +231,8 @@ describe('site update window re-check (worker)', () => {
       id: siteId, owner_id: 'owner-1', entitlement_id: 'ent-1', template_version_id: 'v1',
       display_name: 'Site', subdomain: 'site-1', default_locale: 'vi', status: 'active',
       demo_session_id: null, runtime_kind: 'runtime', runtime_port: null, runtime_pid: null, runtime_uid: null,
+      // Phase 1: SiteRow gained the runner fencing version (SELECT * always returned it).
+      row_version: 1,
     };
     const job = { id: 'job-1', type: 'site.update', payload_json: { site_id: siteId } } as unknown as JobRow;
     const config = { workDir } as unknown as PlatformConfig;

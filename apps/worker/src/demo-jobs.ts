@@ -11,7 +11,8 @@ import {
   type LocalObjectStore,
   type PlatformConfig,
 } from '@3t/core';
-import { killPid, siteLimitsOf, spawnServer } from './runtime-agent.ts';
+import { siteLimitsOf } from './runtime-agent.ts';
+import { spawnSiteProcess, stopSiteProcess } from './process-agent.ts';
 import { fenceDemoTree, sandboxEnabled } from './sandbox.ts';
 
 /**
@@ -114,12 +115,17 @@ async function runSpawn(deps: { config: PlatformConfig; db: Db; store: LocalObje
   const session = await loadSession(db, sessionId);
   if (!session) return;
   // A stop/cancel may have landed while this job waited: never resurrect.
+  // Demo sessions have no row_version (single-spawn lifecycle), so the
+  // process-agent fencing version is always 1 (sandbox Phase 1 contract).
+  const key = `demo-${sessionId}`;
   if (session.status !== 'active') {
-    killPid(session.runtime_pid ?? expectPid);
+    await stopSiteProcess(config, { key, rowVersion: 1, localPid: session.runtime_pid ?? expectPid });
     return;
   }
-  if (expectPid) killPid(expectPid);
-  if (session.runtime_pid && session.runtime_pid !== expectPid) killPid(session.runtime_pid);
+  if (expectPid) await stopSiteProcess(config, { key, rowVersion: 1, localPid: expectPid });
+  if (session.runtime_pid && session.runtime_pid !== expectPid) {
+    await stopSiteProcess(config, { key, rowVersion: 1, localPid: session.runtime_pid });
+  }
   try {
     const version = await loadVersion(db, session.version_id);
     const dir = join(config.workDir, 'demo-sessions', sessionId);
@@ -142,26 +148,30 @@ async function runSpawn(deps: { config: PlatformConfig; db: Db; store: LocalObje
     for (const item of version.manifest_json.env ?? []) {
       if (item.scope === 'public' && item.defaultValue !== undefined) env[item.name] = item.defaultValue;
     }
-    const spawned = await spawnServer(config, {
-      kind: 'runtime',
-      dir,
-      start: version.manifest_json.runtime?.start ?? ['node', 'server.js'],
-      healthPath: version.manifest_json.runtime?.healthPath ?? '/',
-      env,
-      limits: siteLimitsOf(config),
-      writableDir: join(dir, 'data'),
-      ...(sandboxEnabled(config) ? { uid: config.demoUid, gid: config.siteGid } : {}),
+    const spawned = await spawnSiteProcess(config, {
+      key,
+      rowVersion: 1,
+      spec: {
+        kind: 'runtime',
+        dir,
+        start: version.manifest_json.runtime?.start ?? ['node', 'server.js'],
+        healthPath: version.manifest_json.runtime?.healthPath ?? '/',
+        env,
+        limits: siteLimitsOf(config),
+        writableDir: join(dir, 'data'),
+        ...(sandboxEnabled(config) ? { uid: config.demoUid, gid: config.siteGid } : {}),
+      },
     });
     // Cancelled while spawning/seeding: tear down instead of publishing.
     const during = await loadSession(db, sessionId);
     if (!during || during.status !== 'active') {
-      killPid(spawned.pid);
+      await stopSiteProcess(config, { key, rowVersion: 1, localPid: spawned.pid });
       return;
     }
     const demoAdminReady = await seedDemoAdmin(config, sessionId, version, spawned.port);
     const after = await loadSession(db, sessionId);
     if (!after || after.status !== 'active') {
-      killPid(spawned.pid);
+      await stopSiteProcess(config, { key, rowVersion: 1, localPid: spawned.pid });
       return;
     }
     // Port, pid and admin readiness land in ONE update: the API's create
@@ -187,7 +197,7 @@ async function runSpawn(deps: { config: PlatformConfig; db: Db; store: LocalObje
 async function runStop(deps: { config: PlatformConfig; db: Db }, sessionId: string, pid: number | null): Promise<void> {
   const { db } = deps;
   const session = await loadSession(db, sessionId);
-  killPid(pid ?? session?.runtime_pid ?? null);
+  await stopSiteProcess(deps.config, { key: `demo-${sessionId}`, rowVersion: 1, localPid: pid ?? session?.runtime_pid ?? null });
   // Only clear the runtime fields of a session that is actually over; a
   // stray stop must never blank a live session's routing.
   await db.query("UPDATE demo_sessions SET runtime_pid = NULL, runtime_port = NULL WHERE id = $1 AND status <> 'active'", [sessionId]);

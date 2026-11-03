@@ -3,6 +3,7 @@ import { IMPORT_JOB_TYPE, LeaseLostError, LocalObjectStore, claimJob, createPool
 import { LEASE_SECONDS, runImportJob } from './import-pipeline.ts';
 import { SITE_JOB_TYPES, backfillSandboxFencing, runSiteJob, sweepExpiredReservations } from './site-jobs.ts';
 import { DEMO_JOB_TYPES, runDemoJob } from './demo-jobs.ts';
+import { probeRunnerHealth, processAgentMode } from './process-agent.ts';
 import { logSandboxStatus, reapOrphanProcesses } from './sandbox.ts';
 import { expireStalePaymentOrders, refundStuckWalletSales, revalidateVerifiedDomains } from './order-jobs.ts';
 import { createChromiumScreenshotter, type Screenshotter } from './screenshots.ts';
@@ -65,6 +66,24 @@ logLine('started', { screenshots: screenshotter !== null });
 // spawn happens. With SANDBOX_UID_MODE=on this throws when the worker is
 // not root — refusing to run template code unfenced is the point.
 logSandboxStatus(config, logLine);
+
+// Sandbox Phase 1 (audit C-01): announce where template processes will
+// live. In remote mode the site-runner owns every spawn/stop; probe it
+// once so a misconfigured deploy is loud in the boot log. A failed
+// probe does NOT stop the worker — non-template jobs keep flowing and
+// template jobs fail individually with the runner's error.
+const agentMode = processAgentMode(config);
+logLine('worker_process_agent_mode', { mode: agentMode });
+if (agentMode === 'remote') {
+  const healthy = await probeRunnerHealth(config);
+  if (healthy) logLine('worker_process_agent_health_ok', { url: config.runtimeAgentUrl });
+  else {
+    logLine('worker_process_agent_health_failed', {
+      url: config.runtimeAgentUrl,
+      error: 'site-runner /healthz unreachable or not ok — template spawns will fail until the runner is up',
+    });
+  }
+}
 
 // Boot backfill: allocate sandbox UIDs + fence the trees of sites that
 // predate Phase 0 (their processes pick the UID up at their boot restart
@@ -131,11 +150,11 @@ while (!stopping) {
           if (r.lost > 0 || r.graceStarted > 0) logLine('domain_recheck_sweep', { ...r });
         })
         .catch((error: Error) => logLine('domain_recheck_sweep_failed', { error: error.message }));
-      // Sandbox Phase 0 reaper: kill processes whose DB record says they
-      // should no longer exist (expired/cancelled demo sessions, purged
-      // sites) — the API's own killPid cannot reach across containers, so
-      // orphaned template processes are collected here.
-      await reapOrphanProcesses(db)
+      // Sandbox reaper: stop processes whose DB record says they should
+      // no longer exist (expired/cancelled demo sessions, purged sites) —
+      // in Phase 1 remote mode the stop is served by the site-runner,
+      // which owns the pid namespace the template processes live in.
+      await reapOrphanProcesses(db, config)
         .then(({ demos, sites }) => {
           if (demos > 0 || sites > 0) logLine('orphan_reap', { demos, sites });
         })
