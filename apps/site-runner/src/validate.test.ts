@@ -106,6 +106,26 @@ describe('validateSpawnBody — happy path', () => {
   });
 });
 
+describe('validateSpawnBody — uid/gid pair', () => {
+  it('accepts a spawn with neither uid nor gid (unfenced dev posture)', () => {
+    const body = baseBody();
+    delete body.uid;
+    delete body.gid;
+    const value = good(body);
+    expect(value.uid).toBeUndefined();
+    expect(value.gid).toBeUndefined();
+  });
+
+  it('rejects uid without gid and gid without uid', () => {
+    const onlyUid = baseBody();
+    delete onlyUid.gid;
+    expect(bad(onlyUid)).toContain('together');
+    const onlyGid = baseBody();
+    delete onlyGid.uid;
+    expect(bad(onlyGid)).toContain('together');
+  });
+});
+
 describe('validateSpawnBody — rejects', () => {
   it('rejects a non-object body', () => {
     expect(bad('nope')).toContain('object');

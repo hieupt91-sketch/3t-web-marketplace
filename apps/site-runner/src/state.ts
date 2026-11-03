@@ -16,8 +16,9 @@ export interface TrackedEntry {
   dir: string;
   pid: number;
   port: number;
-  uid: number;
-  gid: number;
+  /** Absent for unfenced (dev-posture) spawns. */
+  uid?: number;
+  gid?: number;
   /** RSS watchdog cap captured at spawn time. */
   rssMb: number;
   alive: boolean;
@@ -56,8 +57,8 @@ function isTrackedEntry(value: unknown): value is TrackedEntry {
     typeof e.dir === 'string' &&
     typeof e.pid === 'number' &&
     typeof e.port === 'number' &&
-    typeof e.uid === 'number' &&
-    typeof e.gid === 'number' &&
+    (e.uid === undefined || typeof e.uid === 'number') &&
+    (e.gid === undefined || typeof e.gid === 'number') &&
     typeof e.rssMb === 'number' &&
     typeof e.alive === 'boolean'
   );
@@ -90,7 +91,9 @@ export function planAdoption(
   const dropped: TrackedEntry[] = [];
   for (const entry of entries) {
     const probe = probes.get(entry.key);
-    if (!probe || !probe.alive || probe.cwd !== entry.dir || probe.uid !== entry.uid) {
+    // Entries without a recorded uid (unfenced dev spawns) adopt on
+    // liveness + cwd alone; fenced entries must also match the uid.
+    if (!probe || !probe.alive || probe.cwd !== entry.dir || (entry.uid !== undefined && probe.uid !== entry.uid)) {
       dropped.push(entry);
     } else {
       adopted.push({ ...entry, alive: true });

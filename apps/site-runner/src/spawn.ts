@@ -32,8 +32,8 @@ export interface SpawnSpec {
   start?: string[];
   healthPath: string;
   env: Record<string, string>;
-  uid: number;
-  gid: number;
+  uid?: number;
+  gid?: number;
   limits: SpawnLimits;
 }
 
@@ -134,10 +134,11 @@ export async function spawnServerLocal(spec: SpawnSpec, deps: SpawnDeps): Promis
   if (!wrapped.applied) deps.log({ event: 'runner_prlimit_missing', path: PRLIMIT });
 
   // setuid spawn is only possible (and only attempted) when the runner
-  // itself runs as root; otherwise the child keeps the runner's own uid
-  // (dev/show-env) and the caller is told via uidApplied.
-  const uidApplied = deps.isRoot();
-  if (!uidApplied) deps.log({ event: 'runner_uid_not_applied', uid: spec.uid, euid: process.getuid?.() ?? -1 });
+  // itself runs as root AND the request carries a uid; otherwise the
+  // child keeps the runner's own uid (dev/show-env) and the caller is
+  // told via uidApplied.
+  const uidApplied = spec.uid !== undefined && deps.isRoot();
+  if (spec.uid !== undefined && !uidApplied) deps.log({ event: 'runner_uid_not_applied', uid: spec.uid, euid: process.getuid?.() ?? -1 });
 
   const proc: ChildProcess = spawn(argv[0]!, argv.slice(1), {
     cwd: spec.dir,

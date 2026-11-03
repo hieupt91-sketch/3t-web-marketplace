@@ -25,8 +25,14 @@ export interface SpawnRequest {
   start?: string[];
   healthPath: string;
   env: Record<string, string>;
-  uid: number;
-  gid: number;
+  /**
+   * Optional as a pair — mirrors the worker's spawnServer semantics: when
+   * sandbox fencing is off (dev/show-env) the worker sends neither, and
+   * the child keeps the runner's own uid (uidApplied=false). Production
+   * always sends both. Exactly one of the pair is a validation error.
+   */
+  uid?: number;
+  gid?: number;
   limits: RunnerLimits;
   /** Normalized absolute path when present. */
   writableDir?: string;
@@ -236,13 +242,18 @@ export function validateSpawnBody(raw: unknown, ctx: ValidateContext): Validatio
 
   const env = validateEnv(raw.env, errors);
 
-  let uid = 0;
-  if (typeof raw.uid === 'number' && Number.isInteger(raw.uid) && isAllowedUid(raw.uid)) uid = raw.uid;
-  else errors.push(`uid must be one of ${DEMO_UID}, ${IMPORT_UID} or in ${SITE_UID_MIN}..${SITE_UID_MAX}`);
-
-  let gid = 0;
-  if (raw.gid === ctx.siteGid) gid = ctx.siteGid;
-  else errors.push(`gid must equal RUNNER_SITE_GID (${ctx.siteGid})`);
+  let uid: number | undefined;
+  let gid: number | undefined;
+  if (raw.uid === undefined && raw.gid === undefined) {
+    // Unfenced spawn (dev/show-env): allowed, child keeps the runner's uid.
+  } else if (raw.uid === undefined || raw.gid === undefined) {
+    errors.push('uid and gid must be provided together or not at all');
+  } else {
+    if (typeof raw.uid === 'number' && Number.isInteger(raw.uid) && isAllowedUid(raw.uid)) uid = raw.uid;
+    else errors.push(`uid must be one of ${DEMO_UID}, ${IMPORT_UID} or in ${SITE_UID_MIN}..${SITE_UID_MAX}`);
+    if (raw.gid === ctx.siteGid) gid = ctx.siteGid;
+    else errors.push(`gid must equal RUNNER_SITE_GID (${ctx.siteGid})`);
+  }
 
   const limits = validateLimits(raw.limits, errors);
 
