@@ -32,6 +32,7 @@
   "error.refund.not_pending": "Khoản hoàn tiền không ở trạng thái chờ nhà cung cấp xử lý.",
   "error.refund.not_requested": "Yêu cầu hoàn tiền không ở trạng thái chờ duyệt.",
   "error.refund.order_not_refundable": "Đơn hàng không ở trạng thái có thể hoàn tiền.",
+  "error.site.setup_token_unavailable": "Chưa thể đọc mã cài đặt lúc này. Hãy thử lại sau ít phút.",
   "error.site.update_window_expired": "Đã hết hạn cập nhật miễn phí cho website này (12 tháng kể từ ngày mua).",
   "error.request.body_too_large": "Dữ liệu gửi lên quá lớn.",
   "error.request.idempotency_key_required": "Thiếu khóa chống gửi lặp (Idempotency-Key).",

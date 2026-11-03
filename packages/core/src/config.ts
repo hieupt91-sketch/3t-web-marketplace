@@ -101,6 +101,11 @@ export interface PlatformConfig {
   siteLimitFileSizeMb: number;
   /** How long the API waits for the worker to spawn a demo session server. */
   demoSpawnWaitMs: number;
+  /** How long the API waits for the worker to read a site's admin setup
+   *  token out of its fenced tree (site.setup-token job, H2 fix 1). The
+   *  read is a stat + small file read, so this is far below the demo
+   *  spawn budget; it only ever lapses when the worker is down. */
+  adminSetupWaitMs: number;
 }
 
 function env(name: string, fallback?: string): string {
@@ -178,6 +183,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     siteLimitMaxProcesses: Number(env('SITE_LIMIT_MAX_PROCESSES', '256')),
     siteLimitFileSizeMb: Number(env('SITE_LIMIT_FILE_SIZE_MB', '1024')),
     demoSpawnWaitMs: Number(env('DEMO_SPAWN_WAIT_MS', '30000')),
+    adminSetupWaitMs: Number(env('ADMIN_SETUP_WAIT_MS', '10000')),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');

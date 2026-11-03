@@ -1,7 +1,8 @@
 import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
+import { mkdir, rm, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { encryptSecret } from '@3t/core';
 import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
 
 /** Split packages (owner directive 2026-11-01): the web, hosting
@@ -50,6 +51,36 @@ async function setSetting(key: string, value: unknown): Promise<void> {
     `INSERT INTO settings (key, value_json) VALUES ($1, $2::jsonb) ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json`,
     [key, JSON.stringify(value)],
   );
+}
+
+/**
+ * H2 gating fix 1: GET /sites/:id/admin-setup delegates the token read
+ * to the worker via a site.setup-token job (the API is non-root and the
+ * site tree is fenced). No worker runs in this suite, so the test
+ * answers the job itself — with the token sealed in the same envelope
+ * the worker publishes — while the request is in flight.
+ */
+async function waitForSetupTokenJob(siteId: string): Promise<string> {
+  const deadline = Date.now() + 5000;
+  for (;;) {
+    const { rows } = await ctx.db.query<{ id: string }>(
+      "SELECT id FROM jobs WHERE type = 'site.setup-token' AND resource_id = $1 AND status = 'queued' ORDER BY created_at DESC LIMIT 1",
+      [siteId],
+    );
+    if (rows[0]) return rows[0]!.id;
+    if (Date.now() > deadline) throw new Error('admin-setup never enqueued a site.setup-token job');
+    await new Promise((r) => setTimeout(r, 25));
+  }
+}
+
+async function answerSetupTokenJob(siteId: string, result: { token_enc: string | null } | 'failed'): Promise<string> {
+  const jobId = await waitForSetupTokenJob(siteId);
+  if (result === 'failed') {
+    await ctx.db.query("UPDATE jobs SET status = 'failed', last_error_code = 'site_job_failed' WHERE id = $1", [jobId]);
+  } else {
+    await ctx.db.query("UPDATE jobs SET status = 'succeeded', result_json = $2::jsonb WHERE id = $1", [jobId, JSON.stringify(result)]);
+  }
+  return jobId;
 }
 
 beforeAll(async () => {
@@ -278,15 +309,48 @@ describe('standalone hosting upgrade + standalone domain package', () => {
     await mkdir(dataDir, { recursive: true });
     await writeFile(join(dataDir, 'setup-token.txt'), 'tok-secret-123', 'utf8');
 
-    const mine = await get(`/api/v1/sites/${dynSiteId}/admin-setup`, buyerA.cookie);
-    expect(mine.statusCode, mine.body).toBe(200);
-    expect(mine.json().data.setup_pending).toBe(true);
-    expect(mine.json().data.token).toBe('tok-secret-123');
-    expect(mine.json().data.setup_url).toContain('/admin/setup');
+    // Authorization is decided BEFORE any job exists: a non-owner gets
+    // the same 404 as a missing site and no read job is ever enqueued
+    // for them; a static site is a 409, also without a job.
     const foreign = await get(`/api/v1/sites/${dynSiteId}/admin-setup`, buyerB.cookie);
     expect(foreign.statusCode).toBe(404);
     const staticSite = await get(`/api/v1/sites/${siteId}/admin-setup`, buyerA.cookie);
     expect(staticSite.statusCode).toBe(409);
+    const noJobs = await ctx.db.query<{ n: string }>(
+      "SELECT count(*) AS n FROM jobs WHERE type = 'site.setup-token' AND resource_id = $1",
+      [dynSiteId],
+    );
+    expect(Number(noJobs.rows[0]!.n)).toBe(0);
+
+    // The owner receives the token through the worker hand-off; the
+    // sealed result is scrubbed from the job row once consumed.
+    const pending = get(`/api/v1/sites/${dynSiteId}/admin-setup`, buyerA.cookie);
+    const jobId = await answerSetupTokenJob(dynSiteId, { token_enc: encryptSecret(ctx.config.partnerWebhookKey, 'tok-secret-123') });
+    const mine = await pending;
+    expect(mine.statusCode, mine.body).toBe(200);
+    expect(mine.json().data.setup_pending).toBe(true);
+    expect(mine.json().data.token).toBe('tok-secret-123');
+    expect(mine.json().data.setup_url).toContain('/admin/setup');
+    const scrubbed = await ctx.db.query<{ result_json: unknown }>('SELECT result_json FROM jobs WHERE id = $1', [jobId]);
+    expect(scrubbed.rows[0]!.result_json).toBeNull();
+
+    // No token file (setup already completed) → not pending, null token.
+    await rm(join(dataDir, 'setup-token.txt'), { force: true });
+    const pendingDone = get(`/api/v1/sites/${dynSiteId}/admin-setup`, buyerA.cookie);
+    await answerSetupTokenJob(dynSiteId, { token_enc: null });
+    const done = await pendingDone;
+    expect(done.statusCode, done.body).toBe(200);
+    expect(done.json().data.setup_pending).toBe(false);
+    expect(done.json().data.token).toBeNull();
+
+    // A failed read job is an explicit error — never a false
+    // "setup not pending" (the silent-null failure mode of the
+    // direct-read era under a non-root API).
+    const pendingFail = get(`/api/v1/sites/${dynSiteId}/admin-setup`, buyerA.cookie);
+    await answerSetupTokenJob(dynSiteId, 'failed');
+    const failed = await pendingFail;
+    expect(failed.statusCode, failed.body).toBe(400);
+    expect(failed.json().error.code).toBe('site.setup_token_unavailable');
   });
 });
 

@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { chmod, cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
+import { chmod, chown, cp, mkdir, readdir, rename, rm, stat } from 'node:fs/promises';
 import { dirname, join, relative, sep } from 'node:path';
 import { Transform, type Readable } from 'node:stream';
 import { pipeline } from 'node:stream/promises';
@@ -12,12 +12,98 @@ export class ObjectTooLargeError extends Error {
 }
 
 /**
+ * The shared-storage group (H2 gating fix 3): the `app` group, gid
+ * 10001, created in deploy/Dockerfile.node + Dockerfile.web. The four
+ * non-root services run as 10001:10001, so group ownership by 10001
+ * grants exactly them — and nobody else — group access to shared
+ * objects. Site processes (uids 20000–20499, gid 19990) are NOT in this
+ * group and keep no access to the store. The root worker creates most
+ * objects; without this discipline its putStream files (mode 0600,
+ * root:root) would be unreadable by the non-root API/preview after the
+ * H2 cutover. The model:
+ *   - putStream files land as 0640, group = shared group;
+ *   - directories the store creates land as 02770 (setgid, so children
+ *     created later by ANY service inherit the shared group, and group
+ *     write so one service can create entries inside a directory
+ *     another service made — e.g. the API creating a new prefix under
+ *     the store root the worker initialized) and are group-owned by
+ *     the shared group;
+ *   - putTree artifacts stay exactly as before (0444/0555, immutable,
+ *     world-readable by design) — only their parent chain is shared.
+ * All ownership/mode fixups are best-effort: as root they always apply;
+ * as the app user they apply to files the process owns and groups it
+ * belongs to; on a developer machine without the group they silently
+ * no-op (single-user store, nothing to share with). Existing production
+ * objects predate the model — the one-time chown/chmod for them is in
+ * the H2 cutover notes (§3).
+ */
+export const SHARED_STORAGE_GID = 10001;
+const SHARED_FILE_MODE = 0o640;
+const SHARED_DIR_MODE = 0o2770;
+
+/**
  * Private object store with a local filesystem driver. Keys are opaque strings such as
  * `quarantine/<uuid>.zip`; they are never returned to API clients (docs/04 §1).
  * Production swaps this for S3-compatible private storage behind the same interface.
  */
 export class LocalObjectStore {
-  constructor(private readonly root: string) {}
+  constructor(
+    private readonly root: string,
+    private readonly options: { sharedGroupId?: number | null } = {},
+  ) {}
+
+  private get sharedGroupId(): number | null {
+    return this.options.sharedGroupId === undefined ? SHARED_STORAGE_GID : this.options.sharedGroupId;
+  }
+
+  /** Apply the shared-group discipline to one file (best-effort). */
+  private async shareFile(path: string): Promise<void> {
+    const gid = this.sharedGroupId;
+    if (gid === null) return;
+    try {
+      const current = await stat(path);
+      if (!current.isFile()) return;
+      if (typeof process.geteuid === 'function' && process.geteuid() === 0) {
+        await chown(path, current.uid, gid);
+      }
+      await chmod(path, SHARED_FILE_MODE);
+    } catch {
+      /* best-effort: a dev machine without the group keeps default modes */
+    }
+  }
+
+  /**
+   * Apply the shared-group discipline to every directory from the store
+   * root down to `dir` (inclusive), so a directory created by one
+   * service can be traversed — and written into — by the others.
+   * Best-effort for the same reason as shareFile.
+   */
+  private async shareDirs(dir: string): Promise<void> {
+    const gid = this.sharedGroupId;
+    if (gid === null) return;
+    const rel = relative(this.root, dir);
+    if (rel.startsWith('..')) return;
+    const chain = [this.root];
+    if (rel !== '') {
+      let current = this.root;
+      for (const part of rel.split(sep)) {
+        current = join(current, part);
+        chain.push(current);
+      }
+    }
+    for (const path of chain) {
+      try {
+        const current = await stat(path);
+        if (!current.isDirectory()) continue;
+        if (typeof process.geteuid === 'function' && process.geteuid() === 0) {
+          await chown(path, current.uid, gid);
+        }
+        await chmod(path, SHARED_DIR_MODE);
+      } catch {
+        /* best-effort, see shareFile */
+      }
+    }
+  }
 
   /** Absolute path for a key; throws if the key would escape the store root. */
   pathFor(key: string): string {
@@ -32,6 +118,7 @@ export class LocalObjectStore {
   async putStream(key: string, input: Readable, maxBytes: number): Promise<{ size: number; sha256: string }> {
     const target = this.pathFor(key);
     await mkdir(dirname(target), { recursive: true });
+    await this.shareDirs(dirname(target));
     const temp = `${target}.${randomUUID()}.part`;
     const hash = createHash('sha256');
     let size = 0;
@@ -46,6 +133,7 @@ export class LocalObjectStore {
     try {
       await pipeline(input, meter, createWriteStream(temp, { flags: 'wx', mode: 0o600 }));
       await rename(temp, target);
+      await this.shareFile(target);
     } catch (error) {
       await rm(temp, { force: true });
       throw error;
@@ -59,6 +147,7 @@ export class LocalObjectStore {
     if (await this.exists(key)) return; // content-addressed: same key means same content
     const temp = `${target}.${randomUUID()}.part`;
     await mkdir(dirname(target), { recursive: true });
+    await this.shareDirs(dirname(target));
     await cp(sourceDir, temp, { recursive: true, errorOnExist: true, force: false, dereference: false, verbatimSymlinks: true });
     await makeReadOnly(temp);
     // A previous attempt (or a concurrent worker) may have completed the rename
@@ -91,7 +180,9 @@ export class LocalObjectStore {
   async move(fromKey: string, toKey: string): Promise<void> {
     const to = this.pathFor(toKey);
     await mkdir(dirname(to), { recursive: true });
+    await this.shareDirs(dirname(to));
     await rename(this.pathFor(fromKey), to);
+    await this.shareFile(to);
   }
 
   read(key: string): Readable {

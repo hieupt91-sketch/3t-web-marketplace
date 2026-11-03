@@ -7,7 +7,9 @@ import { Readable } from 'node:stream';
 import {
   completeJob,
   emitEvent,
+  encryptSecret,
   failJob,
+  setJobResult,
   validateDynamicContent,
   type Db,
   type JobRow,
@@ -16,9 +18,9 @@ import {
 } from '@3t/core';
 import { extractArchive } from '@3t/template-sdk';
 import { httpStatus, killPid, siteLimitsOf, spawnServer, writeSiteMeta, type SpawnSpec } from './runtime-agent.ts';
-import { allocateSiteUid, fenceSiteTree, sandboxEnabled } from './sandbox.ts';
+import { allocateSiteUid, fenceSiteTree, releaseSiteUid, sandboxEnabled } from './sandbox.ts';
 
-export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore'] as const;
+export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore', 'site.setup-token', 'site.purge'] as const;
 
 interface SiteRow {
   id: string;
@@ -522,6 +524,81 @@ async function runRestart(deps: { config: PlatformConfig; db: Db; store: LocalOb
   await db.query("UPDATE sites SET status = 'active' WHERE id = $1 AND status IN ('active', 'suspended')", [site.id]);
 }
 
+/**
+ * Read a site's one-time admin setup token out of its fenced tree
+ * (H2 gating fix 1). The file is written by the site's own engine at
+ * boot while no admin exists and removed when setup completes, so its
+ * current content IS the setup state: missing/empty file → null (setup
+ * not pending). Only the worker may read it — the tree is fenced to
+ * the site's UID (01700/0700), which the non-root API cannot traverse.
+ * Exported for tests.
+ */
+export async function readSiteSetupToken(config: PlatformConfig, siteId: string): Promise<string | null> {
+  try {
+    const raw = await readFile(join(siteDir(config, siteId), 'data', 'setup-token.txt'), 'utf8');
+    return raw.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * site.setup-token (H2 gating fix 1): the API enqueues this job from
+ * GET /sites/:id/admin-setup and waits for the result. The token
+ * crosses the jobs table ONLY sealed with the platform envelope key
+ * (core encryptSecret, keyed like the settings/MFA envelope) and the
+ * API scrubs the result row right after reading it, so the one-time
+ * credential never rests in the database in plaintext.
+ */
+async function runSetupToken(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow): Promise<void> {
+  const token = await readSiteSetupToken(deps.config, site.id);
+  await setJobResult(deps.db, job, {
+    token_enc: token ? encryptSecret(deps.config.partnerWebhookKey, token) : null,
+  });
+}
+
+/**
+ * Delete a site's tree for purge (H2 gating fix 2). fs.rm with
+ * force:true only forgives a missing path — permission/traversal
+ * errors throw — and the post-delete existence check turns even a
+ * partial silent survival into a thrown SiteJobError, so the purge job
+ * FAILS on the job row instead of reporting a deletion that did not
+ * happen. Exported for tests.
+ */
+export async function purgeSiteTree(config: PlatformConfig, site: Pick<SiteRow, 'id'>): Promise<void> {
+  const dir = siteDir(config, site.id);
+  try {
+    await rm(dir, { recursive: true, force: true });
+  } catch (error) {
+    throw new SiteJobError('site_purge_failed', `cannot delete site tree ${dir}: ${(error as Error).message}`);
+  }
+  if (existsSync(dir)) {
+    throw new SiteJobError('site_purge_failed', `site tree survived purge: ${dir}`);
+  }
+}
+
+/**
+ * site.purge (H2 gating fix 2): hosting purge used to rm the tree from
+ * the API process — under the non-root cutover that rm silently no-ops
+ * against the fenced tree while the row still flips to 'purged'. The
+ * worker (root, the sandbox boundary) owns the deletion now: kill the
+ * runtime, delete the tree, release the site's UID back to the pool,
+ * and only then mark the row purged. Any failure throws and the job
+ * ends 'failed' with the site still 'delete_scheduled', so the admin
+ * sweep re-enqueues it instead of losing the site. Idempotent: a
+ * duplicate job for an already-purged site succeeds as a no-op.
+ */
+async function runPurge(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow, site: SiteRow): Promise<void> {
+  if (site.status === 'purged') return;
+  if (site.runtime_pid) killPid(site.runtime_pid);
+  await purgeSiteTree(deps.config, site);
+  await releaseSiteUid(deps.db, site.id);
+  await deps.db.query(
+    "UPDATE sites SET status = 'purged', subdomain = NULL, purge_at = NULL, runtime_port = NULL, runtime_pid = NULL WHERE id = $1",
+    [site.id],
+  );
+}
+
 /** Site job runner: owns job completion like runImportJob (no auto-retry for site jobs). */
 export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow): Promise<void> {
   const payload = job.payload_json as { site_id: string; deployment_id?: string; backup_id?: string; version_id?: string };
@@ -534,6 +611,8 @@ export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: 
     else if (job.type === 'site.restart') await runRestart(deps, job, site);
     else if (job.type === 'site.content-backup') await runContentBackup(deps, job, site, payload.backup_id!);
     else if (job.type === 'site.content-restore') await runContentRestore(deps, job, site, payload.backup_id!, payload.deployment_id ?? null);
+    else if (job.type === 'site.setup-token') await runSetupToken(deps, job, site);
+    else if (job.type === 'site.purge') await runPurge(deps, job, site);
     else throw new Error(`unknown site job type: ${job.type}`);
     await completeJob(deps.db, job);
   } catch (error) {

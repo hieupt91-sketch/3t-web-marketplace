@@ -3,14 +3,16 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
+import { decryptSecret, type Db, type JobRow, type LocalObjectStore, type PlatformConfig } from '@3t/core';
 import { ArchiveError } from '@3t/template-sdk';
 import { buildZip } from '@3t/template-sdk/testing';
-import type { Db, JobRow, LocalObjectStore, PlatformConfig } from '@3t/core';
 import {
   SiteJobError,
   assertSiteUpdateAllowed,
   carrySiteData,
   extractBackupArchive,
+  readSiteSetupToken,
+  runSiteJob,
   runUpdate,
   siteUpdateFreeUntil,
   stripDemoCredentials,
@@ -244,5 +246,155 @@ describe('site update window re-check (worker)', () => {
     await expect(readFile(join(siteDirPath, 'server.mjs'), 'utf8')).resolves.toBe('original');
     await expect(readFile(join(siteDirPath, 'data', 'content.json'), 'utf8')).resolves.toBe('{"mine":true}');
     expect(existsSync(join(workDir, 'tmp'))).toBe(false);
+  });
+});
+
+/**
+ * H2 gating fixes 1+2: the admin-setup token read and the hosting
+ * purge moved from the (soon non-root) API into the worker. The fake
+ * Db answers the site load and captures every UPDATE so the tests can
+ * assert exactly what the job published / marked — and, for a failed
+ * purge, what it must NEVER mark.
+ */
+interface CapturedUpdate {
+  sql: string;
+  params: unknown[];
+}
+
+function fakeSiteJobDb(siteRow: Record<string, unknown>, captured: CapturedUpdate[]): Db {
+  const query = async (sql: string, params: unknown[] = []) => {
+    if (sql.includes('FROM sites')) return { rows: [siteRow], rowCount: 1 };
+    if (sql.startsWith('UPDATE jobs') || sql.startsWith('UPDATE sites')) {
+      captured.push({ sql, params });
+      return { rows: [], rowCount: 1 };
+    }
+    throw new Error(`unexpected query in fake db: ${sql.slice(0, 80)}`);
+  };
+  return { query } as unknown as Db;
+}
+
+function makeRunningJob(type: string, siteId: string): JobRow {
+  return {
+    id: 'job-1', type, payload_json: { site_id: siteId }, dedupe_key: 'k', resource_type: 'site',
+    resource_id: siteId, owner_id: 'owner-1', status: 'running', attempts: 1, max_attempts: 1,
+    fencing_token: '7', lease_until: null, step: null, completed_steps: 0, total_steps: null,
+    last_error_code: null, result_json: null, created_at: new Date(), updated_at: new Date(),
+  } as unknown as JobRow;
+}
+
+const SETUP_KEY = 'test-partner-webhook-key';
+
+function siteRow(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+  return {
+    id: 'site-1', owner_id: 'owner-1', entitlement_id: null, template_version_id: 'v1',
+    display_name: 'Site', subdomain: 'site-1', default_locale: 'vi', status: 'active',
+    demo_session_id: null, runtime_kind: 'runtime', runtime_port: null, runtime_pid: null, runtime_uid: 20001,
+    ...overrides,
+  };
+}
+
+describe('site.setup-token job (H2 fix 1)', () => {
+  it('reads and trims the token file; missing or empty means not pending', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-setup-token-'));
+    const config = { workDir } as unknown as PlatformConfig;
+    await expect(readSiteSetupToken(config, 'site-1')).resolves.toBeNull();
+    const dataDir = join(workDir, 'sites', 'site-1', 'data');
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(join(dataDir, 'setup-token.txt'), '  tok-abc\n', 'utf8');
+    await expect(readSiteSetupToken(config, 'site-1')).resolves.toBe('tok-abc');
+    await writeFile(join(dataDir, 'setup-token.txt'), '   \n', 'utf8');
+    await expect(readSiteSetupToken(config, 'site-1')).resolves.toBeNull();
+  });
+
+  it('publishes the token SEALED in the job result, never in plaintext', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-setup-token-'));
+    const dataDir = join(workDir, 'sites', 'site-1', 'data');
+    await mkdir(dataDir, { recursive: true });
+    await writeFile(join(dataDir, 'setup-token.txt'), 'tok-secret-xyz', 'utf8');
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow(), captured);
+    const config = { workDir, partnerWebhookKey: SETUP_KEY } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.setup-token', 'site-1'));
+
+    const published = captured.find((u) => u.sql.includes('SET result_json'));
+    expect(published).toBeTruthy();
+    const result = JSON.parse(published!.params[2] as string) as { token_enc: string | null };
+    expect(result.token_enc).toBeTruthy();
+    expect(result.token_enc).not.toContain('tok-secret-xyz');
+    expect(decryptSecret(SETUP_KEY, result.token_enc!)).toBe('tok-secret-xyz');
+    // And the job completed normally afterwards.
+    expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+  });
+
+  it('publishes token_enc null when setup is not pending', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-setup-token-'));
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow(), captured);
+    const config = { workDir, partnerWebhookKey: SETUP_KEY } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.setup-token', 'site-1'));
+
+    const published = captured.find((u) => u.sql.includes('SET result_json'));
+    expect(JSON.parse(published!.params[2] as string)).toEqual({ token_enc: null });
+  });
+});
+
+describe('site.purge job (H2 fix 2)', () => {
+  it('deletes the tree, releases the UID, and only then marks the site purged', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-purge-'));
+    const tree = join(workDir, 'sites', 'site-1');
+    await mkdir(join(tree, 'data'), { recursive: true });
+    await writeFile(join(tree, 'server.mjs'), 'code');
+    await writeFile(join(tree, 'data', 'content.json'), '{}');
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow({ status: 'delete_scheduled' }), captured);
+    const config = { workDir } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.purge', 'site-1'));
+
+    expect(existsSync(tree)).toBe(false);
+    expect(captured.some((u) => u.sql.includes('SET runtime_uid = NULL'))).toBe(true);
+    expect(captured.some((u) => u.sql.includes("status = 'purged'"))).toBe(true);
+    expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
+    // The purge update happens strictly after the UID release.
+    const releaseIdx = captured.findIndex((u) => u.sql.includes('SET runtime_uid = NULL'));
+    const purgeIdx = captured.findIndex((u) => u.sql.includes("status = 'purged'"));
+    expect(purgeIdx).toBeGreaterThan(releaseIdx);
+  });
+
+  it('a failed delete fails the job with site_purge_failed and never marks the site purged', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-purge-fail-'));
+    // `sites` as a regular file makes the tree path undeletable (ENOTDIR).
+    await writeFile(join(workDir, 'sites'), 'not a directory', 'utf8');
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow({ status: 'delete_scheduled' }), captured);
+    const config = { workDir } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.purge', 'site-1'));
+
+    const failure = captured.find((u) => u.sql.includes('SET status = $3'));
+    expect(failure).toBeTruthy();
+    expect(failure!.params[2]).toBe('failed');
+    expect(failure!.params[3]).toBe('site_purge_failed');
+    expect(captured.some((u) => u.sql.includes("status = 'purged'"))).toBe(false);
+    expect(captured.some((u) => u.sql.includes('SET runtime_uid = NULL'))).toBe(false);
+  });
+
+  it('is idempotent for an already-purged site (no filesystem or row writes)', async () => {
+    const workDir = await mkdtemp(join(tmpdir(), 'mp-purge-again-'));
+    const captured: CapturedUpdate[] = [];
+    const db = fakeSiteJobDb(siteRow({ status: 'purged' }), captured);
+    const config = { workDir } as unknown as PlatformConfig;
+    const store = {} as unknown as LocalObjectStore;
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.purge', 'site-1'));
+
+    expect(captured.some((u) => u.sql.startsWith('UPDATE sites'))).toBe(false);
+    expect(captured.some((u) => u.sql.includes("status = 'succeeded'"))).toBe(true);
   });
 });

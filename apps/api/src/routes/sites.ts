@@ -1,13 +1,11 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
-import { readFile } from 'node:fs/promises';
-import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { lookup, resolveTxt } from 'node:dns/promises';
 import { domainToASCII } from 'node:url';
 import { isIP } from 'node:net';
 import type { FastifyInstance } from 'fastify';
-import { enqueueJob, isUniqueViolation, safeEqualHex, tx, validateDynamicContent, writeAudit } from '@3t/core';
+import { enqueueJob, clearJobResult, decryptSecret, isUniqueViolation, safeEqualHex, tx, validateDynamicContent, writeAudit, type Db, type PlatformConfig } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { isPublicIp, pinnedRequest } from '../lib/ssrf.ts';
@@ -483,15 +481,64 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   // under their own entitlement; the platform never calls the site's
   // admin and never touches another tenant's directory. Restores are
   // step-up + name-confirmed, like whole-tree restores.
+  /**
+   * Wait for the worker to answer a site.setup-token read job (H2
+   * gating fix 1). The worker publishes the token SEALED (core
+   * encryptSecret envelope) in the job's result_json; this process
+   * opens it and scrubs the row immediately, so the one-time token
+   * rests in the jobs table only for the hand-off, and only encrypted.
+   * A failed/dead job — or a worker that never answers within
+   * adminSetupWaitMs — is an explicit error, NEVER a false
+   * "setup not pending": the direct-read code this replaces could not
+   * distinguish "no token file" from "cannot read the file", which is
+   * precisely the silent-null failure the cutover would have shipped.
+   */
+  async function waitForSetupToken(db: Db, config: PlatformConfig, jobId: string): Promise<string | null> {
+    const deadline = Date.now() + config.adminSetupWaitMs;
+    for (;;) {
+      const { rows } = await db.query<{ status: string; result_json: { token_enc?: string | null } | null }>(
+        'SELECT status, result_json FROM jobs WHERE id = $1',
+        [jobId],
+      );
+      const row = rows[0];
+      if (row?.status === 'succeeded') {
+        const sealed = row.result_json?.token_enc ?? null;
+        await clearJobResult(db, jobId);
+        if (!sealed) return null;
+        try {
+          return decryptSecret(config.partnerWebhookKey, sealed) || null;
+        } catch {
+          throw errors.badRequest('site.setup_token_unavailable');
+        }
+      }
+      if (!row || row.status === 'failed' || row.status === 'dead' || row.status === 'cancelled') {
+        throw errors.badRequest('site.setup_token_unavailable');
+      }
+      if (Date.now() > deadline) throw errors.badRequest('site.setup_token_unavailable');
+      await new Promise((r) => setTimeout(r, 150));
+    }
+  }
+
   app.get<{ Params: { id: string } }>('/sites/:id/admin-setup', async (request) => {
     const auth = requireUser(request);
     const site = await loadDynamicSite(request.params.id, auth.userId);
-    let token: string | null = null;
-    try {
-      token = (await readFile(join(config.workDir, 'sites', site.id, 'data', 'setup-token.txt'), 'utf8')).trim() || null;
-    } catch {
-      token = null;
-    }
+    // The setup token lives inside the site's fenced tree (root 01700 /
+    // data 0700 owned by the site UID): as the non-root app user this
+    // process cannot traverse it, so the read is delegated to the
+    // worker (site.setup-token job) — the same intent-as-jobs pattern
+    // demo sessions adopted in sandbox Phase 0. Authorization (owner
+    // only, via loadDynamicSite), the audit entry, and the response
+    // shape are unchanged from the direct-read era.
+    const { job } = await enqueueJob(db, {
+      type: 'site.setup-token',
+      dedupeKey: `site.setup-token:${site.id}:${randomBytes(6).toString('hex')}`,
+      payload: { site_id: site.id },
+      resourceType: 'site',
+      resourceId: site.id,
+      ownerId: auth.userId,
+      maxAttempts: 1,
+    });
+    const token = await waitForSetupToken(db, config, job.id);
     const base = siteUrl(site, config.siteOriginTemplate)?.replace(/\/$/, '') ?? null;
     if (token) {
       await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.admin_setup_viewed', resourceType: 'site', resourceId: site.id, traceId: request.id });

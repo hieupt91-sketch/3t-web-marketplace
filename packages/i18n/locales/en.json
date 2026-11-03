@@ -32,6 +32,7 @@
   "error.refund.not_pending": "The refund is not awaiting provider settlement.",
   "error.refund.not_requested": "The refund request is not awaiting approval.",
   "error.refund.order_not_refundable": "The order is not in a refundable state.",
+  "error.site.setup_token_unavailable": "The setup code cannot be read right now. Please try again in a few minutes.",
   "error.site.update_window_expired": "The free update window for this site has expired (12 months from purchase).",
   "error.request.body_too_large": "The request body is too large.",
   "error.request.idempotency_key_required": "An Idempotency-Key header is required.",

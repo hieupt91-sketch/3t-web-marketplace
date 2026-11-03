@@ -21,6 +21,10 @@ export interface JobRow {
   completed_steps: number;
   total_steps: number | null;
   last_error_code: string | null;
+  /** Worker-published outcome for request/response style jobs (set via
+   *  setJobResult before completion; the requester scrubs it after
+   *  reading — see clearJobResult). Null for fire-and-forget jobs. */
+  result_json: Record<string, unknown> | null;
   created_at: Date;
   updated_at: Date;
 }
@@ -101,6 +105,33 @@ export async function completeJob(db: Queryable, job: JobRow): Promise<void> {
     [job.id, job.fencing_token],
   );
   if (rowCount !== 1) throw new LeaseLostError(job.id);
+}
+
+/**
+ * Publish a job's result while it is still running (request/response
+ * jobs: the requester polls the job row and reads result_json once the
+ * job succeeds). Fencing-guarded like every other completion write, so
+ * a stale worker can never overwrite a re-claimed job's result. The
+ * payload must already be in its at-rest form — callers encrypt secrets
+ * before publishing (see encryptSecret) because the jobs table is read
+ * by every platform service.
+ */
+export async function setJobResult(db: Queryable, job: JobRow, result: Record<string, unknown>): Promise<void> {
+  const { rowCount } = await db.query(
+    `UPDATE jobs SET result_json = $3 WHERE id = $1 AND fencing_token = $2 AND status = 'running'`,
+    [job.id, job.fencing_token, JSON.stringify(result)],
+  );
+  if (rowCount !== 1) throw new LeaseLostError(job.id);
+}
+
+/**
+ * Scrub a consumed job result. Called by the requester right after it
+ * has read (and, for secrets, decrypted) the result, so sensitive
+ * payloads live in the jobs table only for the hand-off window. Not
+ * fencing-guarded: the requester owns the read, not the lease.
+ */
+export async function clearJobResult(db: Queryable, jobId: string): Promise<void> {
+  await db.query('UPDATE jobs SET result_json = NULL WHERE id = $1', [jobId]);
 }
 
 /** Exponential backoff with full jitter, capped (seconds). */

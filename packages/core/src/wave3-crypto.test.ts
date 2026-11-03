@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   BACKUP_CODE_HASH_PREFIX,
+  decryptSecret,
+  encryptSecret,
   findBackupCodeIndex,
   hashBackupCode,
   hashToken,
@@ -102,5 +104,18 @@ describe('MFA backup codes (L-05)', () => {
     expect(await findBackupCodeIndex('99999-99999-99999-99999', stored)).toBe(-1);
     // A 6-digit TOTP-shaped guess never reaches the scrypt entries.
     expect(await findBackupCodeIndex('123456', stored)).toBe(-1);
+  });
+});
+
+describe('secret envelope (H2 fix 1: worker → API job-result hand-off)', () => {
+  it('round-trips a secret and rejects the wrong key', () => {
+    const sealed = encryptSecret('server-key-A', 'tok-secret-123');
+    expect(sealed).not.toContain('tok-secret-123');
+    expect(decryptSecret('server-key-A', sealed)).toBe('tok-secret-123');
+    expect(() => decryptSecret('server-key-B', sealed)).toThrow();
+  });
+
+  it('produces a fresh envelope per call (random IV)', () => {
+    expect(encryptSecret('k', 'same-value')).not.toBe(encryptSecret('k', 'same-value'));
   });
 });

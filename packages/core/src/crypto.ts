@@ -1,4 +1,4 @@
-import { createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
+import { createCipheriv, createDecipheriv, createHash, randomBytes, scrypt, timingSafeEqual } from 'node:crypto';
 
 /** 256-bit random token, URL safe. Only its hash is stored. */
 export function randomToken(bytes = 32): string {
@@ -11,6 +11,38 @@ export function hashToken(token: string): Buffer {
 
 export function sha256Hex(input: string | Buffer): string {
   return createHash('sha256').update(input).digest('hex');
+}
+
+/**
+ * AES-256-GCM envelope for a secret that must cross a trust seam without
+ * ever resting in plaintext (key = sha256 of the server-side env value,
+ * wire form base64(iv ‖ tag ‖ ciphertext)). This is the platform's ONE
+ * envelope format — byte-identical to the twin in
+ * apps/api/src/lib/secret-store.ts (which adds the settings-JSON sealing
+ * layer on top); the two implementations must never diverge, or values
+ * sealed by one service become unreadable by the other.
+ *
+ * Current cross-service use (H2 gating fix 1): the worker reads a site's
+ * one-time admin setup token out of its fenced tree and returns it to the
+ * API inside a job result — the API is non-root and cannot read the file
+ * itself, and the raw token must not sit in the jobs table in plaintext.
+ */
+export function encryptSecret(serverKey: string, secret: string): string {
+  const key = createHash('sha256').update(serverKey).digest();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  const ciphertext = Buffer.concat([cipher.update(secret, 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString('base64');
+}
+
+export function decryptSecret(serverKey: string, encoded: string): string {
+  const key = createHash('sha256').update(serverKey).digest();
+  const buf = Buffer.from(encoded, 'base64');
+  const iv = buf.subarray(0, 12);
+  const tag = buf.subarray(12, 28);
+  const decipher = createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(tag);
+  return Buffer.concat([decipher.update(buf.subarray(28)), decipher.final()]).toString('utf8');
 }
 
 const BASE32 = 'abcdefghijklmnopqrstuvwxyz234567';

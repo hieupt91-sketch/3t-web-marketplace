@@ -1,5 +1,3 @@
-import { rm } from 'node:fs/promises';
-import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { randomBytes } from 'node:crypto';
 import { enqueueJob, isUniqueViolation } from '@3t/core';
@@ -20,7 +18,7 @@ function assertId(id: string) {
  * from the site directory via a restart job.
  */
 export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
-  const { db, config } = app.deps;
+  const { db } = app.deps;
 
   app.get<{ Querystring: { status?: string } }>('/sites', async (request) => {
     requirePermission(request, 'site:operate');
@@ -185,7 +183,7 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
 
   // Renewal/grace/suspend/purge lifecycle sweep (AT-29), driven by policy_snapshot.
   app.post('/sites/lifecycle-sweep', async (request) => {
-    requirePermission(request, 'ops:execute');
+    const auth = requirePermission(request, 'ops:execute');
     const now = new Date();
     const toGrace = await db.query(
       `UPDATE subscriptions SET status = 'grace' WHERE status = 'active' AND current_period_end < now() RETURNING site_id`,
@@ -207,16 +205,38 @@ export async function adminHostingRoutes(app: FastifyInstance): Promise<void> {
         suspended += 1;
       }
     }
-    const purgeable = await db.query<{ id: string; runtime_pid: number | null }>(
-      "SELECT id, runtime_pid FROM sites WHERE status = 'delete_scheduled' AND purge_at < now()",
+    // Purge (H2 gating fix 2): deleting a fenced site tree belongs to
+    // the worker (site.purge job). This process is non-root after the
+    // H2 cutover; its old inline rm silently no-oped against the
+    // 01700/0700 fence while the row still flipped to 'purged'. The
+    // sweep now only enqueues — the worker kills the runtime, deletes
+    // the tree, releases the site UID, and marks the row purged last.
+    // A failed purge job leaves the site 'delete_scheduled', so the
+    // next sweep re-enqueues it; a site with a purge already queued or
+    // running is counted, not duplicated. The response therefore
+    // reports purge_queued (purges in flight after this sweep), not
+    // completed deletions.
+    const purgeable = await db.query<{ id: string }>(
+      "SELECT id FROM sites WHERE status = 'delete_scheduled' AND purge_at < now()",
     );
-    let purged = 0;
+    let purgeQueued = 0;
     for (const site of purgeable.rows) {
-      killPid(site.runtime_pid);
-      await rm(join(config.workDir, 'sites', site.id), { recursive: true, force: true });
-      await db.query("UPDATE sites SET status = 'purged', subdomain = NULL, purge_at = NULL WHERE id = $1", [site.id]);
-      purged += 1;
+      const inFlight = await db.query<{ id: string }>(
+        "SELECT id FROM jobs WHERE type = 'site.purge' AND resource_id = $1 AND status IN ('queued', 'running') LIMIT 1",
+        [site.id],
+      );
+      if (!inFlight.rows[0]) {
+        await enqueueJob(db, {
+          type: 'site.purge',
+          dedupeKey: `site.purge:${site.id}:${randomBytes(6).toString('hex')}`,
+          payload: { site_id: site.id },
+          resourceType: 'site',
+          resourceId: site.id,
+          ownerId: auth.userId,
+        });
+      }
+      purgeQueued += 1;
     }
-    return { data: { to_grace: toGrace.rowCount ?? 0, suspended, purged } };
+    return { data: { to_grace: toGrace.rowCount ?? 0, suspended, purge_queued: purgeQueued } };
   });
 }

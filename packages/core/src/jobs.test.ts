@@ -1,5 +1,5 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { backoffSeconds, claimJob, completeJob, enqueueJob, failJob, heartbeat, LeaseLostError, requeueJob } from './jobs.ts';
+import { backoffSeconds, claimJob, clearJobResult, completeJob, enqueueJob, failJob, heartbeat, LeaseLostError, requeueJob, setJobResult } from './jobs.ts';
 import { createTestDatabase } from './testing.ts';
 import type { Db } from './db.ts';
 
@@ -67,5 +67,35 @@ describe('schema invariants', () => {
     await db.query("INSERT INTO audit_logs (actor_type, action, resource_type, trace_id) VALUES ('system', 'x', 'y', 't')");
     await expect(db.query('UPDATE audit_logs SET action = $1', ['changed'])).rejects.toThrow(/append-only/);
     await expect(db.query('DELETE FROM audit_logs')).rejects.toThrow(/append-only/);
+  });
+});
+
+describe('job result channel (migration 0044, H2 fix 1)', () => {
+  it('publishes a result while running, keeps it after completion, scrubs on clear', async () => {
+    await enqueueJob(db, { type: 't.result', dedupeKey: 'result-1', payload: {} });
+    const job = (await claimJob(db, 'w', ['t.result'], 30))!;
+    expect(job.result_json).toBeNull();
+    await setJobResult(db, job, { token_enc: 'sealed-value' });
+    await completeJob(db, job);
+    const { rows } = await db.query<{ status: string; result_json: { token_enc: string } | null }>(
+      'SELECT status, result_json FROM jobs WHERE id = $1',
+      [job.id],
+    );
+    expect(rows[0]!.status).toBe('succeeded');
+    expect(rows[0]!.result_json).toEqual({ token_enc: 'sealed-value' });
+    await clearJobResult(db, job.id);
+    const after = await db.query<{ result_json: unknown }>('SELECT result_json FROM jobs WHERE id = $1', [job.id]);
+    expect(after.rows[0]!.result_json).toBeNull();
+  });
+
+  it('fences a stale worker out of publishing a result', async () => {
+    await enqueueJob(db, { type: 't.result-fence', dedupeKey: 'result-fence-1', payload: {} });
+    const stale = (await claimJob(db, 'w1', ['t.result-fence'], 30))!;
+    await db.query("UPDATE jobs SET lease_until = now() - interval '1 second' WHERE id = $1", [stale.id]);
+    const fresh = (await claimJob(db, 'w2', ['t.result-fence'], 30))!;
+    await expect(setJobResult(db, stale, { token_enc: 'stale' })).rejects.toBeInstanceOf(LeaseLostError);
+    await setJobResult(db, fresh, { token_enc: 'fresh' });
+    const { rows } = await db.query<{ result_json: { token_enc: string } | null }>('SELECT result_json FROM jobs WHERE id = $1', [stale.id]);
+    expect(rows[0]!.result_json).toEqual({ token_enc: 'fresh' });
   });
 });
