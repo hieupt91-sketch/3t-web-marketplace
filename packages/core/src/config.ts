@@ -99,6 +99,24 @@ export interface PlatformConfig {
   siteLimitAddressSpaceMb: number;
   siteLimitMaxProcesses: number;
   siteLimitFileSizeMb: number;
+  /**
+   * Sandbox Phase 1 (audit C-01): base URL of the dedicated site-runner
+   * service (e.g. http://site-runner:4300). When set, the worker NEVER
+   * spawns template code itself — every spawn/stop goes to the runner,
+   * whose environment holds no platform credentials — and fails closed
+   * on runner errors instead of falling back to a local spawn. Empty
+   * (default) keeps the Phase 0 local-spawn behaviour (dev, show env).
+   */
+  runtimeAgentUrl: string;
+  /** Shared secret authenticating worker → runner calls (x-runner-token). */
+  runnerToken: string;
+  /**
+   * RSS cap (MiB) for spawned site/demo/import-check servers, enforced by
+   * the runner's watchdog (Phase 1). RLIMIT_RSS is a no-op on Linux, so
+   * this only takes effect in runner mode; it is sent on the wire with
+   * every spawn either way.
+   */
+  siteLimitRssMb: number;
   /** How long the API waits for the worker to spawn a demo session server. */
   demoSpawnWaitMs: number;
   /** How long the API waits for the worker to read a site's admin setup
@@ -182,12 +200,18 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     siteLimitAddressSpaceMb: Number(env('SITE_LIMIT_ADDRESS_SPACE_MB', '32768')),
     siteLimitMaxProcesses: Number(env('SITE_LIMIT_MAX_PROCESSES', '256')),
     siteLimitFileSizeMb: Number(env('SITE_LIMIT_FILE_SIZE_MB', '1024')),
+    runtimeAgentUrl: env('RUNTIME_AGENT_URL', ''),
+    runnerToken: env('RUNNER_TOKEN', ''),
+    siteLimitRssMb: Number(env('SITE_LIMIT_RSS_MB', '1024')),
     demoSpawnWaitMs: Number(env('DEMO_SPAWN_WAIT_MS', '30000')),
     adminSetupWaitMs: Number(env('ADMIN_SETUP_WAIT_MS', '10000')),
     ...overrides,
   };
   if (config.env === 'production' && !config.cookieSecure) throw new Error('COOKIE_SECURE must be true in production');
   if (config.env === 'production' && config.mailTransport === 'file') throw new Error('MAIL_TRANSPORT=file is development only');
+  if (config.env === 'production' && config.runtimeAgentUrl && !config.runnerToken) {
+    throw new Error('RUNNER_TOKEN is required when RUNTIME_AGENT_URL is set in production');
+  }
   const portalHost = new URL(config.portalOrigin).hostname;
   if (portalHost === config.previewBaseDomain || portalHost.endsWith(`.${config.previewBaseDomain}`)) {
     throw new Error('Preview base domain must differ from the portal host (ADR-005)');
