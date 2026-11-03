@@ -1,6 +1,8 @@
 # Staging image for the Next.js storefront.
 # Build with: docker build -f deploy/Dockerfile.web --build-arg API_INTERNAL_URL=http://api:4000 -t mp-web .
-FROM node:22-bookworm-slim
+# Digest pinned 2026-11-03 (manifest-list digest for tag node:22-bookworm-slim,
+# resolved via the Docker Hub registry API; same pin as Dockerfile.node).
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 WORKDIR /app
 RUN corepack enable
 COPY pnpm-workspace.yaml package.json pnpm-lock.yaml ./
@@ -17,4 +19,21 @@ ARG API_INTERNAL_URL=http://api:4000
 ENV API_INTERNAL_URL=$API_INTERNAL_URL
 RUN pnpm --filter @3t/web build
 ENV NODE_ENV=production
+# H2 prep — non-root runtime user (uid/gid 10001, "app"), matching
+# Dockerfile.node. docker-compose.yml sets `user: "10001:10001"` for web.
+# This image is NOT Next standalone (no output:'standalone' in
+# next.config.ts): the server runs from the full workspace via
+# `pnpm --filter @3t/web exec next start`, so the whole tree is chowned —
+# critically apps/web/.next, whose ISR/fetch/image caches Next writes at
+# runtime. COREPACK_HOME is re-prepared under /app for the same reason as
+# Dockerfile.node: the build-time corepack cache under /root is unreadable
+# to a non-root runtime user, and `pnpm` must not download at start.
+RUN groupadd --gid 10001 app \
+ && useradd --uid 10001 --gid app --home-dir /app/.home --no-create-home \
+      --shell /usr/sbin/nologin app \
+ && mkdir -p /app/.home /app/.corepack \
+ && COREPACK_HOME=/app/.corepack corepack prepare pnpm@10.28.0 --activate \
+ && chown -R app:app /app
+ENV HOME=/app/.home
+ENV COREPACK_HOME=/app/.corepack
 CMD ["pnpm", "--filter", "@3t/web", "exec", "next", "start", "--port", "3000", "-H", "0.0.0.0"]

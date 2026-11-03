@@ -8,7 +8,10 @@
 # the owner on the VPS host, not by this file.
 services:
   postgres:
-    image: postgres:16-alpine
+    # Digest pinned 2026-11-03 (manifest-list digest for tag
+    # postgres:16-alpine, resolved via the Docker Hub registry API).
+    # Re-resolve and update deliberately — never float on the tag alone.
+    image: postgres:16-alpine@sha256:0cefaabd882e42bcb2a2f3dc56d3ce4770560ba62fd7f197f1a2e008fd5731ab
     environment:
       - POSTGRES_DB=marketplace
       - POSTGRES_USER=marketplace
@@ -28,6 +31,9 @@ services:
       dockerfile: deploy/Dockerfile.node
       args:
         APP: api
+    # H2: run as the non-root "app" user created in Dockerfile.node.
+    # Requires the one-time appdata chown in the H2 cutover notes first.
+    user: "10001:10001"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -47,6 +53,12 @@ services:
       dockerfile: deploy/Dockerfile.node
       args:
         APP: worker
+    # NO `user:` here — INTENTIONAL. The worker is the v48 sandbox
+    # privilege boundary: it chowns site fences and setuids spawned site
+    # processes into the 20000-20499 UID pool (plus 19998 demo / 19999
+    # import), and SANDBOX_UID_MODE=on refuses to start without euid 0.
+    # It must keep running as root until spawn privilege moves to the
+    # Phase 1 site-runner. Every other platform service runs non-root.
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -66,6 +78,9 @@ services:
       dockerfile: deploy/Dockerfile.node
       args:
         APP: preview
+    # H2: non-root "app" user (see api). Preview only READS the shared
+    # appdata volume (object store), it never writes it.
+    user: "10001:10001"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -86,6 +101,9 @@ services:
       dockerfile: deploy/Dockerfile.node
       args:
         APP: site-router
+    # H2: non-root "app" user (see api). The router holds no volume and
+    # writes nothing — routing state is an in-memory cache + Postgres.
+    user: "10001:10001"
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace
@@ -113,6 +131,9 @@ services:
       dockerfile: deploy/Dockerfile.web
       args:
         API_INTERNAL_URL: http://api:4000
+    # H2: non-root "app" user created in Dockerfile.web. The image chowns
+    # /app (incl. apps/web/.next) so Next's runtime caches stay writable.
+    user: "10001:10001"
     env_file: .env
     environment:
       - API_INTERNAL_URL=http://api:4000

@@ -1,9 +1,14 @@
 # Staging image for the TypeScript services (api, worker, preview, site-router).
 # They run from source with tsx, exactly like development — this keeps staging
-# faithful without a separate compile step. Production hardening (compiled
-# builds, non-root user, read-only rootfs) is a later milestone.
+# faithful without a separate compile step. Non-root runtime for the
+# platform services is prepared in this file (see the "app" user below and
+# `user:` in docker-compose.yml); compiled builds and a read-only rootfs
+# remain later milestones.
 # Build with: docker build -f deploy/Dockerfile.node --build-arg APP=api -t mp-api .
-FROM node:22-bookworm-slim
+# Digest pinned 2026-11-03 (manifest-list digest for tag node:22-bookworm-slim,
+# resolved via the Docker Hub registry API). Re-resolve the tag's digest and
+# update this pin deliberately — never float on the tag alone.
+FROM node:22-bookworm-slim@sha256:4b150b48b4116e2a22f2c39cc27025fbf4f153e2078fd3b14d159fdb5c7279da
 WORKDIR /app
 RUN corepack enable
 # Sandbox Phase 0 (audit C-01): the worker spawns template code under
@@ -39,5 +44,30 @@ RUN corepack prepare pnpm@10.28.0 --activate && pnpm install --frozen-lockfile
 COPY . .
 ARG APP=api
 ENV APP=$APP
+# H2 prep — non-root runtime user (uid/gid 10001, "app"). docker-compose.yml
+# sets `user: "10001:10001"` for api, preview and site-router; the WORKER
+# service deliberately keeps running as root (it is the v48 sandbox privilege
+# boundary: it chowns fences and setuids spawned site processes into the
+# 20000+ UID pool), so everything added here must be — and is — harmless
+# when the same image runs as root.
+# - /app is chowned to app so tsx/pnpm/next caches and any app-tree writes
+#   work for the runtime user (the services run TypeScript source via tsx).
+# - HOME and COREPACK_HOME point inside the app-owned tree: the build-time
+#   corepack cache lives under /root, which a non-root runtime user cannot
+#   read, so pnpm is prepared a second time into /app/.corepack (readable
+#   by app; root ignores it). Without this, `pnpm start` as uid 10001
+#   would try to download pnpm at container start.
+# - runtime-data is the appdata volume mountpoint; the directory is created
+#   app-owned here so a FRESH volume initialises with the right owner. An
+#   EXISTING volume keeps its current (root) ownership — see the one-time
+#   chown list in the H2 cutover notes before enabling `user:`.
+RUN groupadd --gid 10001 app \
+ && useradd --uid 10001 --gid app --home-dir /app/.home --no-create-home \
+      --shell /usr/sbin/nologin app \
+ && mkdir -p /app/.home /app/.corepack /app/runtime-data \
+ && COREPACK_HOME=/app/.corepack corepack prepare pnpm@10.28.0 --activate \
+ && chown -R app:app /app
+ENV HOME=/app/.home
+ENV COREPACK_HOME=/app/.corepack
 # Services bind 0.0.0.0 via API_HOST / PREVIEW_HOST in docker-compose.yml.
 CMD ["sh", "-c", "pnpm --filter @3t/$APP start"]
