@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import { hashToken, type Db, type LocalObjectStore, type MockPaymentProvider, type PlatformConfig } from '@3t/core';
+import { hashToken, sessionLimits, sessionRejectionReason, shouldRefreshLastSeen, type Db, type LocalObjectStore, type MockPaymentProvider, type PlatformConfig } from '@3t/core';
 import { MESSAGES, negotiateLocale, translate, type Locale } from '@3t/i18n';
 import { AppError, errors } from './errors.ts';
 import type { Mailer } from './mail.ts';
@@ -60,10 +60,25 @@ declare module 'fastify' {
     auth: AuthContext | null;
     sessionInvalid: boolean;
     locale: Locale;
+    /** Exact request bytes for webhook routes that verify HMAC over the raw body (audit L-01). */
+    rawBody?: string;
   }
   interface FastifyInstance {
     deps: AppDeps;
   }
+}
+
+/**
+ * Path shape safe for request logs (audit L-04): query strings are
+ * dropped (they may carry one-time tokens) and the token segment of
+ * token-in-path routes is redacted — today that is the one-time bundle
+ * download, `GET /api/v1/downloads/:token` (the only `:token` route;
+ * keep this list in step when new ones are added). Everything else
+ * passes through unchanged.
+ */
+export function redactRequestPath(url: string): string {
+  const path = url.split('?')[0]!;
+  return path.replace(/(\/downloads\/)[^/]+/g, '$1[redacted]');
 }
 
 /** Localised message for an error code; unknown codes get a generic message with the request ID shown by the UI. */
@@ -74,7 +89,7 @@ export function errorMessage(locale: Locale, code: string): string {
 
 const MUTATING = new Set(['POST', 'PUT', 'PATCH', 'DELETE']);
 
-async function loadSession(request: FastifyRequest, db: Db): Promise<void> {
+async function loadSession(request: FastifyRequest, db: Db, config: PlatformConfig): Promise<void> {
   request.auth = null;
   request.sessionInvalid = false;
   const token = request.cookies[SESSION_COOKIE];
@@ -90,9 +105,12 @@ async function loadSession(request: FastifyRequest, db: Db): Promise<void> {
     row_version: number;
     roles: string[];
     permissions: string[];
+    created_at: Date;
+    last_seen_at: Date;
   }>(
     `SELECT s.id AS session_id, u.id AS user_id, u.email_normalized, u.display_name, u.verified_at,
             u.preferred_locale, u.timezone, u.row_version,
+            s.created_at, s.last_seen_at,
             COALESCE(array_agg(DISTINCT r.code) FILTER (WHERE r.code IS NOT NULL), '{}') AS roles,
             COALESCE(array_agg(DISTINCT p.code) FILTER (WHERE p.code IS NOT NULL), '{}') AS permissions
      FROM sessions s
@@ -110,6 +128,18 @@ async function loadSession(request: FastifyRequest, db: Db): Promise<void> {
     request.sessionInvalid = true;
     return;
   }
+  // Lifetime policy (audit L-03, values in core config): an absolute
+  // cap and an idle timeout, both keyed on the user's CURRENT role
+  // class. A session past either limit is rejected AND revoked, so it
+  // cannot be revived by a later role removal. Pre-policy sessions are
+  // not bulk-revoked at deploy; they simply fail this check on next use.
+  const now = new Date();
+  const reason = sessionRejectionReason(sessionLimits(config, row.roles.length > 0), row.created_at, row.last_seen_at, now);
+  if (reason) {
+    await db.query('UPDATE sessions SET revoked_at = now() WHERE id = $1 AND revoked_at IS NULL', [row.session_id]);
+    request.sessionInvalid = true;
+    return;
+  }
   request.auth = {
     userId: row.user_id,
     sessionId: row.session_id,
@@ -122,8 +152,10 @@ async function loadSession(request: FastifyRequest, db: Db): Promise<void> {
     roles: row.roles,
     permissions: new Set(row.permissions),
   };
-  // Touch at most once a minute to avoid a write per request.
-  await db.query("UPDATE sessions SET last_seen_at = now() WHERE id = $1 AND last_seen_at < now() - interval '1 minute'", [row.session_id]);
+  // Touch throttled to once per 5 minutes to avoid a write per request.
+  if (shouldRefreshLastSeen(row.last_seen_at, now)) {
+    await db.query("UPDATE sessions SET last_seen_at = now() WHERE id = $1 AND last_seen_at < now() - interval '5 minutes'", [row.session_id]);
+  }
 }
 
 /**
@@ -177,8 +209,8 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
           level: 'info',
           redact: { paths: ['req.headers.cookie', 'req.headers.authorization', 'res.headers["set-cookie"]'], censor: '[redacted]' },
           serializers: {
-            // Never log query strings: they may carry one-time tokens.
-            req: (req: { method: string; url: string; id: string }) => ({ method: req.method, path: req.url.split('?')[0], id: req.id }),
+            // Never log query strings or token path segments: they may carry one-time tokens.
+            req: (req: { method: string; url: string; id: string }) => ({ method: req.method, path: redactRequestPath(req.url), id: req.id }),
           },
         }
       : false,
@@ -207,6 +239,26 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
   // Large uploads are streamed by the dedicated route; the parser hands over the raw stream.
   app.addContentTypeParser(['application/zip', 'application/octet-stream'], (_req, payload, done) => done(null, payload));
 
+  // Raw-body capture for HMAC-verified webhooks (audit L-01): for the
+  // webhook prefixes, the exact received bytes are stashed on
+  // request.rawBody so signature verification binds to what was
+  // actually sent, not a re-serialisation of the parsed JSON. Every
+  // other route gets exactly the parsed body it got from Fastify's
+  // default JSON parser (empty body → {}).
+  app.addContentTypeParser('application/json', { parseAs: 'string' }, (request, body, done) => {
+    const raw = body as string;
+    if (request.url.startsWith('/api/v1/admin/imports/github-webhook')) request.rawBody = raw;
+    if (raw.trim() === '') {
+      done(null, {});
+      return;
+    }
+    try {
+      done(null, JSON.parse(raw));
+    } catch (error) {
+      done(error as Error);
+    }
+  });
+
   app.addHook('onRequest', async (request, reply) => {
     reply.header('x-request-id', request.id);
     reply.header('cache-control', 'no-store');
@@ -214,9 +266,15 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
     reply.header('referrer-policy', 'no-referrer');
     // HSTS alongside the portal's (audit UI-MED-02): one year, no preload.
     reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains');
+    if (request.url.startsWith('/api/')) {
+      // API responses are JSON, never framed documents (audit
+      // UI-INFO-01): deny all framing and all resource loads.
+      reply.header('content-security-policy', "default-src 'none'; frame-ancestors 'none'");
+      reply.header('x-frame-options', 'DENY');
+    }
     if (!request.url.startsWith('/api/')) return;
     checkOrigin(request, deps.config.portalOrigin);
-    await loadSession(request, deps.db);
+    await loadSession(request, deps.db, deps.config);
     const query = request.query as Record<string, unknown> | undefined;
     request.locale = negotiateLocale({
       explicit: typeof query?.locale === 'string' ? query.locale : undefined,

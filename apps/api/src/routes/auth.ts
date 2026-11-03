@@ -1,5 +1,5 @@
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { dummyPasswordCheck, hashPassword, hashToken, randomToken, tx, verifyPassword, writeAudit, isUniqueViolation } from '@3t/core';
+import { dummyPasswordCheck, findBackupCodeIndex, hashPassword, hashToken, randomToken, tx, verifyPassword, writeAudit, isUniqueViolation } from '@3t/core';
 import { isLocale, type Locale } from '@3t/i18n';
 import { clearSessionCookie, requireUser, setSessionCookie } from '../app.ts';
 import { errors } from '../errors.ts';
@@ -179,7 +179,7 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
         const cookie = req.cookies?.mp_session;
         return cookie ? `${req.ip}|${hashToken(cookie).toString('hex').slice(0, 16)}` : req.ip;
       } } },
-      schema: { body: { type: 'object', additionalProperties: false, required: ['password'], properties: { password: { type: 'string', maxLength: 512 }, totp_code: { type: 'string', minLength: 6, maxLength: 10 } } } } },
+      schema: { body: { type: 'object', additionalProperties: false, required: ['password'], properties: { password: { type: 'string', maxLength: 512 }, totp_code: { type: 'string', minLength: 6, maxLength: 32 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const auditFailure = () => writeAudit(db, {
@@ -196,7 +196,10 @@ export async function authRoutes(app: FastifyInstance): Promise<void> {
       if (mfa.rows[0]) {
         const secret = decryptSecret(config.mfaKey, mfa.rows[0].secret_enc);
         const code = request.body.totp_code ?? '';
-        const backupIndex = mfa.rows[0].backup_codes_hash.indexOf(hashToken(code).toString('hex'));
+        // Wave 3 (code L-05): backup codes exist in two storage formats —
+        // legacy bare sha256 and the new scrypt `s1$` entries; the shared
+        // helper verifies both so step-up accepts the same codes as login.
+        const backupIndex = await findBackupCodeIndex(code, mfa.rows[0].backup_codes_hash);
         if (!verifyTotp(secret, code) && backupIndex === -1) { await auditFailure(); throw errors.unauthenticated('mfa.code_invalid'); }
         if (backupIndex !== -1) {
           await db.query('UPDATE user_mfa SET backup_codes_hash = $2 WHERE user_id = $1', [auth.userId, mfa.rows[0].backup_codes_hash.filter((_, i) => i !== backupIndex)]);

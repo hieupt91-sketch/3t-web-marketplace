@@ -205,8 +205,10 @@ export async function adminGithubRoutes(app: FastifyInstance): Promise<void> {
 
   // GitHub push webhook (AT-57): HMAC-verified, deduped by delivery id, and only for
   // repos the platform has imported before. Creates a new pinned import at head.
-  // Note: like the payment webhooks, verification re-serialises the parsed JSON body;
-  // a future hardening step is capturing the exact raw bytes at the HTTP layer.
+  // The HMAC is verified over the exact raw bytes received (audit L-01):
+  // app.ts captures them on request.rawBody for this route's prefix. The
+  // re-serialised fallback only covers non-HTTP callers (tests injecting
+  // a parsed body through a path that bypasses the content-type parser).
   app.post('/imports/github-webhook', async (request, reply) => {
     const secret = config.githubWebhookSecret;
     if (!secret) throw errors.notFound();
@@ -214,7 +216,7 @@ export async function adminGithubRoutes(app: FastifyInstance): Promise<void> {
     const delivery = request.headers['x-github-delivery'] as string | undefined;
     const event = request.headers['x-github-event'] as string | undefined;
     if (!signature || !delivery) throw errors.badRequest('github.webhook_invalid');
-    const raw = JSON.stringify(request.body ?? {});
+    const raw = request.rawBody ?? JSON.stringify(request.body ?? {});
     const expected = `sha256=${createHmac('sha256', secret).update(raw, 'utf8').digest('hex')}`;
     const a = Buffer.from(signature);
     const b = Buffer.from(expected);

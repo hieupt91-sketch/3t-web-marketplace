@@ -1,6 +1,6 @@
 import { randomBytes } from 'node:crypto';
 import type { FastifyInstance } from 'fastify';
-import { hashToken, writeAudit } from '@3t/core';
+import { findBackupCodeIndex, hashBackupCode, hashToken, writeAudit } from '@3t/core';
 import { requireUser, setSessionCookie } from '../app.ts';
 import { errors } from '../errors.ts';
 import { createSession } from '../lib/identity.ts';
@@ -8,8 +8,15 @@ import { decryptSecret, encryptSecret } from '../lib/secret-store.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { generateTotpSecret, totpAuthUri, verifyTotp } from '../lib/totp.ts';
 
-function backupCode(): string {
-  return randomBytes(5).toString('hex').toUpperCase();
+/**
+ * Backup code (audit L-05): 80 bits of entropy (10 random bytes, was
+ * 40), displayed in groups of five hex characters for readability.
+ * Verification normalises case/separators, so the grouped display form
+ * is what users type back.
+ */
+export function generateBackupCode(): string {
+  const hex = randomBytes(10).toString('hex').toUpperCase();
+  return hex.match(/.{5}/g)!.join('-');
 }
 
 /** MFA (TOTP) + step-up endpoints (docs/04 §5, M1 debt). */
@@ -64,10 +71,13 @@ export async function mfaRoutes(app: FastifyInstance): Promise<void> {
       if (!row || row.verified_at) throw errors.conflict('mfa.not_pending');
       const secret = decryptSecret(config.mfaKey, row.secret_enc);
       if (!verifyTotp(secret, request.body.code)) throw errors.unauthenticated('mfa.code_invalid');
-      const codes = Array.from({ length: 10 }, () => backupCode());
+      const codes = Array.from({ length: 10 }, () => generateBackupCode());
+      // Stored as scrypt hashes under the s1$ prefix (audit L-05);
+      // legacy bare-SHA-256 entries keep verifying via the same helper.
+      const stored = await Promise.all(codes.map((c) => hashBackupCode(c, config.passwordHashCost)));
       await db.query(
         'UPDATE user_mfa SET verified_at = now(), backup_codes_hash = $2 WHERE user_id = $1',
-        [auth.userId, codes.map((c) => hashToken(c).toString('hex'))],
+        [auth.userId, stored],
       );
       await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'mfa.enabled', resourceType: 'user', resourceId: auth.userId, traceId: request.id });
       return reply.status(200).send({ data: { enabled: true, backup_codes: codes } });
@@ -89,7 +99,7 @@ export async function mfaRoutes(app: FastifyInstance): Promise<void> {
     '/auth/mfa-challenge',
     {
       config: { rateLimit: { max: 10, timeWindow: '15 minutes' } },
-      schema: { body: { type: 'object', additionalProperties: false, required: ['challenge_token', 'code'], properties: { challenge_token: { type: 'string', minLength: 1 }, code: { type: 'string', minLength: 6, maxLength: 10 } } } } },
+      schema: { body: { type: 'object', additionalProperties: false, required: ['challenge_token', 'code'], properties: { challenge_token: { type: 'string', minLength: 1 }, code: { type: 'string', minLength: 6, maxLength: 32 } } } } },
     async (request, reply) => {
       const { rows } = await db.query<{ user_id: string }>(
         'SELECT user_id FROM mfa_challenges WHERE token_hash = $1 AND expires_at > now()',
@@ -104,8 +114,9 @@ export async function mfaRoutes(app: FastifyInstance): Promise<void> {
       const row = mfa.rows[0];
       if (!row) throw errors.unauthenticated('mfa.challenge_invalid');
       const secret = decryptSecret(config.mfaKey, row.secret_enc);
-      const codeHash = hashToken(request.body.code).toString('hex');
-      const backupIndex = row.backup_codes_hash.indexOf(codeHash);
+      // Accepts both new s1$ scrypt entries and legacy bare-SHA-256
+      // entries (audit L-05); a match is consumed below, as before.
+      const backupIndex = await findBackupCodeIndex(request.body.code, row.backup_codes_hash);
       if (!verifyTotp(secret, request.body.code) && backupIndex === -1) {
         throw errors.unauthenticated('mfa.code_invalid');
       }

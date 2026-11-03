@@ -29,6 +29,14 @@ export interface PlatformConfig {
   runtimeBindHost: string;
   cookieSecure: boolean;
   sessionTtlHours: number;
+  /** Absolute session lifetime (hours from creation) for role-holding accounts. See the L-03 policy note in loadConfig. */
+  sessionRoleTtlHours: number;
+  /** Absolute session lifetime (hours from creation) for plain buyer accounts. */
+  sessionBuyerTtlHours: number;
+  /** Idle timeout (hours since last_seen_at) for role-holding accounts. */
+  sessionRoleIdleHours: number;
+  /** Idle timeout (hours since last_seen_at) for plain buyer accounts. */
+  sessionBuyerIdleHours: number;
   mailTransport: 'file' | 'disabled';
   mailDir: string;
   chromiumPath: string | null;
@@ -125,7 +133,24 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     siteOriginTemplate: env('SITE_ORIGIN_TEMPLATE', mode === 'production' ? undefined : 'http://{label}.sites.localhost:4200'),
     runtimeBindHost: env('RUNTIME_BIND_HOST', '127.0.0.1'),
     cookieSecure: env('COOKIE_SECURE', mode === 'production' ? 'true' : 'false') === 'true',
-    sessionTtlHours: Number(env('SESSION_TTL_HOURS', '336')),
+    sessionTtlHours: Number(env('SESSION_TTL_HOURS', '168')),
+    // Session lifetime policy (audit L-03). Sessions used to live a
+    // flat 14 days with no idle timeout, so a leaked cookie stayed
+    // useful for two weeks. Role-holding accounts (staff/partner —
+    // anyone with ANY role) can move money and change configuration,
+    // so their sessions are capped at 72 h absolute and 12 h idle.
+    // Plain buyer sessions are lower privilege and get a consumer-
+    // friendly 168 h (7 days) absolute / 48 h idle. The caps are
+    // enforced on every request in loadSession (apps/api/src/app.ts)
+    // against the session's CURRENT role class — a role granted after
+    // login tightens an existing session on its next request — and
+    // createSession caps expires_at to the same values at issuance.
+    // Existing sessions are not bulk-revoked: the loadSession checks
+    // simply reject (and revoke) any session past its cap on next use.
+    sessionRoleTtlHours: Number(env('SESSION_ROLE_TTL_HOURS', '72')),
+    sessionBuyerTtlHours: Number(env('SESSION_BUYER_TTL_HOURS', '168')),
+    sessionRoleIdleHours: Number(env('SESSION_ROLE_IDLE_HOURS', '12')),
+    sessionBuyerIdleHours: Number(env('SESSION_BUYER_IDLE_HOURS', '48')),
     mailTransport: env('MAIL_TRANSPORT', mode === 'production' ? 'disabled' : 'file') as 'file' | 'disabled',
     mailDir: resolve(env('MAIL_DIR', resolve(runtimeData, 'dev-mail'))),
     chromiumPath: process.env.CHROMIUM_PATH || null,
@@ -172,4 +197,39 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
 
 export function previewOrigin(config: PlatformConfig, label: string): string {
   return config.previewOriginTemplate.replace('{label}', label);
+}
+
+/* ---------------- Session lifetime policy (audit L-03) ---------------- */
+
+/** Hard caps applied at session creation, mirroring the loadConfig defaults. */
+export const SESSION_ROLE_TTL_HOURS = 72;
+export const SESSION_BUYER_TTL_HOURS = 168;
+
+/** last_seen_at is refreshed at most this often, so session use is not a write per request. */
+export const SESSION_LAST_SEEN_THROTTLE_MS = 5 * 60_000;
+
+export interface SessionLimits {
+  absoluteTtlHours: number;
+  idleHours: number;
+}
+
+type SessionPolicyConfig = Pick<PlatformConfig, 'sessionRoleTtlHours' | 'sessionBuyerTtlHours' | 'sessionRoleIdleHours' | 'sessionBuyerIdleHours'>;
+
+/** Limits for a session whose user currently holds ANY role (staff/partner) vs a plain buyer. */
+export function sessionLimits(config: SessionPolicyConfig, hasRole: boolean): SessionLimits {
+  return hasRole
+    ? { absoluteTtlHours: config.sessionRoleTtlHours, idleHours: config.sessionRoleIdleHours }
+    : { absoluteTtlHours: config.sessionBuyerTtlHours, idleHours: config.sessionBuyerIdleHours };
+}
+
+/** 'absolute' | 'idle' when the session must be rejected at `now`, else null. */
+export function sessionRejectionReason(limits: SessionLimits, createdAt: Date, lastSeenAt: Date, now: Date): 'absolute' | 'idle' | null {
+  if (now.getTime() - createdAt.getTime() >= limits.absoluteTtlHours * 3_600_000) return 'absolute';
+  if (now.getTime() - lastSeenAt.getTime() >= limits.idleHours * 3_600_000) return 'idle';
+  return null;
+}
+
+/** Throttled touch: only write last_seen_at when it is older than the throttle window. */
+export function shouldRefreshLastSeen(lastSeenAt: Date, now: Date, throttleMs: number = SESSION_LAST_SEEN_THROTTLE_MS): boolean {
+  return now.getTime() - lastSeenAt.getTime() > throttleMs;
 }

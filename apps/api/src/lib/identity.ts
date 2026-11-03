@@ -1,5 +1,5 @@
 import type { PoolClient } from '@3t/core';
-import { hashToken, randomToken, type Queryable } from '@3t/core';
+import { SESSION_BUYER_TTL_HOURS, SESSION_ROLE_TTL_HOURS, hashToken, randomToken, type Queryable } from '@3t/core';
 import { errors } from '../errors.ts';
 
 export function normalizeEmail(raw: unknown): string | null {
@@ -55,10 +55,18 @@ export async function consumeAuthToken(client: PoolClient, token: unknown, purpo
 
 export async function createSession(db: Queryable, userId: string, ttlHours: number, userAgent: string | undefined) {
   const token = randomToken();
+  // Absolute TTL by role class (audit L-03): role-holding accounts are
+  // capped at 72 h, plain buyers at 168 h, whatever longer TTL a caller
+  // asks for. loadSession re-checks the cap against the user's CURRENT
+  // roles on every request, so a role granted later still tightens an
+  // already-issued session.
+  const roles = await db.query('SELECT 1 FROM user_roles WHERE user_id = $1 LIMIT 1', [userId]);
+  const cap = roles.rows.length > 0 ? SESSION_ROLE_TTL_HOURS : SESSION_BUYER_TTL_HOURS;
+  const effectiveTtlHours = Math.min(ttlHours, cap);
   const { rows } = await db.query<{ id: string; expires_at: Date }>(
     `INSERT INTO sessions (user_id, token_hash, user_agent, expires_at)
      VALUES ($1, $2, $3, now() + make_interval(hours => $4)) RETURNING id, expires_at`,
-    [userId, hashToken(token), userAgent?.slice(0, 300) ?? null, ttlHours],
+    [userId, hashToken(token), userAgent?.slice(0, 300) ?? null, effectiveTtlHours],
   );
   return { token, id: rows[0]!.id, expiresAt: rows[0]!.expires_at };
 }

@@ -1,4 +1,5 @@
 import { createHmac, randomBytes } from 'node:crypto';
+import { safeEqual } from '@3t/core';
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 
@@ -60,7 +61,10 @@ export function verifyTotp(secret: string, code: string, atMs: number = Date.now
   if (!/^\d{6}$/.test(code)) return false;
   const step = BigInt(Math.floor(atMs / 30000));
   const key = decodeBase32(secret);
-  return hotp(key, step - 1n) === code || hotp(key, step) === code || hotp(key, step + 1n) === code;
+  // Constant-time comparison for every candidate step (audit L-06):
+  // all three are always computed and compared, no early exit.
+  const matches = [hotp(key, step - 1n), hotp(key, step), hotp(key, step + 1n)].map((candidate) => safeEqual(candidate, code));
+  return matches.includes(true);
 }
 
 export function totpAuthUri(secret: string, account: string, issuer = 'webmaket'): string {

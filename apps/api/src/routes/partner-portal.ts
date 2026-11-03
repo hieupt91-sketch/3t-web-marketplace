@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import type { FastifyInstance, FastifyRequest } from 'fastify';
-import { getSetting, hashToken, loadActivePlans, tx, writeAudit } from '@3t/core';
+import { getSetting, hashToken, loadActivePlans, safeEqualHex, tx, writeAudit } from '@3t/core';
 import { requirePermission, requireUser } from '../app.ts';
 import { errors } from '../errors.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
@@ -82,7 +82,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
       );
       const session = rows[0];
       if (!session || session.status !== 'awaiting_buyer' || new Date(session.expires_at) <= new Date()) throw errors.notFound();
-      if (hashToken(request.body.claim_token).toString('hex') !== session.claim_token_hash) throw errors.forbidden('partner.claim_denied');
+      if (!safeEqualHex(hashToken(request.body.claim_token).toString('hex'), session.claim_token_hash ?? '')) throw errors.forbidden('partner.claim_denied');
       await db.query(`UPDATE checkout_sessions SET status = 'claimed', buyer_id = $2 WHERE id = $1`, [request.params.id, auth.userId]);
       return reply.status(200).send({ data: { id: request.params.id, status: 'claimed', quote_id: session.quote_id, partner_id: session.partner_id } });
     },
@@ -396,7 +396,7 @@ export async function partnerPortalRoutes(app: FastifyInstance): Promise<void> {
   // R12 settings: locale/timezone, return domains, payout profile (masked label only).
   app.post<{ Body: { locale?: string; timezone?: string; return_domains?: string[] } }>(
     '/partner/settings',
-    { schema: { body: { type: 'object', additionalProperties: true, properties: { locale: { type: 'string', enum: ['vi', 'en'] }, timezone: { type: 'string', maxLength: 100 }, return_domains: { type: 'array', items: { type: 'string', maxLength: 253 } } } } } },
+    { schema: { body: { type: 'object', additionalProperties: false, properties: { locale: { type: 'string', enum: ['vi', 'en'] }, timezone: { type: 'string', maxLength: 100 }, return_domains: { type: 'array', items: { type: 'string', maxLength: 253 } } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       await requireStepUp(db, auth);

@@ -7,7 +7,7 @@ import { lookup, resolveTxt } from 'node:dns/promises';
 import { domainToASCII } from 'node:url';
 import { isIP } from 'node:net';
 import type { FastifyInstance } from 'fastify';
-import { enqueueJob, isUniqueViolation, tx, validateDynamicContent, writeAudit } from '@3t/core';
+import { enqueueJob, isUniqueViolation, safeEqualHex, tx, validateDynamicContent, writeAudit } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { isPublicIp, pinnedRequest } from '../lib/ssrf.ts';
@@ -387,12 +387,12 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       let ok = false;
       // Dev/test proof: presenting the token proves control (stand-in for a DNS read).
       if (config.dnsVerifyBodyProof && request.body.txt_value) {
-        ok = createHash('sha256').update(request.body.txt_value).digest('hex') === domain.rows[0]!.verification_token_hash;
+        ok = safeEqualHex(createHash('sha256').update(request.body.txt_value).digest('hex'), domain.rows[0]!.verification_token_hash);
       } else {
         // Production path: read the TXT record. A failed lookup keeps the domain pending (AT-25/AT-26).
         try {
           const records = await resolveTxt(`_3t-verify.${domain.rows[0]!.hostname_ascii}`);
-          ok = records.flat().some((value) => createHash('sha256').update(value).digest('hex') === domain.rows[0]!.verification_token_hash);
+          ok = records.flat().some((value) => safeEqualHex(createHash('sha256').update(value).digest('hex'), domain.rows[0]!.verification_token_hash));
         } catch {
           ok = false;
         }

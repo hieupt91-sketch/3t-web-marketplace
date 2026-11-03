@@ -59,3 +59,77 @@ export async function verifyPassword(password: string, stored: string | null): P
 export async function dummyPasswordCheck(password: string, cost: number): Promise<void> {
   await scryptAsync(password, Buffer.alloc(16), cost, 32);
 }
+
+/**
+ * Constant-time equality for secret strings (audit L-06). The length
+ * check leaks only the length, which is public for fixed-size hashes
+ * and codes; `timingSafeEqual` itself throws on length mismatch, so
+ * the guard is required for it to be usable at all.
+ */
+export function safeEqual(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  const ba = Buffer.from(a, 'utf8');
+  const bb = Buffer.from(b, 'utf8');
+  return ba.length === bb.length && timingSafeEqual(ba, bb);
+}
+
+/**
+ * Constant-time equality for hex-encoded secrets/hashes (audit L-06).
+ * Inputs of different lengths, odd length, or non-hex content never
+ * compare equal (and never throw).
+ */
+export function safeEqualHex(a: string, b: string): boolean {
+  if (typeof a !== 'string' || typeof b !== 'string') return false;
+  if (a.length !== b.length || a.length % 2 !== 0) return false;
+  if (!/^[0-9a-fA-F]*$/.test(a) || !/^[0-9a-fA-F]*$/.test(b)) return false;
+  const ba = Buffer.from(a, 'hex');
+  const bb = Buffer.from(b, 'hex');
+  return ba.length === bb.length && (ba.length === 0 || timingSafeEqual(ba, bb));
+}
+
+/* ---------------- MFA backup codes (audit L-05) ----------------
+ * New codes carry 80 bits of entropy (see the generator in the API's
+ * mfa route) and are stored as scrypt hashes — the same slow KDF as
+ * passwords — under an `s1$` prefix so entries are distinguishable
+ * from the legacy format: a bare 64-char SHA-256 hex of the code.
+ * Verification accepts BOTH formats, so codes issued before this
+ * change keep working (and are still consumed on use) instead of
+ * locking their owners out.
+ */
+export const BACKUP_CODE_HASH_PREFIX = 's1$';
+
+/** Codes are displayed grouped/upper-case; entry may vary in case and separators. */
+export function normalizeBackupCode(code: string): string {
+  return code.replace(/[\s-]/g, '').toUpperCase();
+}
+
+export async function hashBackupCode(code: string, cost: number): Promise<string> {
+  return BACKUP_CODE_HASH_PREFIX + (await hashPassword(normalizeBackupCode(code), cost));
+}
+
+export async function verifyBackupCode(code: string, stored: string): Promise<boolean> {
+  if (typeof stored !== 'string') return false;
+  const normalized = normalizeBackupCode(code);
+  if (stored.startsWith(BACKUP_CODE_HASH_PREFIX)) {
+    return verifyPassword(normalized, stored.slice(BACKUP_CODE_HASH_PREFIX.length));
+  }
+  // Legacy entry: bare SHA-256 hex of the code (audit L-05).
+  if (/^[0-9a-fA-F]{64}$/.test(stored)) {
+    return safeEqualHex(hashToken(normalized).toString('hex'), stored);
+  }
+  return false;
+}
+
+/**
+ * Index of the stored entry matching `code`, or -1. Non-code-shaped
+ * input (e.g. a 6-digit TOTP guess) is rejected before any scrypt
+ * work runs, so the TOTP path never pays the KDF cost.
+ */
+export async function findBackupCodeIndex(code: string, storedList: readonly string[]): Promise<number> {
+  const normalized = normalizeBackupCode(code);
+  if (!/^[0-9A-F]{10,20}$/.test(normalized)) return -1;
+  for (let i = 0; i < storedList.length; i++) {
+    if (await verifyBackupCode(normalized, storedList[i]!)) return i;
+  }
+  return -1;
+}
