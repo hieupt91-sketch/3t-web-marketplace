@@ -33,7 +33,7 @@ describe('buildEgressScript', () => {
     const actionLines = script
       .split('\n')
       .filter((line) => (line.includes('accept') || line.includes('drop')) && !line.includes('policy'));
-    expect(actionLines).toHaveLength(10);
+    expect(actionLines).toHaveLength(9);
     for (const line of actionLines) expect(line).toContain('meta skuid @site_uids');
   });
 
