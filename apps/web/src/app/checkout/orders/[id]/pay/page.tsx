@@ -19,6 +19,10 @@ interface TransferInstructions {
   bank_name?: string;
   account_number?: string;
   account_holder?: string;
+  account_name?: string;
+  bank_bin?: string;
+  order_code?: number;
+  checkout_url?: string;
   paypal_email?: string;
   swift_code?: string;
   amount_usd?: string;
@@ -32,12 +36,13 @@ interface Session {
   expires_at: string;
   instructions?: TransferInstructions;
 }
-interface PublicConfig { payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean; paypal?: boolean; usd_transfer?: boolean } }
+interface PublicConfig { payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean; payos?: boolean; paypal?: boolean; usd_transfer?: boolean } }
 
 const METHOD_KEYS: Record<string, { name: string; desc: string }> = {
   bank_transfer: { name: 'ui.checkout.method_bank', desc: 'ui.checkout.method_bank_desc' },
   vnpay: { name: 'ui.checkout.method_vnpay', desc: 'ui.checkout.method_vnpay_desc' },
   momo: { name: 'ui.checkout.method_momo', desc: 'ui.checkout.method_momo_desc' },
+  payos: { name: 'ui.checkout.method_payos', desc: 'ui.checkout.method_payos_desc' },
   paypal: { name: 'ui.checkout.method_paypal', desc: 'ui.checkout.method_paypal_desc' },
   usd_transfer: { name: 'ui.checkout.method_usd', desc: 'ui.checkout.method_usd_desc' },
 };
@@ -87,6 +92,7 @@ function Pay() {
         ...(p.bank_transfer ? ['bank_transfer'] : []),
         ...(p.vnpay ? ['vnpay'] : []),
         ...(p.momo ? ['momo'] : []),
+        ...(p.payos ? ['payos'] : []),
         ...(p.paypal ? ['paypal'] : []),
         ...(p.usd_transfer ? ['usd_transfer'] : []),
       ];
@@ -102,7 +108,7 @@ function Pay() {
   // Manual transfers settle server-side (hub report or staff
   // confirmation); poll quietly so the buyer lands on the result page
   // once the settlement lands.
-  const transferPending = session !== null && (MANUAL_PROVIDERS.includes(session.provider) || session.provider === 'vnpay' || session.provider === 'momo') && order?.payment_status === 'awaiting_payment';
+  const transferPending = session !== null && (MANUAL_PROVIDERS.includes(session.provider) || session.provider === 'vnpay' || session.provider === 'momo' || session.provider === 'payos') && order?.payment_status === 'awaiting_payment';
   useEffect(() => {
     if (!transferPending) return;
     const timer = setInterval(() => { void loadOrder(); }, 10_000);
@@ -195,14 +201,18 @@ function Pay() {
 
   if (!session) return <Loading />;
 
-  if (session.provider === 'vnpay' || session.provider === 'momo') {
-    const momoQr = session.provider === 'momo' ? session.instructions?.qr_payload : undefined;
+  if (session.provider === 'vnpay' || session.provider === 'momo' || session.provider === 'payos') {
+    // MoMo and payOS both answer with their own scannable QR payload
+    // (MoMo's wallet code, payOS's per-order VietQR); VNPay's QR encodes
+    // the hosted pay URL instead.
+    const gatewayQr = session.provider === 'momo' || session.provider === 'payos' ? session.instructions?.qr_payload : undefined;
+    const qrHint = session.provider === 'momo' ? 'ui.checkout.qr_momo_hint' : session.provider === 'payos' ? 'ui.checkout.qr_bank_hint' : 'ui.checkout.qr_gateway_hint';
     return (
       <div className="stack">
         <h1>{t(METHOD_KEYS[session.provider]!.name)}</h1>
         <div className="card stack" style={{ alignItems: 'center', textAlign: 'center' }}>
-          <QrImage payload={momoQr ?? session.pay_url} />
-          <p className="muted" style={{ margin: 0 }}>{t(momoQr ? 'ui.checkout.qr_momo_hint' : 'ui.checkout.qr_gateway_hint')}</p>
+          <QrImage payload={gatewayQr ?? session.pay_url} />
+          <p className="muted" style={{ margin: 0 }}>{t(qrHint)}</p>
         </div>
         {countdownNote}
         <div className="row">

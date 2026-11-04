@@ -4,6 +4,8 @@ import { requirePermission } from '../app.ts';
 import { errors } from '../errors.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { sealSettingSecret } from '../lib/secret-store.ts';
+import { loadMailResendSettings, saveMailResendSettings } from '../lib/settings-mail.ts';
+import { MailProviderError, ResendMailer } from '../mail.ts';
 import { loadBankTransferSettings } from './commerce.ts';
 
 export interface ContactChannels {
@@ -300,6 +302,142 @@ export async function adminSettingsRoutes(app: FastifyInstance): Promise<void> {
   );
 }
 
+/** Outbound email (Resend) settings. The API key is a provider
+ *  credential: accepted on POST (absent/empty = keep), sealed at rest,
+ *  and never returned — GET reports only whether one is configured.
+ *  Sending itself happens through the ResendMailer wired in main.ts
+ *  (transport 'resend'); this surface only manages its configuration. */
+export async function adminMailSettingsRoutes(app: FastifyInstance): Promise<void> {
+  const { db, config } = app.deps;
+  const mailer = new ResendMailer(() => loadMailResendSettings(db, config.partnerWebhookKey));
+  const emailRe = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  app.get('/settings/mail', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const s = await loadMailResendSettings(db, config.partnerWebhookKey);
+    return {
+      data: {
+        enabled: s.enabled,
+        api_key_configured: s.apiKey !== '',
+        from_address: s.fromAddress,
+        from_name: s.fromName,
+      },
+    };
+  });
+
+  app.post<{ Body: { enabled?: boolean; api_key?: string; from_address?: string; from_name?: string } }>(
+    '/settings/mail',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            api_key: { type: 'string', maxLength: 200 },
+            from_address: { type: 'string', maxLength: 254 },
+            from_name: { type: 'string', maxLength: 120 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      // The key decides which provider account sends platform mail
+      // (verification + password reset): step-up, like every other
+      // credential-bearing settings change (audit H-02).
+      await requireStepUp(db, auth);
+      const current = await loadMailResendSettings(db, config.partnerWebhookKey);
+      const sentKey = clean(request.body.api_key);
+      const next = {
+        enabled: request.body.enabled === true,
+        apiKey: sentKey !== '' ? sentKey : current.apiKey,
+        fromAddress: clean(request.body.from_address),
+        fromName: clean(request.body.from_name),
+      };
+      if (next.enabled) {
+        const problems: { field: string; code: string }[] = [];
+        if (next.apiKey === '') problems.push({ field: 'api_key', code: 'required' });
+        if (!emailRe.test(next.fromAddress)) problems.push({ field: 'from_address', code: 'invalid' });
+        if (problems.length > 0) throw errors.validation(problems);
+      } else if (next.fromAddress !== '' && !emailRe.test(next.fromAddress)) {
+        throw errors.validation([{ field: 'from_address', code: 'invalid' }]);
+      }
+      await saveMailResendSettings(db, config.partnerWebhookKey, next);
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.mail_updated',
+        resourceType: 'settings',
+        resourceId: null,
+        traceId: request.id,
+        // The API key never enters the audit diff — only that it changed.
+        diff: { enabled: next.enabled, from_address: next.fromAddress, api_key_changed: next.apiKey !== current.apiKey },
+      });
+      return reply.status(200).send({
+        data: {
+          enabled: next.enabled,
+          api_key_configured: next.apiKey !== '',
+          from_address: next.fromAddress,
+          from_name: next.fromName,
+        },
+      });
+    },
+  );
+
+  app.post<{ Body: { to?: string } }>(
+    '/settings/mail/test',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            to: { type: 'string', maxLength: 254 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      await requireStepUp(db, auth);
+      const to = clean(request.body.to);
+      if (!emailRe.test(to)) throw errors.validation([{ field: 'to', code: 'invalid' }]);
+      const s = await loadMailResendSettings(db, config.partnerWebhookKey);
+      if (!s.enabled || s.apiKey === '' || s.from === '') {
+        throw errors.validation([{ field: 'api_key', code: 'not_configured' }], 'settings.mail_not_configured');
+      }
+      try {
+        await mailer.sendRaw({
+          to,
+          subject: 'webmaket — email test',
+          text: 'Đây là email thử từ trang cài đặt webmaket. Nếu bạn nhận được email này, kênh gửi email đã hoạt động.\n\nThis is a test email from the webmaket settings page. If you received it, the email channel is working.',
+        });
+      } catch (err) {
+        if (err instanceof MailProviderError) {
+          // Surface the provider status (never key material) so the
+          // owner can tell a bad key (401/403) from a provider outage.
+          throw errors.validation(
+            [{ field: 'to', code: err.status === null ? 'send_failed' : `provider_${err.status}` }],
+            'settings.mail_test_failed',
+          );
+        }
+        throw err;
+      }
+      await writeAudit(db, {
+        actorType: 'user',
+        actorId: auth.userId,
+        action: 'settings.mail_test_sent',
+        resourceType: 'settings',
+        resourceId: null,
+        traceId: request.id,
+        diff: { to },
+      });
+      return reply.status(200).send({ data: { sent: true } });
+    },
+  );
+}
+
 /** Manual transfer methods beyond the VND bank account: PayPal and a USD
  *  bank account for overseas buyers. Neither has an automatic settlement
  *  feed into the platform — staff confirm arrivals in reconciliation —
@@ -564,8 +702,8 @@ export async function adminPaymentSettingsRoutes(app: FastifyInstance): Promise<
   );
 }
 
-/** Gateway merchant settings (VNPay + MoMo). Secret keys — and MoMo's
- *  access key, a credential of the same kind — are write-only:
+/** Gateway merchant settings (VNPay + MoMo + payOS). Secret keys — and
+ *  MoMo's access key, a credential of the same kind — are write-only:
  *  a POST replaces the stored key only when a non-empty value is sent, and
  *  GET never returns one — only whether it is configured. Sandbox defaults
  *  on so the owner can verify with the gateway's test merchant first. */
@@ -580,9 +718,13 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
   async function save(key: string, value: Record<string, unknown>) {
     // Gateway signing secrets are stored sealed (audit payments M2).
     // Sealing is idempotent, so a "keep current" save that carries the
-    // stored ciphertext through never double-encrypts it.
+    // stored ciphertext through never double-encrypts it. Each gateway
+    // names its secrets differently (secret_key, and payOS's api_key +
+    // checksum_key), so every known secret field name is sealed.
     const sealed = { ...value };
-    if (typeof sealed.secret_key === 'string') sealed.secret_key = sealSettingSecret(config.partnerWebhookKey, sealed.secret_key);
+    for (const field of ['secret_key', 'api_key', 'checksum_key']) {
+      if (typeof sealed[field] === 'string') sealed[field] = sealSettingSecret(config.partnerWebhookKey, sealed[field]);
+    }
     await db.query(
       `INSERT INTO settings (key, value_json) VALUES ($1, $2::jsonb)
        ON CONFLICT (key) DO UPDATE SET value_json = EXCLUDED.value_json, revision = settings.revision + 1`,
@@ -706,6 +848,65 @@ export async function adminGatewaySettingsRoutes(app: FastifyInstance): Promise<
       });
       return reply.status(200).send({
         data: { enabled: next.enabled, partner_code: next.partner_code, access_key_configured: next.access_key !== '', secret_configured: next.secret_key !== '', sandbox: next.sandbox, ipn_url: `${config.portalOrigin}/api/v1/payments/webhooks/momo` },
+      });
+    },
+  );
+
+  app.get('/settings/payment-payos', async (request) => {
+    requirePermission(request, 'settings:manage');
+    const raw = await load('payment.payos');
+    return {
+      data: {
+        enabled: raw.enabled === true,
+        client_id: clean(raw.client_id),
+        api_key_configured: clean(raw.api_key) !== '',
+        checksum_key_configured: clean(raw.checksum_key) !== '',
+        webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/payos`,
+      },
+    };
+  });
+
+  app.post<{ Body: { enabled?: boolean; client_id?: string; api_key?: string; checksum_key?: string } }>(
+    '/settings/payment-payos',
+    {
+      schema: {
+        body: {
+          type: 'object',
+          additionalProperties: false,
+          properties: {
+            enabled: { type: 'boolean' },
+            client_id: { type: 'string', maxLength: 120 },
+            api_key: { type: 'string', maxLength: 200 },
+            checksum_key: { type: 'string', maxLength: 200 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requirePermission(request, 'settings:manage');
+      await requireStepUp(db, auth);
+      const current = await load('payment.payos');
+      const next = {
+        enabled: request.body.enabled === true,
+        client_id: clean(request.body.client_id),
+        api_key: clean(request.body.api_key) !== '' ? clean(request.body.api_key) : clean(current.api_key),
+        checksum_key: clean(request.body.checksum_key) !== '' ? clean(request.body.checksum_key) : clean(current.checksum_key),
+      };
+      if (next.enabled) {
+        const problems: { field: string; code: string }[] = [];
+        if (!next.client_id) problems.push({ field: 'client_id', code: 'required' });
+        if (!next.api_key) problems.push({ field: 'api_key', code: 'required' });
+        if (!next.checksum_key) problems.push({ field: 'checksum_key', code: 'required' });
+        if (problems.length > 0) throw errors.validation(problems);
+      }
+      await save('payment.payos', next);
+      await writeAudit(db, {
+        actorType: 'user', actorId: auth.userId, action: 'settings.payment_payos_updated',
+        resourceType: 'settings', resourceId: null, traceId: request.id,
+        diff: { enabled: next.enabled, client_id: next.client_id, api_key_changed: next.api_key !== clean(current.api_key), checksum_key_changed: next.checksum_key !== clean(current.checksum_key) },
+      });
+      return reply.status(200).send({
+        data: { enabled: next.enabled, client_id: next.client_id, api_key_configured: next.api_key !== '', checksum_key_configured: next.checksum_key !== '', webhook_url: `${config.portalOrigin}/api/v1/payments/webhooks/payos` },
       });
     },
   );

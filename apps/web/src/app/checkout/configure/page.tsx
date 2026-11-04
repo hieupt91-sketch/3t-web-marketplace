@@ -11,7 +11,7 @@ import { useT } from '@/lib/i18n';
 import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface Plan { id: string; code: string; deployment_mode: string; name: Record<string, string>; prices: { interval: string; amount_minor: string; currency: string }[] }
-interface Template { id: string; slug: string; title: string; adapter: string | null; plans: Plan[] }
+interface Template { id: string; slug: string; title: string; adapter: string | null; dynamic_twin_slug?: string | null; plans: Plan[] }
 interface PublicConfig { site_base_domain?: string; currency?: string; subdomain_fee?: { amount_minor: number | null; period: string } | null; installation_service?: { available: boolean; amount_minor: number | null }; hosting_storage?: { per_gb_minor: number | null } }
 interface SubCheck { available: boolean; reason: string | null; held_by_you?: boolean; reservation_expires_at?: string }
 
@@ -48,6 +48,11 @@ function Configure() {
   const [domainInterval, setDomainInterval] = useState<'monthly' | 'yearly'>('monthly');
   const [installation, setInstallation] = useState(false);
   const [storageGb, setStorageGb] = useState(1);
+  // Static + hosting steer (owner model 2026-11-03): shown instead of a
+  // dead end when a static template is about to be bought with hosting
+  // but without the one-time setup.
+  const [steer, setSteer] = useState(false);
+  const [steerTwin, setSteerTwin] = useState<string | null>(null);
 
   useEffect(() => {
     if (!slug) return;
@@ -144,12 +149,21 @@ function Configure() {
   const storageYearlyTotal = storageActive ? formatMoney({ amount_minor: String((storageRate as number) * storageGb * 12), currency }, locale) : null;
   const storageRateMoney = storageActive ? formatMoney({ amount_minor: String(storageRate as number), currency }, locale) : null;
   const isHosted = plan?.deployment_mode === 'hosted';
+  const isStaticTpl = !isDynamicAdapter(tpl.adapter);
+  const twinSlug = steerTwin ?? tpl.dynamic_twin_slug ?? null;
   const name = subdomain.trim().toLowerCase();
   const nameReady = !isHosted || skipName || (hold?.kind === 'held_you' && heldName === name && name !== '');
   const baseDomain = config?.site_base_domain ?? 'webmaket.com';
 
   async function continueToReview() {
     if (!tpl || !selected) return;
+    // Static + hosting without the one-time setup is not sellable: show
+    // the steer (dynamic twin, or tick the setup) instead of posting a
+    // quote the API would only reject.
+    if (isStaticTpl && isHosted && !(installation && svcPrice)) {
+      setSteer(true);
+      return;
+    }
     setBusy(true); setError(null);
     const body: Record<string, unknown> = { template_id: tpl.id, plan_id: selected };
     if (isHosted && (hasBothPeriods || storageActive)) body.billing_interval = billingInterval;
@@ -162,6 +176,12 @@ function Configure() {
     const res = await api<{ id: string }>('/quotes', { method: 'POST', body });
     setBusy(false);
     if (!res.ok) {
+      if (res.error.code === 'template.static_not_hosted') {
+        const slug = res.error.details?.dynamic_twin_slug;
+        if (typeof slug === 'string' && slug) setSteerTwin(slug);
+        setSteer(true);
+        return;
+      }
       if (res.error.code === 'site.subdomain_held') setHold({ kind: 'held_other' });
       if (res.error.code === 'site.subdomain_taken') setHold({ kind: 'taken' });
       return setError(res.error);
@@ -191,7 +211,7 @@ function Configure() {
           return (
             <label key={p.id} className="card row" style={{ justifyContent: 'space-between', cursor: 'pointer' }}>
               <span className="row">
-                <input type="radio" name="plan" value={p.id} checked={selected === p.id} onChange={() => setSelected(p.id)} />
+                <input type="radio" name="plan" value={p.id} checked={selected === p.id} onChange={() => { setSelected(p.id); setSteer(false); }} />
                 <span><strong>{p.name[locale] ?? p.name.vi ?? p.code}</strong> · {t(`ui.deployment.${p.deployment_mode}`)}</span>
               </span>
               <span className="tabular">{price ? formatMoney(price, locale) : '—'}</span>
@@ -311,10 +331,22 @@ function Configure() {
       {svcPrice ? (
         <div className="card stack">
           <label className="row" style={{ alignItems: 'center', cursor: 'pointer' }}>
-            <input type="checkbox" checked={installation} onChange={(e) => setInstallation(e.target.checked)} />
-            <span><strong>{t('ui.checkout.installation_title')}</strong> · <span className="tabular">{svcPrice}</span></span>
+            <input type="checkbox" checked={installation} onChange={(e) => { setInstallation(e.target.checked); if (e.target.checked) setSteer(false); }} />
+            <span><strong>{isStaticTpl ? t('ui.setup_info.installation_title') : t('ui.checkout.installation_title')}</strong> · <span className="tabular">{svcPrice}</span></span>
           </label>
-          <p className="muted" style={{ margin: 0 }}>{t('ui.checkout.installation_body')}</p>
+          <p className="muted" style={{ margin: 0 }}>{isStaticTpl ? t('ui.setup_info.installation_body') : t('ui.checkout.installation_body')}</p>
+        </div>
+      ) : null}
+      {steer ? (
+        <div className="card stack" role="alert">
+          <strong>{t('ui.setup_info.steer_title')}</strong>
+          <p style={{ margin: 0 }}>{t('ui.setup_info.steer_body')}</p>
+          <div className="row">
+            {twinSlug ? <Link className="button" href={`/checkout/configure?template=${twinSlug}`}>{t('ui.setup_info.steer_twin_button')}</Link> : null}
+            {svcPrice ? (
+              <button type="button" className="button button--secondary" onClick={() => { setInstallation(true); setSteer(false); }}>{t('ui.setup_info.steer_use_setup')}</button>
+            ) : null}
+          </div>
         </div>
       ) : null}
       <div className="row">

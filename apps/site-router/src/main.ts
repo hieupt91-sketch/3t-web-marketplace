@@ -8,6 +8,10 @@ const server = createSiteRouterServer({
   db,
   sitesUpstreamHost: process.env.SITE_ROUTER_SITES_HOST ?? '127.0.0.1',
   sessionsUpstreamHost: process.env.SITE_ROUTER_SESSIONS_HOST ?? '127.0.0.1',
+  // Read-only use: the twin seed behind hosted-static SEO identities.
+  // Takes effect in production once the router service mounts the
+  // shared storage volume read-only (deploy wiring, see seo.ts).
+  storageDir: config.storageDir,
 });
 const port = Number(process.env.SITE_ROUTER_PORT ?? 4200);
 server.listen(port, process.env.SITE_ROUTER_HOST ?? '127.0.0.1', () => {

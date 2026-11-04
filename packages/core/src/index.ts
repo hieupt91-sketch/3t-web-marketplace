@@ -1,4 +1,5 @@
 export * from './config.ts';
+export * from './domain-verify.ts';
 export * from './db.ts';
 export * from './migrate.ts';
 export * from './crypto.ts';
@@ -14,3 +15,4 @@ export * from './payment-gateways.ts';
 export * from './bundle.ts';
 export * from './dynamic-content.ts';
 export * from './demo.ts';
+export * from './visual-edit.ts';

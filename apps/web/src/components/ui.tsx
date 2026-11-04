@@ -30,7 +30,12 @@ export function Alert({ tone, title, children, live }: { tone: Exclude<Tone, 'ne
 /** Error with request ID for support; no stack traces (docs/05 §3 ErrorState). */
 export function ErrorState({ error, onRetry }: { error: ApiError; onRetry?: () => void }) {
   const { t } = useT();
-  const message = error.code === 'network.unavailable' ? t('ui.error.network') : error.message || t('error.generic');
+  // Prefer the localized catalog string for the error code (the API message is
+  // authored in Vietnamese only); fall back to the API message for codes the
+  // catalog does not cover.
+  const catalogKey = `error.${error.code}`;
+  const localized = t(catalogKey);
+  const message = error.code === 'network.unavailable' ? t('ui.error.network') : localized !== catalogKey ? localized : error.message || t('error.generic');
   return (
     <Alert tone="error" title={t('ui.error.title')}>
       <p>{message}</p>

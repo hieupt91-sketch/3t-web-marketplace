@@ -1,12 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { formatMoney } from '@3t/i18n';
 import { useCurrentUser } from '@/components/dashboard-shell';
-import { Alert, EmptyState } from '@/components/ui';
-import { api } from '@/lib/api';
+import { Alert, EmptyState, ErrorState, Loading, StatusBadge } from '@/components/ui';
+import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
+import { isDynamicAdapter } from '@/lib/template-kind';
 
 interface TodoItem { [key: string]: string | number | null }
 interface TodoGroup { kind: string; count: number; items: TodoItem[] }
@@ -77,10 +78,92 @@ function TodoBlock() {
   );
 }
 
-/** C01 — customer home. Purchases/sites appear once commerce (M4) and hosting (M5) exist. */
+interface EntitlementSummary {
+  id: string;
+  mode: string;
+  status: string;
+  template: { id: string; slug: string; adapter: string | null };
+  site?: { id: string; display_name: string; status: string; subdomain: string | null } | null;
+}
+interface SiteSummary { id: string; display_name: string; subdomain: string | null; status: string; url: string | null }
+
+/** C01 — what the customer actually owns: purchased templates
+ *  (GET /me/entitlements — the same data the purchases page renders)
+ *  and their sites (GET /sites). Compact summary only; the detail
+ *  lives on /account/purchases and /account/sites. The "no purchases"
+ *  empty state renders ONLY when both lists are truly empty — it used
+ *  to render unconditionally, telling every buyer they owned nothing. */
+function LibrarySummary() {
+  const { t, locale } = useT();
+  const [ents, setEnts] = useState<EntitlementSummary[] | null>(null);
+  const [sites, setSites] = useState<SiteSummary[] | null>(null);
+  const [error, setError] = useState<ApiError | null>(null);
+
+  const load = useCallback(async () => {
+    const [e, s] = await Promise.all([api<EntitlementSummary[]>('/me/entitlements'), api<SiteSummary[]>('/sites')]);
+    if (e.ok && s.ok) {
+      setEnts(e.data);
+      setSites(s.data);
+      setError(null);
+    } else if (!e.ok) setError(e.error);
+    else if (!s.ok) setError(s.error);
+  }, []);
+  useEffect(() => { void load(); }, [load]);
+
+  if (error && (!ents || !sites)) return <ErrorState error={error} onRetry={() => void load()} />;
+  if (!ents || !sites) return <Loading />;
+  if (ents.length === 0 && sites.length === 0) {
+    return (
+      <EmptyState title={t('ui.account.purchases_empty_title')} action={<Link className="button" href={`/${locale}/templates`}>{t('ui.nav.templates')}</Link>}>
+        <p>{t('ui.account.purchases_empty_body')}</p>
+      </EmptyState>
+    );
+  }
+  return (
+    <>
+      {ents.length > 0 ? (
+        <section className="card stack" aria-label={t('ui.account.nav.purchases')}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>{t('ui.account.nav.purchases')} ({ents.length})</h2>
+            <Link href="/account/purchases">{t('ui.account.overview_all')}</Link>
+          </div>
+          <ul className="stack" style={{ margin: 0, paddingInlineStart: '1.2em' }}>
+            {ents.slice(0, 5).map((e) => (
+              <li key={e.id}>
+                <Link href="/account/purchases"><span className="mono">{e.template.slug}</span></Link>{' '}
+                <StatusBadge tone={isDynamicAdapter(e.template.adapter) ? 'info' : 'neutral'}>
+                  {isDynamicAdapter(e.template.adapter) ? t('ui.catalog.kind_dynamic') : t('ui.catalog.kind_static')}
+                </StatusBadge>{' '}
+                <StatusBadge tone={e.status === 'active' ? 'success' : 'neutral'}>{t(`ui.entitlement.status.${e.status}`)}</StatusBadge>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+      {sites.length > 0 ? (
+        <section className="card stack" aria-label={t('ui.account.nav.sites')}>
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>{t('ui.account.nav.sites')} ({sites.length})</h2>
+            <Link href="/account/sites">{t('ui.account.overview_all')}</Link>
+          </div>
+          <ul className="stack" style={{ margin: 0, paddingInlineStart: '1.2em' }}>
+            {sites.slice(0, 5).map((s) => (
+              <li key={s.id}>
+                <Link href={s.status === 'creating' || s.status === 'provision_failed' ? `/account/sites/${s.id}/creating` : `/account/sites/${s.id}`}>{s.display_name}</Link>{' '}
+                <StatusBadge tone={s.status === 'active' ? 'success' : 'neutral'}>{t(`ui.sites.status.${s.status}`)}</StatusBadge>
+              </li>
+            ))}
+          </ul>
+        </section>
+      ) : null}
+    </>
+  );
+}
+
+/** C01 — customer home: todo block, then the library summary. */
 export default function AccountHome() {
   const me = useCurrentUser();
-  const { t, locale } = useT();
+  const { t } = useT();
   return (
     <div className="stack">
       <h1>{t('ui.account.title', { name: me.display_name })}</h1>
@@ -91,9 +174,7 @@ export default function AccountHome() {
         </Alert>
       ) : null}
       <TodoBlock />
-      <EmptyState title={t('ui.account.purchases_empty_title')} action={<Link className="button" href={`/${locale}/templates`}>{t('ui.nav.templates')}</Link>}>
-        <p>{t('ui.account.purchases_empty_body')}</p>
-      </EmptyState>
+      <LibrarySummary />
     </div>
   );
 }

@@ -4,6 +4,8 @@ const API_INTERNAL = process.env.API_INTERNAL_URL ?? 'http://127.0.0.1:4000';
 export interface TemplateSummary {
   id: string;
   slug: string;
+  /** ISO timestamp of the last change to the template or its published translations (sitemap lastmod). */
+  updated_at: string;
   locale: string;
   requested_locale: string;
   resolved_locale: string;
@@ -13,6 +15,7 @@ export interface TemplateSummary {
   category: string | null;
   preview_image: string | null;
   adapter: string | null;
+  dynamic_twin_slug: string | null;
   size_bytes: string | null;
   modes: string[];
   content_locales: string[];

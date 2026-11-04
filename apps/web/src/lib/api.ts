@@ -10,6 +10,9 @@ export interface ApiError {
   field_errors: { field: string; code: string }[];
   request_id: string | null;
   retryable: boolean;
+  /** Optional structured payload the API attaches to specific errors
+   *  (e.g. template.static_not_hosted carries the dynamic twin slug). */
+  details?: Record<string, unknown>;
 }
 
 export type ApiResult<T> =

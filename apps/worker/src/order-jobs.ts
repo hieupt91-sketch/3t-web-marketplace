@@ -1,6 +1,5 @@
-import { createHash } from 'node:crypto';
 import { resolveTxt } from 'node:dns/promises';
-import { emitEvent, tx, writeAudit, type Db } from '@3t/core';
+import { checkDomainRouting, domainTxtRecordsMatch, emitEvent, tx, writeAudit, type CnameResolver, type Db, type RoutingProbe } from '@3t/core';
 
 /**
  * Stuck wallet-sale recovery (audit payments M3). A partner-v1 wallet sale
@@ -95,7 +94,7 @@ export async function expireStalePaymentOrders(db: Db): Promise<number> {
  * stayed 'verified' forever, so removing the TXT record never removed
  * service (the site-router serves exactly status='verified' rows).
  * This sweep re-resolves the record for verified domains whose last
- * conclusive re-check is older than DOMAIN_RECHECK_INTERVAL_MS
+ * re-check attempt is older than DOMAIN_RECHECK_INTERVAL_MS
  * (default 24h; main.ts calls the sweeps about once a minute while
  * idle, and the staleness filter is what sets the real cadence):
  *   - token present  → stay verified; fail state cleared,
@@ -108,10 +107,23 @@ export async function expireStalePaymentOrders(db: Db): Promise<number> {
  *     absorbs DNS propagation slips and registrar mishaps: a buyer who
  *     restores the record within the week never loses service.
  *   - transient DNS errors (SERVFAIL, timeout, refused, …) are
- *     INCONCLUSIVE: nothing is stamped and nothing changes, so a DNS
- *     outage can never start — or extend — anyone's grace clock.
+ *     INCONCLUSIVE: recheck_fail_since is never touched, so a DNS
+ *     outage can never start — or extend — anyone's grace clock. But
+ *     last_recheck_at IS stamped (cadence change): the sweep selects
+ *     stale rows oldest-first, so an unstamped inconclusive domain
+ *     would sit at the head of the queue and be re-resolved on every
+ *     pass (~1/min), crowding out healthy domains behind a per-pass
+ *     limit. Stamping puts the row back on the normal 24h cadence;
+ *     its next check after the weather clears is conclusive as usual.
  * The token comparison mirrors the API verify route exactly: flatten
  * the TXT chunks and compare sha256(value) hex against the stored hash.
+ *
+ * Routing extension: when the caller passes the routing target
+ * (config.customDomainTarget), a domain whose TXT still checks out must
+ * ALSO still route here — CNAME chain reaching the target, or the site
+ * router answering its probe on the hostname (@3t/core domain-verify).
+ * A conclusive routing failure takes the same 7-day grace path with
+ * audit reason 'routing'; an inconclusive verdict changes nothing.
  * ------------------------------------------------------------------ */
 
 export type TxtResolver = (name: string) => Promise<string[][]>;
@@ -139,7 +151,21 @@ interface VerifiedDomainRow {
 
 export async function revalidateVerifiedDomains(
   db: Db,
-  opts: { now?: Date; resolveTxt?: TxtResolver; graceMs?: number; intervalMs?: number; limit?: number } = {},
+  opts: {
+    now?: Date;
+    resolveTxt?: TxtResolver;
+    graceMs?: number;
+    intervalMs?: number;
+    limit?: number;
+    /** Routing target (config.customDomainTarget). When set, a domain must
+     *  ALSO still route traffic to the site router — the same combined
+     *  check the API verify route runs — or it follows the exact same
+     *  grace path as a lost TXT record. When unset, legacy TXT-only
+     *  behaviour (used by older tests/callers). */
+    target?: string;
+    resolveCname?: CnameResolver;
+    probe?: RoutingProbe;
+  } = {},
 ): Promise<DomainRecheckResult> {
   const now = opts.now ?? new Date();
   const resolver: TxtResolver = opts.resolveTxt ?? ((name) => resolveTxt(name));
@@ -160,17 +186,42 @@ export async function revalidateVerifiedDomains(
     } catch (error) {
       const code = (error as { code?: string }).code ?? '';
       if (!DEFINITIVE_DNS_CODES.has(code)) {
-        // Transient DNS trouble: inconclusive — change nothing at all.
+        // Transient DNS trouble: inconclusive — the grace state is left
+        // exactly as it was, but the recheck stamp advances so this row
+        // re-enters on the normal 24h cadence instead of being retried
+        // on every sweep pass (see the header note on starvation).
+        await db.query("UPDATE domains SET last_recheck_at = $2 WHERE id = $1 AND status = 'verified'", [domain.id, now]);
         result.inconclusive++;
         continue;
       }
       records = null; // definitive: the name/record does not exist
     }
+    const tokenOk = records !== null && domainTxtRecordsMatch(records, domain.verification_token_hash);
+    // With a routing target configured, an intact TXT is not enough: the
+    // hostname must still send traffic to the router. A conclusive routing
+    // failure follows the same grace as a lost TXT record; an inconclusive
+    // one (DNS weather) only advances the recheck stamp, exactly like a
+    // transient TXT error above.
+    let verdict: 'pass' | 'fail' | 'inconclusive' = tokenOk ? 'pass' : 'fail';
+    let failReason: 'txt' | 'routing' = 'txt';
+    if (tokenOk && opts.target) {
+      const routing = await checkDomainRouting(domain.hostname_ascii, opts.target, { resolveCname: opts.resolveCname, probe: opts.probe });
+      if (routing.ok) verdict = 'pass';
+      else if (routing.conclusive) {
+        verdict = 'fail';
+        failReason = 'routing';
+      } else verdict = 'inconclusive';
+    }
+    if (verdict === 'inconclusive') {
+      // Same queue-fairness stamp as the transient TXT branch: the grace
+      // state (recheck_fail_since, status) is untouched, last_recheck_at
+      // advances to the normal 24h cadence.
+      await db.query("UPDATE domains SET last_recheck_at = $2 WHERE id = $1 AND status = 'verified'", [domain.id, now]);
+      result.inconclusive++;
+      continue;
+    }
     result.checked++;
-    const tokenOk =
-      records !== null &&
-      records.flat().some((value) => createHash('sha256').update(value).digest('hex') === domain.verification_token_hash);
-    if (tokenOk) {
+    if (verdict === 'pass') {
       await db.query("UPDATE domains SET last_recheck_at = $2, recheck_fail_since = NULL WHERE id = $1 AND status = 'verified'", [
         domain.id,
         now,
@@ -192,7 +243,7 @@ export async function revalidateVerifiedDomains(
         resourceType: 'domain',
         resourceId: domain.id,
         traceId: 'worker-sweep',
-        diff: { hostname_ascii: domain.hostname_ascii, fail_since: failSince.toISOString() },
+        diff: { hostname_ascii: domain.hostname_ascii, fail_since: failSince.toISOString(), reason: failReason },
       });
       result.lost++;
     } else {

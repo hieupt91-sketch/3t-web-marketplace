@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { createTestContext, createUser, stepUp, ORIGIN, type TestContext } from './test-helpers.ts';
+import { loadMailResendSettings } from './lib/settings-mail.ts';
 
 /** Admin settings audit (owner directive 2026-11-01): every settings
  *  surface must (a) return sane defaults on a fresh install, (b) save
@@ -28,6 +29,7 @@ const ADMIN_GETS = [
   '/api/v1/admin/settings/payment-paypal',
   '/api/v1/admin/settings/payment-usd',
   '/api/v1/admin/settings/ads',
+  '/api/v1/admin/settings/mail',
 ];
 
 beforeAll(async () => {
@@ -522,5 +524,79 @@ describe('10. side-rail ads settings', () => {
       image_url: 'https://cdn.example.com/ad-left.png', link_url: 'https://example.com/khuyen-mai', alt: 'Quảng cáo trái',
     });
     expect(pub.json().data.ads.right).toEqual({ image_url: '/ads/right.png', link_url: null, alt: '' });
+  });
+});
+
+describe('11. Resend mail settings', () => {
+  const API_KEY = 're_AUDIT_SECRET_KEY';
+  const URL = '/api/v1/admin/settings/mail';
+
+  it('returns disabled defaults with no key material anywhere', async () => {
+    const res = await get(URL, ownerCookie);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data).toEqual({ enabled: false, api_key_configured: false, from_address: '', from_name: '' });
+  });
+
+  it('refuses a test send while mail is not configured', async () => {
+    const res = await post(`${URL}/test`, { to: 'owner@example.com' }, ownerCookie);
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.body).toContain('settings.mail_not_configured');
+  });
+
+  it('requires step-up before saving', async () => {
+    const fresh = await createUser(ctx, 'audit-owner-nostep@example.com', 'platform_owner');
+    const res = await post(URL, { enabled: false, from_address: 'no-reply@webmaket.com', from_name: 'webmaket' }, fresh.cookie);
+    expect(res.statusCode, res.body).toBe(403);
+    expect(res.body).toContain('auth.step_up_required');
+  });
+
+  it('refuses to enable without an API key or with an invalid From address', async () => {
+    const noKey = await post(URL, { enabled: true, from_address: 'no-reply@webmaket.com', from_name: 'webmaket' }, ownerCookie);
+    expect(noKey.statusCode, noKey.body).toBe(422);
+    const badFrom = await post(URL, { enabled: true, api_key: API_KEY, from_address: 'khong-phai-email' }, ownerCookie);
+    expect(badFrom.statusCode, badFrom.body).toBe(422);
+  });
+
+  it('saves with a write-only key, seals it at rest, and reads back masked', async () => {
+    const saved = await post(URL, {
+      enabled: true, api_key: API_KEY, from_address: 'no-reply@webmaket.com', from_name: 'webmaket',
+    }, ownerCookie);
+    expect(saved.statusCode, saved.body).toBe(200);
+    expect(saved.body).not.toContain(API_KEY);
+    expect(saved.json().data).toEqual({
+      enabled: true, api_key_configured: true, from_address: 'no-reply@webmaket.com', from_name: 'webmaket',
+    });
+    const { rows } = await ctx.db.query<{ value_json: { api_key: string } }>(
+      "SELECT value_json FROM settings WHERE key = 'mail.resend'",
+    );
+    expect(rows[0]!.value_json.api_key.startsWith('enc:v1:')).toBe(true);
+    expect(rows[0]!.value_json.api_key).not.toContain(API_KEY);
+    const back = await get(URL, ownerCookie);
+    expect(back.body).not.toContain(API_KEY);
+    expect(back.json().data.api_key_configured).toBe(true);
+    const loaded = await loadMailResendSettings(ctx.db, ctx.config.partnerWebhookKey);
+    expect(loaded.apiKey).toBe(API_KEY);
+    expect(loaded.from).toBe('"webmaket" <no-reply@webmaket.com>');
+  });
+
+  it('keeps the stored key when a later POST omits it', async () => {
+    const resaved = await post(URL, {
+      enabled: true, from_address: 'no-reply@webmaket.com', from_name: 'webmaket VN',
+    }, ownerCookie);
+    expect(resaved.statusCode, resaved.body).toBe(200);
+    expect(resaved.json().data).toMatchObject({ api_key_configured: true, from_name: 'webmaket VN' });
+    const loaded = await loadMailResendSettings(ctx.db, ctx.config.partnerWebhookKey);
+    expect(loaded.apiKey).toBe(API_KEY);
+    expect(loaded.from).toBe('"webmaket VN" <no-reply@webmaket.com>');
+  });
+
+  it('surfaces a provider failure from the test endpoint without leaking the key', async () => {
+    // The stored key is bogus: Resend (or the network layer, when the
+    // sandbox has no route) rejects the send, and the endpoint maps any
+    // provider failure to 422 settings.mail_test_failed.
+    const res = await post(`${URL}/test`, { to: 'owner@example.com' }, ownerCookie);
+    expect(res.statusCode, res.body).toBe(422);
+    expect(res.body).toContain('settings.mail_test_failed');
+    expect(res.body).not.toContain(API_KEY);
   });
 });

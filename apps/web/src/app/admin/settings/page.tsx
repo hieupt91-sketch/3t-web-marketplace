@@ -13,14 +13,16 @@ interface PublicConfig {
   subdomain_fee?: { amount_minor: number | null; period: string } | null;
   installation_service?: { available: boolean; amount_minor: number | null };
   hosting_storage?: { per_gb_minor: number | null };
-  payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean; paypal?: boolean; usd_transfer?: boolean };
+  payment?: { bank_transfer?: boolean; vnpay?: boolean; momo?: boolean; payos?: boolean; paypal?: boolean; usd_transfer?: boolean };
 }
 interface AdsSettings { enabled: boolean; left: { image_url: string }; right: { image_url: string } }
+interface MailSettings { enabled: boolean; api_key_configured: boolean; from_address: string; from_name: string }
 
 const METHOD_LABEL_KEYS: Record<string, string> = {
   bank_transfer: 'ui.checkout.method_bank',
   vnpay: 'ui.checkout.method_vnpay',
   momo: 'ui.checkout.method_momo',
+  payos: 'ui.checkout.method_payos',
   paypal: 'ui.checkout.method_paypal',
   usd_transfer: 'ui.checkout.method_usd',
 };
@@ -32,6 +34,7 @@ function SettingsHubInner() {
   const { t, locale } = useT();
   const [cfg, setCfg] = useState<PublicConfig | null>(null);
   const [ads, setAds] = useState<AdsSettings | null>(null);
+  const [mail, setMail] = useState<MailSettings | null>(null);
   const [error, setError] = useState<ApiError | null>(null);
 
   useEffect(() => {
@@ -41,6 +44,9 @@ function SettingsHubInner() {
     });
     void api<AdsSettings>('/admin/settings/ads').then((res) => {
       if (res.ok) setAds(res.data);
+    });
+    void api<MailSettings>('/admin/settings/mail').then((res) => {
+      if (res.ok) setMail(res.data);
     });
   }, []);
 
@@ -112,6 +118,15 @@ function SettingsHubInner() {
           </div>
           <p className="muted" style={{ margin: 0 }}>{t('ui.settings_hub.storage_desc')}</p>
           <p style={{ margin: 0 }}><Link className="button button--secondary" href="/admin/settings/hosting-storage">{t('ui.settings_hub.open')}</Link></p>
+        </section>
+
+        <section className="card stack">
+          <div className="row" style={{ justifyContent: 'space-between' }}>
+            <h2 style={{ margin: 0 }}>{t('ui.mail_settings.title')}</h2>
+            {pill(mail?.enabled === true, mail?.enabled === true && mail.from_address ? mail.from_address : t('ui.settings_hub.not_set'))}
+          </div>
+          <p className="muted" style={{ margin: 0 }}>{t('ui.settings_hub.mail_desc')}</p>
+          <p style={{ margin: 0 }}><Link className="button button--secondary" href="/admin/settings/mail">{t('ui.settings_hub.open')}</Link></p>
         </section>
 
         <section className="card stack">

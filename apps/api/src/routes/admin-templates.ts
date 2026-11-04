@@ -3,6 +3,7 @@ import { emitEvent, isUniqueViolation, previewOrigin, publishReadiness, tx, writ
 import { DEFAULT_LOCALE } from '@3t/i18n';
 import { requirePermission } from '../app.ts';
 import { AppError, errors } from '../errors.ts';
+import { pingIndexNow, storefrontTemplateUrls } from '../lib/indexnow.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const PLATFORM_CURRENCY = 'VND';
@@ -116,7 +117,7 @@ async function applyVisibility(client: Queryable, templateId: string, hidden: bo
     [template.id, hidden],
   );
   await writeAudit(client, { actorType: 'user', actorId, action: 'template.visibility_changed', resourceType: 'template', resourceId: template.id, traceId, diff: { hidden } });
-  return rows[0]!.row_version;
+  return { row_version: rows[0]!.row_version, slug: template.slug };
 }
 
 export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
@@ -539,8 +540,10 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
     async (request, reply) => {
       const auth = requirePermission(request, 'template:write');
       const next = await tx(db, (client) => applyVisibility(client, request.params.id, request.body.hidden, auth.userId, request.id));
-      reply.header('etag', `"${next}"`);
-      return { data: { id: request.params.id, hidden: request.body.hidden }, meta: { request_id: request.id, revision: next } };
+      reply.header('etag', `"${next.row_version}"`);
+      // The template just appeared/disappeared on the public surface.
+      void pingIndexNow(storefrontTemplateUrls(next.slug));
+      return { data: { id: request.params.id, hidden: request.body.hidden }, meta: { request_id: request.id, revision: next.row_version } };
     },
   );
 
@@ -552,6 +555,11 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       const auth = requirePermission(request, 'template:write');
       const ids = await resolveBulkScope(request.body.scope);
       const result = await runBulk(ids, (client, id) => applyVisibility(client, id, request.body.hidden, auth.userId, request.id));
+      // One batched ping for every template whose visibility actually changed.
+      if (result.updated.length > 0) {
+        const { rows } = await db.query<{ slug: string }>('SELECT slug FROM templates WHERE id = ANY($1::uuid[])', [result.updated]);
+        if (rows.length > 0) void pingIndexNow(rows.flatMap((row) => storefrontTemplateUrls(row.slug)));
+      }
       return { data: { hidden: request.body.hidden, ...result } };
     },
   );
@@ -578,10 +586,13 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
       );
       await emitEvent(client, 'template.published', 'template', template.id, { template_id: template.id, version_id: versionId });
       await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.published', resourceType: 'template', resourceId: template.id, traceId: request.id, diff: { version_id: versionId } });
-      return updated.rows[0]!.row_version;
+      return { revision: updated.rows[0]!.row_version, slug: template.slug };
     });
-    reply.header('etag', `"${result}"`);
-    return { data: { status: 'published' }, meta: { request_id: request.id, revision: result } };
+    reply.header('etag', `"${result.revision}"`);
+    // This is also the template-version publish point: the only place a
+    // version becomes 'published' and the template goes public with it.
+    void pingIndexNow(storefrontTemplateUrls(result.slug));
+    return { data: { status: 'published' }, meta: { request_id: request.id, revision: result.revision } };
   });
 
   // Archive stops new sales but keeps the published version for existing buyers (docs/04 §5).
@@ -597,10 +608,13 @@ export async function adminTemplateRoutes(app: FastifyInstance): Promise<void> {
         [template.id],
       );
       await writeAudit(client, { actorType: 'user', actorId: auth.userId, action: 'template.archived', resourceType: 'template', resourceId: template.id, traceId: request.id });
-      return updated.rows[0]!.row_version;
+      return { revision: updated.rows[0]!.row_version, slug: template.slug };
     });
-    reply.header('etag', `"${next}"`);
-    return { data: { status: 'archived' }, meta: { request_id: request.id, revision: next } };
+    reply.header('etag', `"${next.revision}"`);
+    // Archiving unpublishes the template: ping the same URLs so engines
+    // re-crawl them and drop the now-gone pages.
+    void pingIndexNow(storefrontTemplateUrls(next.slug));
+    return { data: { status: 'archived' }, meta: { request_id: request.id, revision: next.revision } };
   });
 
   // Public category tree management is minimal for M3 (owner seeds categories).

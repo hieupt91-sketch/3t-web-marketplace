@@ -175,6 +175,7 @@ export async function adminCommerceRoutes(app: FastifyInstance): Promise<void> {
     const status = request.query.status === 'done' ? 'done' : 'pending';
     const { rows } = await db.query(
       `SELECT st.id, st.order_id, st.kind, st.status, st.created_at, st.completed_at,
+              st.setup_info_json, st.setup_info_submitted_at,
               u.email_normalized AS buyer_email, o.total_minor::text AS order_total_minor, o.currency
        FROM service_tasks st
        JOIN users u ON u.id = st.buyer_id

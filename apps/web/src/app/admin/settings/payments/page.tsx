@@ -20,6 +20,7 @@ const METHODS: MethodDef[] = [
   { slug: 'bank', endpoint: '/admin/settings/payment', nameKey: 'ui.checkout.method_bank', hintKey: 'ui.payment_settings.hint' },
   { slug: 'vnpay', endpoint: '/admin/settings/payment-vnpay', nameKey: 'ui.checkout.method_vnpay', hintKey: 'ui.payment_settings.vnpay_hint' },
   { slug: 'momo', endpoint: '/admin/settings/payment-momo', nameKey: 'ui.checkout.method_momo', hintKey: 'ui.payment_settings.momo_hint' },
+  { slug: 'payos', endpoint: '/admin/settings/payment-payos', nameKey: 'ui.checkout.method_payos', hintKey: 'ui.payment_settings.payos_hint' },
   { slug: 'paypal', endpoint: '/admin/settings/payment-paypal', nameKey: 'ui.checkout.method_paypal', hintKey: 'ui.payment_settings.paypal_hint' },
   { slug: 'usd', endpoint: '/admin/settings/payment-usd', nameKey: 'ui.checkout.method_usd', hintKey: 'ui.payment_settings.usd_hint' },
 ];

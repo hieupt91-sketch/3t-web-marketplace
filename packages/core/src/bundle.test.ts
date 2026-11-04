@@ -3,7 +3,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 import yauzl from 'yauzl';
-import { buildCleanSiteTree, buildSelfhostBundle, toCleanVariantText } from './bundle.ts';
+import { buildCleanSiteTree, buildSelfhostBundle, toCleanVariantText, zipDirectory, zipFiles } from './bundle.ts';
 
 function entries(zipPath: string): Promise<Record<string, Buffer>> {
   return new Promise((resolve, reject) => {
@@ -178,5 +178,60 @@ describe('toCleanVariantText', () => {
     await buildCleanSiteTree(src, dest);
     expect(await readFile(join(dest, 'index.html'), 'utf8')).toBe('<p data-vi="Số điện thoại của bạn" data-en="Your phone number">x</p>');
     expect(await readFile(join(dest, 'styles.css'), 'utf8')).toBe('body{color:red}');
+  });
+});
+
+describe('zipDirectory / zipFiles (in-process replacements for the system zip)', () => {
+  function entryNames(zipPath: string): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+      const names: string[] = [];
+      yauzl.open(zipPath, { lazyEntries: true }, (err, zip) => {
+        if (err || !zip) return reject(err);
+        zip.on('entry', (entry: yauzl.Entry) => { names.push(entry.fileName); zip.readEntry(); });
+        zip.on('end', () => resolve(names));
+        zip.readEntry();
+      });
+    });
+  }
+
+  it('zipDirectory archives the directory CONTENTS at the root, verbatim (dotfiles, logs and caches included)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zipdir-'));
+    const site = join(dir, 'site');
+    await mkdir(join(site, 'data', 'uploads'), { recursive: true });
+    await mkdir(join(site, 'emptydir'), { recursive: true });
+    await mkdir(join(site, '.npm-cache'), { recursive: true });
+    await writeFile(join(site, 'index.html'), '<h1>x</h1>');
+    await writeFile(join(site, '.hidden'), 'dot');
+    await writeFile(join(site, 'debug.log'), 'log-bytes');
+    await writeFile(join(site, '.npm-cache', 'c.bin'), 'cache-bytes');
+    await writeFile(join(site, 'data', 'uploads', 'a.txt'), 'up');
+    const out = join(dir, 'out.zip');
+    const r = await zipDirectory(site, out);
+    expect(r.size).toBeGreaterThan(0);
+    expect(r.sha256).toMatch(/^[0-9a-f]{64}$/);
+    const files = await entries(out);
+    expect(files['index.html']?.toString()).toBe('<h1>x</h1>');
+    expect(files['.hidden']?.toString()).toBe('dot');
+    expect(files['debug.log']?.toString()).toBe('log-bytes');
+    expect(files['.npm-cache/c.bin']?.toString()).toBe('cache-bytes');
+    expect(files['data/uploads/a.txt']?.toString()).toBe('up');
+    // No wrapping top-level folder, and empty directories survive.
+    expect(Object.keys(files).some((n) => n.startsWith('site/'))).toBe(false);
+    expect(await entryNames(out)).toContain('emptydir/');
+  });
+
+  it('zipFiles archives exactly the listed relative paths', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'zipfiles-'));
+    const root = join(dir, 'root');
+    await mkdir(join(root, 'sub'), { recursive: true });
+    await writeFile(join(root, 'a.txt'), 'A');
+    await writeFile(join(root, 'sub', 'b.txt'), 'B');
+    await writeFile(join(root, 'skip.txt'), 'S');
+    const out = join(dir, 'out.zip');
+    await zipFiles(root, ['sub/b.txt', 'a.txt'], out);
+    const files = await entries(out);
+    expect(Object.keys(files).sort()).toEqual(['a.txt', 'sub/b.txt']);
+    expect(files['a.txt']?.toString()).toBe('A');
+    expect(files['sub/b.txt']?.toString()).toBe('B');
   });
 });

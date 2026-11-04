@@ -147,10 +147,23 @@ export function buildChildEnv(config: PlatformConfig, spec: SpawnSpec, port: num
   return { ...env, ...(spec.env ?? {}) };
 }
 
+/**
+ * argv for the bundled static file server. Deliberately 'node' resolved
+ * through PATH — never process.execPath: under sandbox fencing the child
+ * runs as the site's dedicated UID, and the worker's own node binary may
+ * live under a tree that UID cannot traverse (nvm-style homes, private
+ * install dirs), which made every static spawn fail its health check.
+ * PATH resolution falls through to a reachable node, exactly like the
+ * runtime adapters' manifest start commands already do.
+ */
+export function staticServeArgv(dir: string): string[] {
+  return ['node', SERVE_DIR, dir];
+}
+
 /** Spawn a site server and wait for health. Throws on failure (caller rolls back). */
 export async function spawnServer(config: PlatformConfig, spec: SpawnSpec): Promise<{ port: number; pid: number; limitsApplied: boolean; uidApplied: boolean }> {
   const port = await freePort();
-  const rawArgv = spec.kind === 'static' ? [process.execPath, SERVE_DIR, spec.dir] : spec.start!;
+  const rawArgv = spec.kind === 'static' ? staticServeArgv(spec.dir) : spec.start!;
   let argv = rawArgv;
   let limitsApplied = false;
   if (spec.limits) {

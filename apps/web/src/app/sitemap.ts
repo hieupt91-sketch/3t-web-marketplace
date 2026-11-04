@@ -78,7 +78,10 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
 
   // Collect published templates per locale (only a published translation is indexable in that locale).
-  const bySlug = new Map<string, { vi?: string; en?: string }>();
+  // lastmod is the template's real updated_at from the API (template row or published
+  // translation, whichever changed last) — never a fabricated date; entries whose source
+  // has no genuine timestamp (home, listings, help, policies) omit lastModified entirely.
+  const bySlug = new Map<string, { vi?: string; en?: string; updatedAt?: string }>();
   for (const locale of LOCALES) {
     let cursor: string | null = null;
     for (let guard = 0; guard < 50; guard++) {
@@ -90,6 +93,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
         const key = tpl.id;
         const current = bySlug.get(key) ?? {};
         current[locale] = `${BASE}/${locale}/templates/${tpl.slug}`;
+        if (tpl.updated_at) current.updatedAt = tpl.updated_at;
         bySlug.set(key, current);
       }
       cursor = result.page?.next_cursor ?? null;
@@ -102,7 +106,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     if (urls.en) languages.en = urls.en;
     languages['x-default'] = urls.vi ?? urls.en!;
     for (const url of [urls.vi, urls.en].filter((u): u is string => Boolean(u))) {
-      entries.push({ url, changeFrequency: 'weekly', priority: 0.8, alternates: { languages } });
+      entries.push({ url, changeFrequency: 'weekly', priority: 0.8, ...(urls.updatedAt ? { lastModified: urls.updatedAt } : {}), alternates: { languages } });
     }
   }
   return entries;

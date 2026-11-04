@@ -107,7 +107,7 @@ beforeAll(async () => {
   );
   const version = await ctx.db.query<{ id: string }>(
     `INSERT INTO template_versions (template_id, semver, schema_version, manifest_json, adapter, source_sha, source_artifact_id, artifact_id, status)
-     VALUES ($1, '1.0.0', 1, '{}'::jsonb, 'static-html', $2, $3, $3, 'published') RETURNING id`,
+     VALUES ($1, '1.0.0', 1, '{}'::jsonb, 'node-http', $2, $3, $3, 'published') RETURNING id`,
     [templateId, 'd'.repeat(64), artifact.rows[0]!.id],
   );
   versionId = version.rows[0]!.id;
@@ -314,7 +314,17 @@ describe('standalone hosting upgrade + standalone domain package', () => {
     // for them; a static site is a 409, also without a job.
     const foreign = await get(`/api/v1/sites/${dynSiteId}/admin-setup`, buyerB.cookie);
     expect(foreign.statusCode).toBe(404);
-    const staticSite = await get(`/api/v1/sites/${siteId}/admin-setup`, buyerA.cookie);
+    const staticVersion = await ctx.db.query<{ id: string }>(
+      `INSERT INTO template_versions (template_id, semver, schema_version, manifest_json, adapter, source_sha, source_artifact_id, artifact_id, status)
+       VALUES ($1, '0.9.0', 1, '{}'::jsonb, 'static-html', $2, $3, $3, 'published') RETURNING id`,
+      [templateId, 'f'.repeat(64), (await ctx.db.query<{ id: string }>('SELECT id FROM artifacts LIMIT 1')).rows[0]!.id],
+    );
+    const staticSiteRow = await ctx.db.query<{ id: string }>(
+      `INSERT INTO sites (owner_id, template_version_id, display_name, subdomain, status)
+       VALUES ($1, $2, 'Web Tĩnh', 'pkg-tinh-1', 'active') RETURNING id`,
+      [buyerA.id, staticVersion.rows[0]!.id],
+    );
+    const staticSite = await get(`/api/v1/sites/${staticSiteRow.rows[0]!.id}/admin-setup`, buyerA.cookie);
     expect(staticSite.statusCode).toBe(409);
     const noJobs = await ctx.db.query<{ n: string }>(
       "SELECT count(*) AS n FROM jobs WHERE type = 'site.setup-token' AND resource_id = $1",

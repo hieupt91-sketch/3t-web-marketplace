@@ -13,6 +13,10 @@ let planId: string;
 const TERMS = 'terms-2026-10';
 const VNP_SECRET = 'VNPAYTESTSECRET0123456789ABCDEF';
 const MOMO_SECRET = 'MOMOTESTSECRETKEY0123456789';
+const PAYOS_CLIENT_ID = 'payos-client-id-test';
+const PAYOS_API_KEY = 'PAYOSAPIKEYTEST0123456789';
+const PAYOS_CHECKSUM = 'PAYOSCHECKSUMKEY0123456789ABCDEF0123';
+const PAYOS_LINK_ID = 'payoslinktest123';
 
 beforeAll(async () => {
   ctx = await createTestContext();
@@ -185,5 +189,138 @@ describe('MoMo', () => {
     expect(s2.json().data.provider).toBe('mock');
     const named = await post(`/api/v1/orders/${o2}/payment-sessions`, { provider: 'vnpay' }, buyerCookie);
     expect(named.statusCode).toBe(409);
+  });
+});
+
+/** Independent re-implementation of payOS's documented webhook signer. */
+function payosWebhookSign(data: Record<string, unknown>): string {
+  const sortShallow = (o: Record<string, unknown>) => {
+    const out: Record<string, unknown> = {};
+    for (const k of Object.keys(o).sort()) out[k] = o[k];
+    return out;
+  };
+  const qs = Object.keys(data)
+    .sort()
+    .filter((k) => data[k] !== undefined)
+    .map((k) => {
+      const v = data[k];
+      if (v === null || v === undefined) return `${k}=`;
+      if (Array.isArray(v)) return `${k}=${JSON.stringify(v.map((el) => (el !== null && typeof el === 'object' && !Array.isArray(el) ? sortShallow(el as Record<string, unknown>) : el)))}`;
+      if (typeof v === 'object') return `${k}=${JSON.stringify(sortShallow(v as Record<string, unknown>))}`;
+      return `${k}=${String(v)}`;
+    })
+    .join('&');
+  return createHmac('sha256', PAYOS_CHECKSUM).update(qs, 'utf-8').digest('hex');
+}
+
+function payosWebhookBody(paymentLinkId: string, amount: number): Record<string, unknown> {
+  const data: Record<string, unknown> = {
+    orderCode: 123456789012,
+    amount,
+    description: 'WEBMAKET 123456789012',
+    accountNumber: '42381717',
+    reference: 'FT233200001',
+    transactionDateTime: '2026-11-03T17:30:00',
+    currency: 'VND',
+    paymentLinkId,
+    code: '00',
+    desc: 'success',
+    counterAccountBankId: null,
+    counterAccountName: 'NGUYEN VAN A',
+  };
+  return { code: '00', desc: 'success', success: true, data, signature: payosWebhookSign(data) };
+}
+
+describe('payOS', () => {
+  let orderId: string;
+
+  it('stores merchant settings without ever returning the secrets; step-up is required', async () => {
+    expect((await get('/api/v1/admin/settings/payment-payos', buyerCookie)).statusCode).toBe(403);
+    const freshOwner = await createUser(ctx, 'gw-owner2@example.com', 'platform_owner');
+    const noStepUp = await post('/api/v1/admin/settings/payment-payos', { enabled: true, client_id: PAYOS_CLIENT_ID, api_key: PAYOS_API_KEY, checksum_key: PAYOS_CHECKSUM }, freshOwner.cookie);
+    expect(noStepUp.statusCode).toBe(403);
+    expect(noStepUp.body).toContain('auth.step_up_required');
+
+    const res = await post('/api/v1/admin/settings/payment-payos', { enabled: true, client_id: PAYOS_CLIENT_ID, api_key: PAYOS_API_KEY, checksum_key: PAYOS_CHECKSUM }, ownerCookie);
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().data).toMatchObject({ enabled: true, client_id: PAYOS_CLIENT_ID, api_key_configured: true, checksum_key_configured: true });
+    expect(res.json().data.webhook_url).toContain('/api/v1/payments/webhooks/payos');
+    expect(res.body).not.toContain(PAYOS_API_KEY);
+    expect(res.body).not.toContain(PAYOS_CHECKSUM);
+    const got = await get('/api/v1/admin/settings/payment-payos', ownerCookie);
+    expect(got.json().data).toMatchObject({ enabled: true, client_id: PAYOS_CLIENT_ID, api_key_configured: true, checksum_key_configured: true });
+    expect(got.body).not.toContain(PAYOS_API_KEY);
+    expect(got.body).not.toContain(PAYOS_CHECKSUM);
+    const pub = await ctx.app.inject({ method: 'GET', url: '/api/v1/config/public' });
+    expect(pub.json().data.payment.payos).toBe(true);
+  });
+
+  it('keeps stored secrets on an empty re-save and creates a signed payment link', async () => {
+    const resave = await post('/api/v1/admin/settings/payment-payos', { enabled: true, client_id: PAYOS_CLIENT_ID, api_key: '', checksum_key: '' }, ownerCookie);
+    expect(resave.statusCode, resave.body).toBe(200);
+    expect(resave.json().data).toMatchObject({ api_key_configured: true, checksum_key_configured: true });
+
+    orderId = await newOrder();
+    let captured: { url?: string; headers?: Record<string, string>; body?: string } = {};
+    vi.stubGlobal('fetch', async (url: string, init: { headers?: Record<string, string>; body?: string }) => {
+      captured = { url, headers: init.headers, body: init.body };
+      return {
+        json: async () => ({
+          code: '00', desc: 'success',
+          data: { bin: '970416', accountNumber: '42381717', accountName: 'PHAM TRUNG HIEU', amount: 499000, description: 'WEBMAKET', orderCode: 1, currency: 'VND', paymentLinkId: PAYOS_LINK_ID, status: 'PENDING', checkoutUrl: 'https://pay.payos.vn/web/payoslinktest123', qrCode: '00020101021238520010A000000727' },
+        }),
+      };
+    });
+    let res;
+    try {
+      res = await post(`/api/v1/orders/${orderId}/payment-sessions`, { provider: 'payos' }, buyerCookie);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+    expect(res.statusCode, res.body).toBe(201);
+    const session = res.json().data;
+    expect(session.provider).toBe('payos');
+    expect(session.provider_ref).toBe(PAYOS_LINK_ID);
+    expect(session.pay_url).toBe('https://pay.payos.vn/web/payoslinktest123');
+    expect(session.instructions).toMatchObject({
+      qr_payload: '00020101021238520010A000000727',
+      account_number: '42381717',
+      account_name: 'PHAM TRUNG HIEU',
+      bank_bin: '970416',
+      amount_minor: '499000',
+      checkout_url: 'https://pay.payos.vn/web/payoslinktest123',
+    });
+    // The create call went out with the merchant headers and a signature
+    // over the documented five-field string — against the secrets kept
+    // from the first save, proving the seal/keep/open round trip.
+    expect(captured.url).toBe('https://api-merchant.payos.vn/v2/payment-requests');
+    expect(captured.headers).toMatchObject({ 'x-client-id': PAYOS_CLIENT_ID, 'x-api-key': PAYOS_API_KEY });
+    const sent = JSON.parse(captured.body!) as { orderCode: number; amount: number; description: string; returnUrl: string; cancelUrl: string; expiredAt?: number; signature: string };
+    expect(sent.description).toBe(`WEBMAKET ${sent.orderCode}`);
+    expect(sent.amount).toBe(499000);
+    expect(sent.returnUrl).toBe(sent.cancelUrl);
+    expect(sent.returnUrl).toContain(`/checkout/orders/${orderId}/pay`);
+    expect(typeof sent.expiredAt).toBe('number');
+    const expectedSig = createHmac('sha256', PAYOS_CHECKSUM)
+      .update(`amount=${sent.amount}&cancelUrl=${sent.cancelUrl}&description=${sent.description}&orderCode=${sent.orderCode}&returnUrl=${sent.returnUrl}`, 'utf-8')
+      .digest('hex');
+    expect(sent.signature).toBe(expectedSig);
+  });
+
+  it('settles from a signed webhook; forged signatures get 400 and unknown links are ignored with 200', async () => {
+    const res = await ctx.app.inject({ method: 'POST', url: '/api/v1/payments/webhooks/payos', payload: payosWebhookBody(PAYOS_LINK_ID, 499000) });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ success: true, outcome: 'processed' });
+    expect((await get(`/api/v1/orders/${orderId}`, buyerCookie)).json().data.payment_status).toBe('paid');
+
+    const forged = payosWebhookBody(PAYOS_LINK_ID, 499000);
+    forged.signature = 'f'.repeat(64);
+    const bad = await ctx.app.inject({ method: 'POST', url: '/api/v1/payments/webhooks/payos', payload: forged });
+    expect(bad.statusCode).toBe(400);
+    expect(bad.body).toContain('payment.webhook_invalid');
+
+    const unknown = await ctx.app.inject({ method: 'POST', url: '/api/v1/payments/webhooks/payos', payload: payosWebhookBody('payos-link-nobody-knows', 1000) });
+    expect(unknown.statusCode).toBe(200);
+    expect(unknown.json()).toMatchObject({ success: true, outcome: 'ignored' });
   });
 });

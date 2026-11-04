@@ -1,22 +1,29 @@
 import { createHash, randomBytes } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
-import { lookup, resolveTxt } from 'node:dns/promises';
+import { lookup } from 'node:dns/promises';
 import { domainToASCII } from 'node:url';
 import { isIP } from 'node:net';
 import type { FastifyInstance } from 'fastify';
-import { enqueueJob, clearJobResult, decryptSecret, isUniqueViolation, safeEqualHex, tx, validateDynamicContent, writeAudit, type Db, type PlatformConfig } from '@3t/core';
+import { checkDomainOwnership, checkDomainRouting, domainTxtValueMatches, enqueueJob, clearJobResult, decryptSecret, isUniqueViolation, tx, validateDynamicContent, writeAudit, type Db, type PlatformConfig } from '@3t/core';
 import { requireUser } from '../app.ts';
 import { requireStepUp } from '../lib/step-up.ts';
 import { isPublicIp, pinnedRequest } from '../lib/ssrf.ts';
 import { sessionRateLimit } from '../lib/rate-limit.ts';
 import { errors } from '../errors.ts';
 import { RESERVED_SUBDOMAINS as RESERVED, SUBDOMAIN_RE, createSiteInTx, currentHold, enqueueSiteJob } from '../site-create.ts';
+import { prepareVisualEdit, visualEditAvailability } from '../lib/visual-edit.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 function assertId(id: string) {
   if (!UUID.test(id)) throw errors.notFound();
 }
+
+/** Strict hostname shape for customer-supplied names: dot-separated
+ *  labels of at most 62 chars, each starting alphanumeric — no empty
+ *  labels, no wildcards, no underscores. Shared by the connection check
+ *  and the custom-domain add route (which additionally rejects IPs). */
+const HOSTNAME_RE = /^[a-z0-9][a-z0-9-]{0,61}(\.[a-z0-9][a-z0-9-]{0,61})+$/;
 
 interface SiteView {
   id: string;
@@ -236,7 +243,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   app.get<{ Querystring: { hostname?: string } }>('/sites/connection-check', async (request) => {
     requireUser(request);
     const hostname = (request.query.hostname ?? '').toLowerCase();
-    if (!/^[a-z0-9][a-z0-9-]{0,61}(\.[a-z0-9][a-z0-9-]{0,61})+$/.test(hostname) || hostname.length > 253 || isIP(hostname)) {
+    if (!HOSTNAME_RE.test(hostname) || hostname.length > 253 || isIP(hostname)) {
       throw errors.validation([{ field: 'hostname', code: 'invalid' }]);
     }
     let addresses: string[] = [];
@@ -288,7 +295,7 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       db.query<{ template_id: string; manifest_json: { capabilities?: string[] } }>('SELECT template_id, manifest_json FROM template_versions WHERE id = $1', [site.template_version_id]),
     ]);
     const freeUntil = await updatesFreeUntil(db, site.entitlement_id);
-    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, capabilities: template.rows[0]?.manifest_json?.capabilities ?? [], deployments: deployments.rows, domains: domains.rows, subscription: subscription.rows[0] ?? null, updates_free_until: freeUntil ? new Date(freeUntil).toISOString() : null } };
+    return { data: { ...site, url: siteUrl(site, config.siteOriginTemplate), template_id: template.rows[0]?.template_id ?? null, capabilities: template.rows[0]?.manifest_json?.capabilities ?? [], deployments: deployments.rows, domains: domains.rows, custom_domain_target: config.customDomainTarget, subscription: subscription.rows[0] ?? null, updates_free_until: freeUntil ? new Date(freeUntil).toISOString() : null, visual_edit: await visualEditAvailability(db, store, site) } };
   });
 
   app.get<{ Params: { id: string } }>('/sites/:id/deployments', async (request) => {
@@ -344,22 +351,71 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
   );
 
   // ---- Domains (C08) ----
+  // Per-site cap on pending domains: every pending row is a standing
+  // invitation to run DNS checks against a buyer-chosen name, so the
+  // pile is bounded well above a real buyer's in-flight setups.
+  const MAX_PENDING_DOMAINS_PER_SITE = 10;
+
   app.post<{ Params: { id: string }; Body: { hostname: string } }>(
     '/sites/:id/domains',
-    { schema: { body: { type: 'object', additionalProperties: false, required: ['hostname'], properties: { hostname: { type: 'string', minLength: 1, maxLength: 253 } } } } },
+    // Adds write rows and mint verification tokens: throttle per account
+    // (audit M-05 style) far above legitimate purchase behaviour.
+    { config: sessionRateLimit(30, '1 hour'), schema: { body: { type: 'object', additionalProperties: false, required: ['hostname'], properties: { hostname: { type: 'string', minLength: 1, maxLength: 253 } } } } },
     async (request, reply) => {
       const auth = requireUser(request);
       const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
-      let ascii = domainToASCII(request.body.hostname.trim().toLowerCase());
-      if (!ascii || ascii.includes('/') || ascii.includes(':') || isIP(ascii) !== 0 || !ascii.includes('.')) throw errors.validation([{ field: 'hostname', code: 'invalid' }]);
-      if (ascii.endsWith(`.${config.previewBaseDomain}`) || ascii === config.previewBaseDomain) throw errors.validation([{ field: 'hostname', code: 'platform_domain' }]);
+      // Normalize BEFORE validation and storage: buyers paste names with
+      // stray case, whitespace and trailing dots — all the same hostname.
+      // Validation is the strict label pattern the connection check uses
+      // (no empty labels, wildcards or underscores), plus the length cap
+      // and an IP-literal refusal.
+      const normalized = request.body.hostname.trim().toLowerCase().replace(/\.+$/, '');
+      const ascii = domainToASCII(normalized);
+      if (!ascii || ascii.length > 253 || !HOSTNAME_RE.test(ascii) || isIP(ascii) !== 0) throw errors.validation([{ field: 'hostname', code: 'invalid' }]);
+      // Platform-owned names can never be customer domains: the preview
+      // base, and the hosted-site base — its subdomains are the platform's
+      // own product (routed by label, not by domains rows).
+      if (
+        ascii === config.previewBaseDomain || ascii.endsWith(`.${config.previewBaseDomain}`) ||
+        ascii === config.siteBaseDomain || ascii.endsWith(`.${config.siteBaseDomain}`)
+      ) throw errors.validation([{ field: 'hostname', code: 'platform_domain' }]);
       const token = randomBytes(32).toString('hex');
+      const tokenHash = createHash('sha256').update(token).digest('hex');
+      const instructions = { verification_token: token, txt_name: `_3t-verify.${ascii}`, txt_value: token, cname_target: config.customDomainTarget };
+      // Re-adding a hostname this site already holds: the TXT value is only
+      // ever shown at add time (the DB keeps a hash), so a buyer who lost it
+      // would be stuck. A pending row gets a ROTATED token — fresh
+      // instructions, the old value stops working. Rotation deliberately
+      // does NOT touch last_verify_at: the 60-second verify cooldown must
+      // survive it, or re-adding would be a cooldown bypass that lets a
+      // caller hammer the DNS checks. A verified row needs no
+      // instructions and its token must NOT rotate (the live TXT record
+      // still carries the old value; rotating would break the worker's
+      // revalidation). Another site's active hostname stays domain.taken.
+      const existing = await db.query<{ id: string; site_id: string; status: string }>(
+        "SELECT id, site_id, status FROM domains WHERE hostname_ascii = $1 AND status IN ('pending', 'verified') LIMIT 1",
+        [ascii],
+      );
+      const held = existing.rows[0];
+      if (held && held.site_id !== site.id) throw errors.conflict('domain.taken');
+      if (held && held.status === 'verified') {
+        return reply.status(200).send({ data: { id: held.id, hostname_ascii: ascii, status: 'verified', cname_target: config.customDomainTarget } });
+      }
+      if (held) {
+        await db.query('UPDATE domains SET verification_token_hash = $2 WHERE id = $1', [held.id, tokenHash]);
+        return reply.status(200).send({ data: { id: held.id, hostname_ascii: ascii, status: 'pending', ...instructions } });
+      }
+      const pending = await db.query<{ count: string }>(
+        "SELECT count(*)::text AS count FROM domains WHERE site_id = $1 AND status = 'pending'",
+        [site.id],
+      );
+      if (Number(pending.rows[0]!.count) >= MAX_PENDING_DOMAINS_PER_SITE) throw errors.conflict('domain.pending_limit');
       try {
         const { rows } = await db.query<{ id: string }>(
           'INSERT INTO domains (site_id, hostname_ascii, verification_token_hash) VALUES ($1, $2, $3) RETURNING id',
-          [site.id, ascii, createHash('sha256').update(token).digest('hex')],
+          [site.id, ascii, tokenHash],
         );
-        return reply.status(201).send({ data: { id: rows[0]!.id, hostname_ascii: ascii, status: 'pending', verification_token: token, txt_name: `_3t-verify.${ascii}`, txt_value: token } });
+        return reply.status(201).send({ data: { id: rows[0]!.id, hostname_ascii: ascii, status: 'pending', ...instructions } });
       } catch (error) {
         if (isUniqueViolation(error)) throw errors.conflict('domain.taken');
         throw error;
@@ -369,7 +425,10 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
 
   app.post<{ Params: { id: string; domainId: string }; Body: { txt_value?: string } }>(
     '/sites/:id/domains/:domainId/verify',
-    { schema: { body: { type: 'object', additionalProperties: false, properties: { txt_value: { type: 'string' } } } } },
+    // Verify triggers outbound DNS lookups (and, on proven ownership, an
+    // HTTP probe): throttle per account on top of the 60s per-domain
+    // cooldown enforced in the handler.
+    { config: sessionRateLimit(10, '1 minute'), schema: { body: { type: 'object', additionalProperties: false, properties: { txt_value: { type: 'string' } } } } },
     async (request) => {
       const auth = requireUser(request);
       const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
@@ -379,25 +438,47 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
         [request.params.domainId, site.id],
       );
       if (!domain.rows[0]) throw errors.notFound();
-      if (domain.rows[0]!.status === 'verified') return { data: { status: 'verified' } };
+      if (domain.rows[0]!.status === 'verified') return { data: { status: 'verified', verified: true, checks: { ownership: true, routing: true } } };
       if (domain.rows[0]!.last_verify_at && Date.now() - new Date(domain.rows[0]!.last_verify_at).getTime() < 60_000) throw errors.conflict('domain.verify_cooldown');
       await db.query('UPDATE domains SET last_verify_at = now() WHERE id = $1', [request.params.domainId]);
-      let ok = false;
+      const hostname = domain.rows[0]!.hostname_ascii;
+      const tokenHash = domain.rows[0]!.verification_token_hash;
+      // Check 1 — ownership: the `_3t-verify` TXT record carries the token.
       // Dev/test proof: presenting the token proves control (stand-in for a DNS read).
+      let ownership: boolean;
       if (config.dnsVerifyBodyProof && request.body.txt_value) {
-        ok = safeEqualHex(createHash('sha256').update(request.body.txt_value).digest('hex'), domain.rows[0]!.verification_token_hash);
+        ownership = domainTxtValueMatches(request.body.txt_value, tokenHash);
       } else {
         // Production path: read the TXT record. A failed lookup keeps the domain pending (AT-25/AT-26).
-        try {
-          const records = await resolveTxt(`_3t-verify.${domain.rows[0]!.hostname_ascii}`);
-          ok = records.flat().some((value) => safeEqualHex(createHash('sha256').update(value).digest('hex'), domain.rows[0]!.verification_token_hash));
-        } catch {
-          ok = false;
-        }
+        ownership = await checkDomainOwnership(hostname, tokenHash, app.deps.domainDns?.resolveTxt);
       }
-      if (!ok) return { data: { status: 'pending', verified: false } };
-      await db.query("UPDATE domains SET status = 'verified', verified_at = now(), cert_expires_at = now() + interval '90 days' WHERE id = $1", [request.params.domainId]);
-      return { data: { status: 'verified', verified: true } };
+      // Check 2 — routing: the CNAME chain reaches the platform target, or
+      // the site router answers its probe on this hostname (apex flattening
+      // and proxied setups have no visible CNAME). Routing runs ONLY once
+      // ownership is proven: probing an unowned hostname would make the
+      // platform resolve and fetch arbitrary public hosts on any caller's
+      // behalf. When ownership fails, routing is reported false (not run),
+      // so one Verify press still tells the buyer what is missing first.
+      const routing = ownership ? (await checkDomainRouting(hostname, config.customDomainTarget, app.deps.domainDns)).ok : false;
+      const checks = { ownership, routing };
+      if (!ownership || !routing) return { data: { status: 'pending', verified: false, checks } };
+      // Guarded transition: only a still-actionable row may flip. A
+      // concurrent release (or a twin verify landing first) must not be
+      // silently overwritten by checks that ran against the old state.
+      const updated = await db.query<{ id: string }>(
+        "UPDATE domains SET status = 'verified', verified_at = now(), cert_expires_at = now() + interval '90 days' WHERE id = $1 AND status IN ('pending', 'verification_lost') RETURNING id",
+        [request.params.domainId],
+      );
+      if (updated.rows.length === 0) {
+        const current = await db.query<{ status: string }>(
+          'SELECT status FROM domains WHERE id = $1 AND site_id = $2',
+          [request.params.domainId, site.id],
+        );
+        // A racing verify won the flip — report the verified state.
+        if (current.rows[0]?.status === 'verified') return { data: { status: 'verified', verified: true, checks } };
+        throw errors.conflict('domain.not_verified');
+      }
+      return { data: { status: 'verified', verified: true, checks } };
     },
   );
 
@@ -552,6 +633,59 @@ export async function siteRoutes(app: FastifyInstance): Promise<void> {
       },
     };
   });
+
+  // Visual editor for hosted STATIC sites (phase 2 of the one-time
+  // setup model, migration 0046): the buyer who bought the installation
+  // package may spend the single setup right by editing the live site
+  // in place instead of filling the order-page form — whichever door
+  // finalizes first claims the right on the service task. Minting is
+  // the only API step: it snapshots the replaceable seed candidates
+  // (twin seed ∩ static HTML) into a short-lived session row; the site
+  // router validates the entry token on the site's own origin, injects
+  // the editor, and performs the atomic claim at finalize. Owner-only:
+  // the right belongs to the buyer of the order, like the form.
+  app.post<{ Params: { id: string } }>(
+    '/sites/:id/visual-edit/session',
+    { config: sessionRateLimit(30) },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      const site = await loadSiteForUser(db, request.params.id, auth.userId, true);
+      const prepared = await prepareVisualEdit(db, store, site);
+      if (!prepared.ok) {
+        if (prepared.reason === 'not_static' || prepared.reason === 'no_setup_task') throw errors.notFound();
+        if (prepared.reason === 'already_submitted') throw errors.conflict('setup_info.already_submitted');
+        if (prepared.reason === 'site_not_active') throw errors.conflict('site.not_active');
+        throw errors.conflict(prepared.reason === 'no_candidates' ? 'visual_edit.no_candidates' : 'visual_edit.no_seed');
+      }
+      // Public base of the site's own origin: the platform subdomain
+      // URL, or a verified custom domain when the site has no
+      // subdomain. The loopback runtime URL is never an edit entry.
+      let base = site.subdomain ? siteUrl(site, config.siteOriginTemplate) : null;
+      if (!base) {
+        const domains = await db.query<{ hostname_ascii: string }>(
+          "SELECT hostname_ascii FROM domains WHERE site_id = $1 AND status = 'verified' ORDER BY is_primary DESC, created_at LIMIT 1",
+          [site.id],
+        );
+        if (domains.rows[0]) base = `https://${domains.rows[0].hostname_ascii}/`;
+      }
+      if (!base) throw errors.conflict('visual_edit.not_available');
+      const token = randomBytes(32).toString('base64url');
+      const tokenHash = createHash('sha256').update(token, 'utf8').digest('hex');
+      const inserted = await db.query<{ id: string; expires_at: Date }>(
+        `INSERT INTO site_edit_sessions (site_id, buyer_id, task_id, token_hash, candidates_json, expires_at)
+         VALUES ($1, $2, $3, $4, $5::jsonb, now() + interval '2 hours') RETURNING id, expires_at`,
+        [site.id, auth.userId, prepared.task.taskId, tokenHash, JSON.stringify(prepared.candidates)],
+      );
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'site.visual_edit_session_created', resourceType: 'site', resourceId: site.id, traceId: request.id });
+      return reply.status(201).send({
+        data: {
+          edit_url: `${base}__3t_edit/enter?token=${token}`,
+          expires_at: inserted.rows[0]!.expires_at.toISOString(),
+          candidates_count: prepared.candidates.length,
+        },
+      });
+    },
+  );
 
   async function loadDynamicSite(siteId: string, userId: string): Promise<SiteView> {
     const site = await loadSiteForUser(db, siteId, userId, true);

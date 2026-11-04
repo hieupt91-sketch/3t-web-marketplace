@@ -114,6 +114,17 @@ export default async function TemplateDetail({ params }: Props) {
               {t('ui.catalog.price_from')} <strong>{formatMoney(cheapest, locale)}</strong>
             </p>
           ) : null}
+          {!(template.adapter === 'node-http' || template.adapter === 'next-standalone') ? (
+            <div className="alert alert--info stack" role="note">
+              <strong>{t('ui.detail.static_setup_title')}</strong>
+              <p style={{ margin: 0 }}>{t('ui.detail.static_setup_body')}</p>
+              {template.dynamic_twin_slug ? (
+                <p style={{ margin: 0 }}>
+                  <Link className="button button--secondary" href={`/${locale}/templates/${template.dynamic_twin_slug}`}>{t('ui.detail.view_dynamic_twin')}</Link>
+                </p>
+              ) : null}
+            </div>
+          ) : null}
           <h2 style={{ margin: 0 }}>{t('ui.detail.plans')}</h2>
           {template.plans.length === 0 ? (
             <p className="muted" style={{ margin: 0 }}>{t('ui.detail.no_plans')}</p>

@@ -1,5 +1,4 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
-import { execFile } from 'node:child_process';
 import { createReadStream, createWriteStream } from 'node:fs';
 import { mkdir, mkdtemp, readdir, realpath, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
@@ -14,6 +13,7 @@ import {
   getImportPolicy,
   tx,
   writeAudit,
+  zipFiles,
   type LocalObjectStore,
   type PlatformConfig,
   type Queryable,
@@ -23,15 +23,6 @@ import { errors } from '../errors.ts';
 import { idempotent } from '../lib/idempotency.ts';
 
 const REPO_RE = /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/;
-
-function execFileAsync(file: string, args: string[], cwd: string): Promise<{ stdout: string; stderr: string }> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: 120_000, maxBuffer: 1024 * 1024 }, (error, stdout, stderr) => {
-      if (error) reject(new Error(`${file} failed: ${String(stderr).slice(0, 500)}`));
-      else resolve({ stdout, stderr });
-    });
-  });
-}
 
 async function walkFiles(root: string, dir = root): Promise<string[]> {
   const out: string[] = [];
@@ -140,7 +131,10 @@ export async function createGithubImport(
     const files = await walkFiles(root);
     if (files.length === 0 || files.length > policy.max_files) throw errors.badRequest('github.file_limit');
     const zipPath = join(tmp, 'repo.zip');
-    await execFileAsync('zip', ['-q', '-r', zipPath, ...files], root);
+    // In-process zip (core zipFiles): the API image ships no `zip`
+    // binary — shelling out failed every GitHub import with ENOENT.
+    // Same layout: exactly the walked files at their relative paths.
+    await zipFiles(root, files, zipPath);
     const zipStream = createReadStream(zipPath);
     const key = `github/${repo.replace('/', '-')}-${commitSha}.zip`;
     const stored = await store.putStream(key, zipStream, policy.max_upload_bytes + 1);

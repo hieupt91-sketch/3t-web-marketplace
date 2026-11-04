@@ -62,7 +62,7 @@ beforeAll(async () => {
   );
   const version = await ctx.db.query<{ id: string }>(
     `INSERT INTO template_versions (template_id, semver, schema_version, manifest_json, adapter, source_sha, source_artifact_id, artifact_id, status)
-     VALUES ($1, '1.0.0', 1, '{}'::jsonb, 'static-html', $2, $3, $3, 'published') RETURNING id`,
+     VALUES ($1, '1.0.0', 1, '{}'::jsonb, 'node-http', $2, $3, $3, 'published') RETURNING id`,
     [templateId, 'c'.repeat(64), artifact.rows[0]!.id],
   );
   await ctx.db.query('UPDATE templates SET published_version_id = $2 WHERE id = $1', [templateId, version.rows[0]!.id]);

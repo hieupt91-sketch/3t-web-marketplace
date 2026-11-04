@@ -213,3 +213,16 @@ describe('demo session proxy on the preview origin', () => {
     expect(res.headers['set-cookie']).toEqual(['dsess=tok; HttpOnly; Path=/; SameSite=Lax']);
   });
 });
+
+describe('custom-domain routing probe (/__3t_probe)', () => {
+  it('answers the marker for a hostname present in the domains table', async () => {
+    const res = await call(routerPort, 'shop.example.com', '/__3t_probe');
+    expect(res.status).toBe(200);
+    expect(res.body).toBe('3t-router-ok');
+  });
+
+  it('answers 404 for an unknown hostname — the probe reveals nothing', async () => {
+    const res = await call(routerPort, 'unknown.example.com', '/__3t_probe');
+    expect(res.status).toBe(404);
+  });
+});

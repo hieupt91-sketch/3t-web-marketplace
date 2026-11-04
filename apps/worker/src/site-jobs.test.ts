@@ -4,7 +4,7 @@ import { existsSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { decryptSecret, type Db, type JobRow, type LocalObjectStore, type PlatformConfig } from '@3t/core';
+import { LocalObjectStore, decryptSecret, type Db, type JobRow, type PlatformConfig } from '@3t/core';
 import { ArchiveError } from '@3t/template-sdk';
 import { buildZip } from '@3t/template-sdk/testing';
 import {
@@ -517,5 +517,208 @@ describe('site.stop job (Phase 1 follow-up)', () => {
     } finally {
       sleeper.kill('SIGKILL');
     }
+  });
+});
+
+/**
+ * Production defect 2026-11-03: the worker image ships no `zip`
+ * binary, and runBackup shelled out to it — every backup/export the
+ * owner tried failed instantly with ENOENT and the backups rows stuck
+ * at 'failed'. The job now zips in-process (core zipDirectory). This
+ * test runs the real job with PATH scrubbed to an empty directory, so
+ * any shell-out to an external zip would fail the same way production
+ * did; the produced archive must restore byte-for-byte through the
+ * platform's own extractor.
+ */
+describe('site.backup job (in-process zip, no system zip binary)', () => {
+  function fakeBackupDb(site: Record<string, unknown>, captured: CapturedUpdate[]): Db {
+    const query = async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM sites')) return { rows: [site], rowCount: 1 };
+      if (sql.includes('INSERT INTO artifacts')) {
+        captured.push({ sql, params });
+        return { rows: [{ id: 'artifact-1' }], rowCount: 1 };
+      }
+      if (sql.startsWith('UPDATE backups') || sql.startsWith('UPDATE jobs')) {
+        captured.push({ sql, params });
+        return { rows: [], rowCount: 1 };
+      }
+      throw new Error(`unexpected query in fake db: ${sql.slice(0, 80)}`);
+    };
+    return { query } as unknown as Db;
+  }
+
+  it('backs up the site tree into a restorable zip with PATH emptied of binaries', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mp-backup-job-'));
+    const workDir = join(base, 'work');
+    const sitePath = join(workDir, 'sites', 'site-1');
+    await mkdir(join(sitePath, 'data', 'uploads'), { recursive: true });
+    await mkdir(join(sitePath, 'empty-dir'), { recursive: true });
+    await writeFile(join(sitePath, 'index.html'), '<h1>backup me</h1>');
+    await writeFile(join(sitePath, '.hidden'), 'dotfile-bytes');
+    await writeFile(join(sitePath, 'data', 'content.json'), '{"edited":true}');
+    await writeFile(join(sitePath, 'data', 'uploads', 'a.txt'), 'upload-bytes');
+
+    const store = new LocalObjectStore(join(base, 'store'));
+    const captured: CapturedUpdate[] = [];
+    const db = fakeBackupDb(siteRow({ runtime_kind: 'static' }), captured);
+    const config = { workDir } as unknown as PlatformConfig;
+
+    const previousPath = process.env.PATH;
+    process.env.PATH = join(base, 'no-binaries');
+    try {
+      await runSiteJob({ config, db, store }, makeRunningJob('site.backup', 'site-1', { backup_id: 'backup-1' }));
+    } finally {
+      process.env.PATH = previousPath;
+    }
+
+    const succeeded = captured.find((c) => c.sql.includes("UPDATE backups SET status = 'succeeded'"));
+    expect(succeeded).toBeTruthy();
+    expect(captured.some((c) => c.sql.includes("UPDATE backups SET status = 'failed'"))).toBe(false);
+    expect(succeeded!.params[0]).toBe('backup-1');
+    expect(succeeded!.params[1]).toBe('artifact-1');
+    expect(String(succeeded!.params[2])).toMatch(/^[0-9a-f]{64}$/);
+    expect(captured.some((c) => c.sql.startsWith('UPDATE jobs') && c.sql.includes("status = 'succeeded'"))).toBe(true);
+
+    const zipPath = store.pathFor('backups/site-1/backup-1.zip');
+    expect(existsSync(zipPath)).toBe(true);
+    const staged = join(base, 'staged');
+    await mkdir(staged, { recursive: true });
+    await extractBackupArchive(zipPath, staged);
+    await expect(readFile(join(staged, 'index.html'), 'utf8')).resolves.toBe('<h1>backup me</h1>');
+    await expect(readFile(join(staged, '.hidden'), 'utf8')).resolves.toBe('dotfile-bytes');
+    await expect(readFile(join(staged, 'data', 'content.json'), 'utf8')).resolves.toBe('{"edited":true}');
+    await expect(readFile(join(staged, 'data', 'uploads', 'a.txt'), 'utf8')).resolves.toBe('upload-bytes');
+    expect(existsSync(join(staged, 'empty-dir'))).toBe(true);
+  });
+});
+
+/**
+ * site.visual_edit_apply (migration 0046): the worker half of the
+ * visual editor. The finalize at the router claims the one-time setup
+ * right BEFORE this job exists, so the job's first act is re-verifying
+ * that claim — anything else fails as visual_edit_claim_missing with
+ * the tree untouched and no backup taken. On a valid claim the order
+ * is backup first (through the real runBackup, so the stored zip must
+ * contain the ORIGINAL files), then the exact-match rewrite across
+ * every HTML file — raw and HTML-escaped forms, all occurrences —
+ * while non-HTML bytes are never touched.
+ */
+describe('site.visual_edit_apply job', () => {
+  const VE_INDEX = '<!doctype html><html lang="vi"><head><title>Phụ Tùng Ô Tô Trường Sơn</title><meta name="description" content="Café &amp; Bar phụ tùng"></head><body>\n<h1 data-en="Truong Son Auto Parts">Phụ Tùng Ô Tô Trường Sơn</h1>\n<p>Hotline: 0967 136 099</p>\n<img src="images/hero.jpg">\n<p>Café &amp; Bar</p>\n</body></html>';
+  const VE_SECOND = '<!doctype html><html lang="vi"><body><footer>Gọi: 0967 136 099 — Phụ Tùng Ô Tô Trường Sơn</footer></body></html>';
+  const VE_PAIRS = [
+    { from: 'Phụ Tùng Ô Tô Trường Sơn', to: 'Phụ Tùng Minh Phát' },
+    { from: 'Truong Son Auto Parts', to: 'Minh Phat Auto Parts' },
+    { from: 'Café & Bar', to: 'Minh Phát & Đối Tác' },
+    { from: 'images/hero.jpg', to: 'https://cdn.example.com/new-hero.jpg' },
+    { from: '0967 136 099', to: '0901 222 333' },
+  ];
+  const VE_CLAIM = {
+    setup_info_json: { source: 'visual_editor', session_id: 'session-ve-1', changes: [{ field: 'site.name' }] },
+    setup_info_submitted_at: new Date(),
+  };
+
+  function fakeVisualEditDb(captured: CapturedUpdate[], claim: unknown): Db {
+    const query = async (sql: string, params: unknown[] = []) => {
+      if (sql.includes('FROM sites')) return { rows: [siteRow({ runtime_kind: 'static' })], rowCount: 1 };
+      if (sql.includes('FROM service_tasks')) return { rows: claim ? [claim] : [], rowCount: claim ? 1 : 0 };
+      if (sql.startsWith('INSERT INTO backups')) {
+        captured.push({ sql, params });
+        return { rows: [{ id: 'backup-ve-1' }], rowCount: 1 };
+      }
+      if (sql.startsWith('INSERT INTO artifacts')) return { rows: [{ id: 'artifact-ve-1' }], rowCount: 1 };
+      if (sql.startsWith('UPDATE backups') || sql.startsWith('UPDATE jobs')) {
+        captured.push({ sql, params });
+        return { rows: [], rowCount: 1 };
+      }
+      if (sql.startsWith('INSERT INTO outbox_events')) return { rows: [], rowCount: 1 };
+      throw new Error(`unexpected query in fake db: ${sql.slice(0, 80)}`);
+    };
+    return { query } as unknown as Db;
+  }
+
+  async function makeVeSite(base: string) {
+    const workDir = join(base, 'work');
+    const tree = join(workDir, 'sites', 'site-1');
+    await mkdir(tree, { recursive: true });
+    await writeFile(join(tree, 'index.html'), VE_INDEX);
+    await writeFile(join(tree, 'second.html'), VE_SECOND);
+    await writeFile(join(tree, 'styles.css'), 'body { color: red; } /* 0967 136 099 stays: not HTML */');
+    const store = new LocalObjectStore(join(base, 'store'));
+    const config = { workDir } as unknown as PlatformConfig;
+    return { workDir, tree, store, config };
+  }
+
+  function failedCode(captured: CapturedUpdate[]): string | null {
+    const fail = captured.find((c) => c.sql.startsWith('UPDATE jobs') && c.sql.includes('last_error_code = $4'));
+    return fail ? (fail.params[3] as string) : null;
+  }
+
+  it('backs up the ORIGINAL tree, then rewrites every HTML file (raw + escaped forms), leaving other bytes alone', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mp-visual-edit-'));
+    const { tree, store, config } = await makeVeSite(base);
+    const captured: CapturedUpdate[] = [];
+    const db = fakeVisualEditDb(captured, VE_CLAIM);
+
+    await runSiteJob({ config, db, store }, makeRunningJob('site.visual_edit_apply', 'site-1', { task_id: 'task-ve-1', session_id: 'session-ve-1', pairs: VE_PAIRS }));
+
+    const index = await readFile(join(tree, 'index.html'), 'utf8');
+    expect(index).toContain('<title>Phụ Tùng Minh Phát</title>');
+    expect(index).toContain('data-en="Minh Phat Auto Parts"');
+    expect(index).not.toContain('Trường Sơn');
+    expect(index).not.toContain('Truong Son');
+    // The escaped seed form is replaced with the escaped replacement.
+    expect(index).toContain('Minh Phát &amp; Đối Tác');
+    expect(index).not.toContain('Café');
+    expect(index).toContain('src="https://cdn.example.com/new-hero.jpg"');
+    expect(index).toContain('Hotline: 0901 222 333');
+    const second = await readFile(join(tree, 'second.html'), 'utf8');
+    expect(second).toBe('<!doctype html><html lang="vi"><body><footer>Gọi: 0901 222 333 — Phụ Tùng Minh Phát</footer></body></html>');
+    // Non-HTML files are never rewritten, even when they contain a pair string.
+    await expect(readFile(join(tree, 'styles.css'), 'utf8')).resolves.toBe('body { color: red; } /* 0967 136 099 stays: not HTML */');
+
+    const result = captured.find((c) => c.sql.includes('SET result_json'));
+    expect(result).toBeTruthy();
+    expect(JSON.parse(result!.params[2] as string)).toEqual({ backup_id: 'backup-ve-1', files_changed: 2, replacements: 9, pairs_matched: 5, pairs_total: 5 });
+    expect(captured.some((c) => c.sql.startsWith('UPDATE jobs') && c.sql.includes("status = 'succeeded'"))).toBe(true);
+    expect(captured.some((c) => c.sql.startsWith('UPDATE backups') && c.sql.includes("status = 'succeeded'"))).toBe(true);
+
+    // The backup was taken BEFORE the rewrite: it holds the originals.
+    const zipPath = store.pathFor('backups/site-1/backup-ve-1.zip');
+    expect(existsSync(zipPath)).toBe(true);
+    const staged = join(base, 'staged');
+    await mkdir(staged, { recursive: true });
+    await extractBackupArchive(zipPath, staged);
+    await expect(readFile(join(staged, 'index.html'), 'utf8')).resolves.toBe(VE_INDEX);
+    await expect(readFile(join(staged, 'second.html'), 'utf8')).resolves.toBe(VE_SECOND);
+  });
+
+  it('refuses without touching anything when the claim is missing or belongs to the form door', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mp-visual-edit-'));
+    const { tree, store, config } = await makeVeSite(base);
+    const formClaim = { setup_info_json: { business_name: 'Qua Form' }, setup_info_submitted_at: new Date() };
+    for (const claim of [null, formClaim, { setup_info_json: { source: 'visual_editor', session_id: 'another-session' }, setup_info_submitted_at: new Date() }]) {
+      const captured: CapturedUpdate[] = [];
+      const db = fakeVisualEditDb(captured, claim);
+      await runSiteJob({ config, db, store }, makeRunningJob('site.visual_edit_apply', 'site-1', { task_id: 'task-ve-1', session_id: 'session-ve-1', pairs: VE_PAIRS }));
+      expect(failedCode(captured)).toBe('visual_edit_claim_missing');
+      expect(captured.some((c) => c.sql.startsWith('INSERT INTO backups'))).toBe(false);
+      await expect(readFile(join(tree, 'index.html'), 'utf8')).resolves.toBe(VE_INDEX);
+    }
+  });
+
+  it('fails as visual_edit_no_match when the claimed strings are absent — after the backup exists', async () => {
+    const base = await mkdtemp(join(tmpdir(), 'mp-visual-edit-'));
+    const { tree, store, config } = await makeVeSite(base);
+    const captured: CapturedUpdate[] = [];
+    const db = fakeVisualEditDb(captured, VE_CLAIM);
+    await runSiteJob({ config, db, store }, makeRunningJob('site.visual_edit_apply', 'site-1', {
+      task_id: 'task-ve-1', session_id: 'session-ve-1',
+      pairs: [{ from: 'Chuỗi Không Hề Có Trong File', to: 'X' }],
+    }));
+    expect(failedCode(captured)).toBe('visual_edit_no_match');
+    expect(captured.some((c) => c.sql.startsWith('INSERT INTO backups'))).toBe(true);
+    expect(existsSync(store.pathFor('backups/site-1/backup-ve-1.zip'))).toBe(true);
+    await expect(readFile(join(tree, 'index.html'), 'utf8')).resolves.toBe(VE_INDEX);
   });
 });

@@ -4,7 +4,7 @@ import Link from 'next/link';
 import { useParams } from 'next/navigation';
 import { useCallback, useEffect, useState } from 'react';
 import { formatMoney } from '@3t/i18n';
-import { EmptyState, ErrorState, Loading, StatusBadge } from '@/components/ui';
+import { Alert, EmptyState, ErrorState, Loading, StatusBadge } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 
@@ -15,8 +15,147 @@ interface OrderDetail {
   currency: string;
   terms_version: string;
   items: { template_id: string; deployment_mode: string; unit_price_minor: string }[];
+  installation_status?: string | null;
+  setup_info?: SetupInfoState | null;
   paid_at: string | null;
   created_at: string;
+}
+interface SetupInfoData {
+  business_name: string;
+  phone?: string; email?: string; address?: string; about?: string;
+  logo_url?: string; facebook_url?: string; zalo?: string;
+  google_sheet_url?: string; note?: string;
+  seo_title?: string; seo_description?: string;
+}
+interface SetupInfoState { submitted: boolean; submitted_at: string | null; data: SetupInfoData | null }
+
+const SETUP_FIELDS: { key: keyof SetupInfoData; label: string; kind: 'input' | 'textarea'; maxLength: number; type?: string; hint?: string }[] = [
+  { key: 'business_name', label: 'ui.setup_info.field_business_name', kind: 'input', maxLength: 200 },
+  { key: 'phone', label: 'ui.setup_info.field_phone', kind: 'input', maxLength: 32, type: 'tel' },
+  { key: 'email', label: 'ui.setup_info.field_email', kind: 'input', maxLength: 254, type: 'email' },
+  { key: 'address', label: 'ui.setup_info.field_address', kind: 'input', maxLength: 500 },
+  { key: 'about', label: 'ui.setup_info.field_about', kind: 'textarea', maxLength: 5000 },
+  { key: 'logo_url', label: 'ui.setup_info.field_logo_url', kind: 'input', maxLength: 1000, type: 'url' },
+  { key: 'facebook_url', label: 'ui.setup_info.field_facebook_url', kind: 'input', maxLength: 1000, type: 'url' },
+  { key: 'zalo', label: 'ui.setup_info.field_zalo', kind: 'input', maxLength: 100 },
+  { key: 'google_sheet_url', label: 'ui.setup_info.field_google_sheet_url', kind: 'input', maxLength: 2000, type: 'url', hint: 'ui.setup_info.sheet_hint' },
+  { key: 'note', label: 'ui.setup_info.field_note', kind: 'textarea', maxLength: 2000 },
+  { key: 'seo_title', label: 'ui.setup_info.field_seo_title', kind: 'input', maxLength: 200, hint: 'ui.setup_info.seo_blank_hint' },
+  { key: 'seo_description', label: 'ui.setup_info.field_seo_description', kind: 'textarea', maxLength: 500, hint: 'ui.setup_info.seo_blank_hint' },
+];
+
+function SetupInfoSummary({ data }: { data: SetupInfoData }) {
+  const { t } = useT();
+  return (
+    <dl className="details">
+      {SETUP_FIELDS.map((f) => {
+        const v = data[f.key];
+        return v ? (
+          <div key={f.key} style={{ display: 'contents' }}>
+            <dt>{t(f.label)}</dt>
+            <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>{v}</dd>
+          </div>
+        ) : null;
+      })}
+    </dl>
+  );
+}
+
+/** One-time setup info for a static purchase (owner model 2026-11-03):
+ *  the form stays on the order until the buyer submits — the right never
+ *  expires — and the submission itself locks the information for good.
+ *  Warnings repeat at every step: a banner when the form opens, then an
+ *  explicit confirm step; only the confirm button calls the API. */
+function SetupInfoCard({ orderId, info, onSubmitted }: { orderId: string; info: SetupInfoState; onSubmitted: () => void }) {
+  const { t, dt } = useT();
+  const [values, setValues] = useState<Record<string, string>>({});
+  const [stage, setStage] = useState<'edit' | 'confirm'>('edit');
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError | null>(null);
+
+  if (info.submitted && info.data) {
+    return (
+      <div className="card stack">
+        <h2 style={{ margin: 0 }}>{t('ui.setup_info.submitted_title')}</h2>
+        <Alert tone="info"><p>{t('ui.setup_info.submitted_note')}</p></Alert>
+        {info.submitted_at ? <p className="muted" style={{ margin: 0 }}>{t('ui.setup_info.submitted_at_label')}: {dt(info.submitted_at)}</p> : null}
+        <SetupInfoSummary data={info.data} />
+      </div>
+    );
+  }
+
+  const entered: SetupInfoData = { business_name: (values.business_name ?? '').trim() };
+  for (const f of SETUP_FIELDS) {
+    if (f.key === 'business_name') continue;
+    const v = (values[f.key] ?? '').trim();
+    if (v) entered[f.key] = v;
+  }
+
+  async function confirmSubmit() {
+    setBusy(true);
+    setError(null);
+    const res = await api(`/orders/${orderId}/setup-info`, { method: 'POST', body: entered });
+    setBusy(false);
+    if (!res.ok) {
+      // Already locked (e.g. submitted in another tab): reload into the
+      // locked summary instead of showing a dead-end error.
+      if (res.error.code === 'setup_info.already_submitted') return onSubmitted();
+      return setError(res.error);
+    }
+    onSubmitted();
+  }
+
+  if (stage === 'confirm') {
+    return (
+      <div className="card stack">
+        <h2 style={{ margin: 0 }}>{t('ui.setup_info.title')}</h2>
+        <Alert tone="warning" title={t('ui.setup_info.confirm_title')}><p>{t('ui.setup_info.confirm_body')}</p></Alert>
+        <SetupInfoSummary data={entered} />
+        {error ? <ErrorState error={error} /> : null}
+        <div className="row">
+          <button type="button" className="button button--secondary" disabled={busy} onClick={() => setStage('edit')}>{t('ui.setup_info.confirm_back')}</button>
+          <button type="button" className="button" disabled={busy} onClick={() => void confirmSubmit()}>{t('ui.setup_info.confirm_lock')}</button>
+        </div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="card stack">
+      <h2 style={{ margin: 0 }}>{t('ui.setup_info.title')}</h2>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.setup_info.intro')}</p>
+      <Alert tone="warning" title={t('ui.setup_info.warn_title')}><p>{t('ui.setup_info.warn_body')}</p></Alert>
+      {error ? <ErrorState error={error} /> : null}
+      <form
+        className="stack"
+        onSubmit={(e) => { e.preventDefault(); setError(null); setStage('confirm'); }}
+      >
+        {SETUP_FIELDS.map((f) => (
+          <label key={f.key} className="field">
+            <span>{t(f.label)}{f.key === 'business_name' ? ' *' : ''}</span>
+            {f.kind === 'textarea' ? (
+              <textarea
+                className="textarea" rows={f.key === 'about' ? 5 : 3} maxLength={f.maxLength}
+                value={values[f.key] ?? ''}
+                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+              />
+            ) : (
+              <input
+                className="input" type={f.type ?? 'text'} maxLength={f.maxLength}
+                required={f.key === 'business_name'}
+                value={values[f.key] ?? ''}
+                onChange={(e) => setValues((prev) => ({ ...prev, [f.key]: e.target.value }))}
+              />
+            )}
+            {f.hint ? <span className="field__hint">{t(f.hint)}</span> : null}
+          </label>
+        ))}
+        <div className="row">
+          <button type="submit" className="button">{t('ui.setup_info.finish_button')}</button>
+        </div>
+      </form>
+    </div>
+  );
 }
 interface Attempt {
   id: string;
@@ -79,6 +218,7 @@ function OrderDetailInner() {
           <li key={i} className="tabular">{item.deployment_mode} — {formatMoney({ amount_minor: item.unit_price_minor, currency: order.currency }, locale)}</li>
         ))}</ul>
       )}
+      {order.setup_info ? <SetupInfoCard orderId={order.id} info={order.setup_info} onSubmitted={() => void load()} /> : null}
       <h2>{t('ui.checkout.issue_attempts')}</h2>
       <ul>{attempts.map((a) => <li key={a.id}>{a.provider} · {formatMoney({ amount_minor: a.amount_minor, currency: a.currency }, locale)} · {a.status} · {dt(a.created_at)}</li>)}</ul>
       <h2>{t('ui.account.refund_requests')}</h2>

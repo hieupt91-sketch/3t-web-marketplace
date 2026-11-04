@@ -145,7 +145,7 @@ while (!stopping) {
       // records; a token that stays missing past the grace window moves the
       // domain out of 'verified' (the router only serves that status). The
       // sweep self-throttles to domains not conclusively rechecked in 24h.
-      await revalidateVerifiedDomains(db)
+      await revalidateVerifiedDomains(db, { target: config.customDomainTarget })
         .then((r) => {
           if (r.lost > 0 || r.graceStarted > 0) logLine('domain_recheck_sweep', { ...r });
         })

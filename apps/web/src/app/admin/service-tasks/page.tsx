@@ -1,17 +1,42 @@
 'use client';
 
-import { useCallback, useEffect, useState } from 'react';
+import { Fragment, useCallback, useEffect, useState } from 'react';
 import { RequirePermission } from '@/components/dashboard-shell';
 import { ErrorState, Loading } from '@/components/ui';
 import { api, type ApiError } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { formatMoney } from '@3t/i18n';
 
+interface SetupInfoData {
+  business_name: string;
+  phone?: string; email?: string; address?: string; about?: string;
+  logo_url?: string; facebook_url?: string; zalo?: string;
+  google_sheet_url?: string; note?: string;
+  seo_title?: string; seo_description?: string;
+}
+
 interface ServiceTask {
   id: string; order_id: string; kind: string; status: string;
   created_at: string; completed_at: string | null;
   buyer_email: string; order_total_minor: string; currency: string;
+  setup_info_json: SetupInfoData | null;
+  setup_info_submitted_at: string | null;
 }
+
+const SETUP_INFO_FIELDS: { key: keyof SetupInfoData; label: string }[] = [
+  { key: 'business_name', label: 'ui.setup_info.field_business_name' },
+  { key: 'phone', label: 'ui.setup_info.field_phone' },
+  { key: 'email', label: 'ui.setup_info.field_email' },
+  { key: 'address', label: 'ui.setup_info.field_address' },
+  { key: 'about', label: 'ui.setup_info.field_about' },
+  { key: 'logo_url', label: 'ui.setup_info.field_logo_url' },
+  { key: 'facebook_url', label: 'ui.setup_info.field_facebook_url' },
+  { key: 'zalo', label: 'ui.setup_info.field_zalo' },
+  { key: 'google_sheet_url', label: 'ui.setup_info.field_google_sheet_url' },
+  { key: 'note', label: 'ui.setup_info.field_note' },
+  { key: 'seo_title', label: 'ui.setup_info.field_seo_title' },
+  { key: 'seo_description', label: 'ui.setup_info.field_seo_description' },
+];
 
 /** Operations queue for paid service packages (today: installation).
  *  Staff work pending tasks and mark them done; the buyer follows the
@@ -60,19 +85,48 @@ function ServiceTasksInner() {
             </thead>
             <tbody>
               {tasks.map((task) => (
-                <tr key={task.id}>
-                  <td>{t('ui.admin.tasks.kind_installation')}</td>
-                  <td>{task.buyer_email}</td>
-                  <td className="tabular">{formatMoney({ amount_minor: task.order_total_minor, currency: task.currency }, locale)}</td>
-                  <td>{dt(task.created_at)}</td>
-                  <td>
-                    {task.status === 'pending' ? (
-                      <button type="button" className="button button--secondary" disabled={busy === task.id} onClick={() => void complete(task.id)}>{t('ui.admin.tasks.complete')}</button>
-                    ) : (
-                      <span className="muted">{task.completed_at ? dt(task.completed_at) : ''}</span>
-                    )}
-                  </td>
-                </tr>
+                <Fragment key={task.id}>
+                  <tr>
+                    <td>{t('ui.admin.tasks.kind_installation')}</td>
+                    <td>{task.buyer_email}</td>
+                    <td className="tabular">{formatMoney({ amount_minor: task.order_total_minor, currency: task.currency }, locale)}</td>
+                    <td>{dt(task.created_at)}</td>
+                    <td>
+                      {task.status === 'pending' ? (
+                        <button type="button" className="button button--secondary" disabled={busy === task.id} onClick={() => void complete(task.id)}>{t('ui.admin.tasks.complete')}</button>
+                      ) : (
+                        <span className="muted">{task.completed_at ? dt(task.completed_at) : ''}</span>
+                      )}
+                    </td>
+                  </tr>
+                  {task.setup_info_json ? (
+                    <tr>
+                      <td colSpan={5}>
+                        <div className="stack">
+                          <strong>{t('ui.admin.tasks.setup_info_title')}</strong>
+                          {task.setup_info_submitted_at ? (
+                            <span className="muted">{t('ui.setup_info.submitted_at_label')}: {dt(task.setup_info_submitted_at)}</span>
+                          ) : null}
+                          <dl className="details">
+                            {SETUP_INFO_FIELDS.map((f) => {
+                              const v = task.setup_info_json?.[f.key];
+                              return v ? (
+                                <div key={f.key} style={{ display: 'contents' }}>
+                                  <dt>{t(f.label)}</dt>
+                                  <dd style={{ whiteSpace: 'pre-wrap', overflowWrap: 'anywhere' }}>
+                                    {f.key === 'google_sheet_url' || f.key === 'logo_url' || f.key === 'facebook_url'
+                                      ? <a href={v} target="_blank" rel="noopener noreferrer">{v}</a>
+                                      : v}
+                                  </dd>
+                                </div>
+                              ) : null;
+                            })}
+                          </dl>
+                        </div>
+                      </td>
+                    </tr>
+                  ) : null}
+                </Fragment>
               ))}
             </tbody>
           </table>

@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { createReadStream, createWriteStream } from 'node:fs';
-import { copyFile, mkdir, readFile, readdir, stat, writeFile } from 'node:fs/promises';
+import { copyFile, mkdir, readFile, readdir, realpath, stat, writeFile } from 'node:fs/promises';
 import { dirname, join, posix, relative, sep } from 'node:path';
 import { ZipFile } from 'yazl';
 
@@ -397,6 +397,89 @@ export async function buildSelfhostBundle(treeDir: string, outPath: string, meta
   zip.addBuffer(Buffer.from(checksumLines.join('\n') + '\n', 'utf8'), 'CHECKSUMS.txt', { mtime: new Date(0) });
   zip.end();
 
+  let size = 0;
+  await new Promise<void>((resolve, reject) => {
+    const out = createWriteStream(outPath, { flags: 'wx', mode: 0o600 });
+    zip.outputStream
+      .on('data', (chunk: Buffer) => {
+        size += chunk.length;
+        hash.update(chunk);
+      })
+      .on('error', reject)
+      .pipe(out)
+      .on('error', reject)
+      .on('finish', resolve);
+  });
+  return { size, sha256: hash.digest('hex') };
+}
+
+/**
+ * In-process replacements for the system `zip` binary (the worker and
+ * API images ship without one — production site backups failed with
+ * ENOENT until this existed). Both mirror the archive layouts the old
+ * shell-outs produced:
+ *  - zipDirectory: `zip -r <out> .` run in rootDir — the directory's
+ *    CONTENTS at the archive root, dotfiles included, nothing pruned
+ *    (a backup must be verbatim, unlike a selfhost bundle) and symlinks
+ *    dereferenced to plain file entries (the platform extractor
+ *    rejects symlink entries on restore).
+ *  - zipFiles: `zip -r <out> <files…>` run in rootDir — exactly the
+ *    listed relative paths.
+ * Both return the archive's size and sha256, like buildSelfhostBundle.
+ */
+export async function zipDirectory(rootDir: string, outPath: string): Promise<{ size: number; sha256: string }> {
+  const { files, dirs } = await listAllEntries(rootDir);
+  return writeZipEntries(rootDir, outPath, files, dirs);
+}
+
+export async function zipFiles(rootDir: string, relFiles: string[], outPath: string): Promise<{ size: number; sha256: string }> {
+  return writeZipEntries(rootDir, outPath, [...relFiles].sort(), []);
+}
+
+async function listAllEntries(root: string, prefix = '', seenDirs = new Set<string>()): Promise<{ files: string[]; dirs: string[] }> {
+  const files: string[] = [];
+  const dirs: string[] = [];
+  const here = join(root, prefix);
+  // Break symlink cycles the way a site tree could otherwise trap the
+  // walk (Info-ZIP had the same exposure with -r).
+  const real = await realpath(here).catch(() => here);
+  if (seenDirs.has(real)) return { files, dirs };
+  seenDirs.add(real);
+  for (const entry of await readdir(here, { withFileTypes: true })) {
+    const rel = prefix ? posix.join(prefix, entry.name) : entry.name;
+    if (entry.isDirectory()) {
+      dirs.push(rel);
+      const sub = await listAllEntries(root, rel, seenDirs);
+      files.push(...sub.files);
+      dirs.push(...sub.dirs);
+    } else if (entry.isFile()) {
+      files.push(rel);
+    } else if (entry.isSymbolicLink()) {
+      const target = await stat(join(root, ...rel.split('/'))).catch(() => null);
+      if (target?.isFile()) files.push(rel);
+      else if (target?.isDirectory()) {
+        dirs.push(rel);
+        const sub = await listAllEntries(root, rel, seenDirs);
+        files.push(...sub.files);
+        dirs.push(...sub.dirs);
+      }
+    }
+  }
+  return { files, dirs };
+}
+
+async function writeZipEntries(rootDir: string, outPath: string, files: string[], dirs: string[]): Promise<{ size: number; sha256: string }> {
+  const zip = new ZipFile();
+  const entries = [
+    ...dirs.map((name) => ({ name, isDir: true })),
+    ...files.map((name) => ({ name, isDir: false })),
+  ].sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
+  for (const entry of entries) {
+    if (entry.isDir) zip.addEmptyDirectory(entry.name);
+    else zip.addFile(join(rootDir, ...entry.name.split('/')), entry.name);
+  }
+  zip.end();
+  const hash = createHash('sha256');
   let size = 0;
   await new Promise<void>((resolve, reject) => {
     const out = createWriteStream(outPath, { flags: 'wx', mode: 0o600 });

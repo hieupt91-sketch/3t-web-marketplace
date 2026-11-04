@@ -6,6 +6,7 @@ import { idempotent } from '../lib/idempotency.ts';
 import { partnerBalance } from '../lib/partner-ledger.ts';
 import { creditWallet, debitWallet, pointsToVnd, resolvePartnerCostPoints, vndToPointsCeil, walletBalance } from '../lib/partner-wallet.ts';
 import { checkDbRateLimit } from '../lib/rate-limit-store.ts';
+import { findDynamicTwin, isStaticAdapter, versionAdapter } from '../lib/template-twin.ts';
 import { computeCharge, processPaymentEvent } from './commerce.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -124,6 +125,20 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
       const plans: PublicPlan[] = await loadActivePlans(db, request.body.template_id, config.currency);
       const plan = plans.find((p) => p.id === request.body.plan_id);
       if (!plan) throw errors.notFound();
+      // Static + hosting rule (owner model 2026-11-03): partner sales
+      // have no one-time-setup option, so a hosted plan for a static
+      // template is refused outright — the dynamic twin is the sellable
+      // hosted edition.
+      if (plan.deployment_mode === 'hosted') {
+        const adapter = await versionAdapter(db, t[0].published_version_id);
+        if (isStaticAdapter(adapter)) {
+          const twin = await findDynamicTwin(db, request.body.template_id);
+          throw errors.conflict('template.static_not_hosted', false, {
+            dynamic_twin_slug: twin?.slug ?? null,
+            dynamic_twin_template_id: twin?.id ?? null,
+          });
+        }
+      }
       const { subtotal, lines } = computeCharge(plan);
       const snapshot = { template_id: request.body.template_id, version_id: t[0].published_version_id, plan_id: plan.id, plan_code: plan.code, plan_name: plan.name, deployment_mode: plan.deployment_mode, lines, limits: plan.limits };
       const { rows } = await db.query<{ id: string; expires_at: Date }>(
@@ -317,6 +332,19 @@ export async function partnerV1Routes(app: FastifyInstance): Promise<void> {
           const plans: PublicPlan[] = await loadActivePlans(client, request.body.template_id, config.currency);
           const plan = plans.find((p) => p.id === request.body.plan_id);
           if (!plan) throw errors.notFound();
+          // Static + hosting rule (owner model 2026-11-03): a wallet
+          // sale has no one-time-setup option, so hosted plans for
+          // static templates are refused before anything is charged.
+          if (plan.deployment_mode === 'hosted') {
+            const adapter = await versionAdapter(client, tpl.rows[0].published_version_id);
+            if (isStaticAdapter(adapter)) {
+              const twin = await findDynamicTwin(client, request.body.template_id);
+              throw errors.conflict('template.static_not_hosted', false, {
+                dynamic_twin_slug: twin?.slug ?? null,
+                dynamic_twin_template_id: twin?.id ?? null,
+              });
+            }
+          }
           const listed = BigInt(computeCharge(plan).subtotal);
           const policy = await client.query<{ reseller_discount_bps: number }>(
             `SELECT COALESCE(pp.reseller_discount_bps, 1000) AS reseller_discount_bps FROM partner_accounts pa

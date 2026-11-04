@@ -8,8 +8,9 @@ import { revalidateVerifiedDomains, type TxtResolver } from './order-jobs.js';
  * `_3t-verify` TXT record by the worker sweep. A definitive failure
  * (record gone / token mismatch) starts a 7-day grace; only a failure
  * older than the grace takes the domain out of 'verified'. Transient
- * DNS errors change nothing. Fake Db + fake resolver: no real DNS, no
- * real database.
+ * DNS errors are inconclusive: they never touch the grace state, but
+ * they do advance last_recheck_at so the domain is not retried on every
+ * sweep pass. Fake Db + fake resolver: no real DNS, no real database.
  */
 const TOKEN = 'verify-token-abc';
 const TOKEN_HASH = createHash('sha256').update(TOKEN).digest('hex');
@@ -64,6 +65,9 @@ function fakeDb(domains: FakeDomain[], audits: unknown[][] = []): Db {
     } else if (sql.includes('COALESCE(recheck_fail_since')) {
       row.last_recheck_at = params[1] as Date;
       row.recheck_fail_since = row.recheck_fail_since ?? (params[1] as Date);
+    } else if (sql.includes('SET last_recheck_at')) {
+      // Inconclusive stamp: only the recheck position advances.
+      row.last_recheck_at = params[1] as Date;
     } else {
       throw new Error(`unhandled update in fake db: ${sql.slice(0, 80)}`);
     }
@@ -145,12 +149,34 @@ describe('revalidateVerifiedDomains', () => {
     expect(domain.recheck_fail_since).toEqual(since);
   });
 
-  it('DNS SERVFAIL → inconclusive: no state change at all', async () => {
-    const domain = makeDomain({ recheck_fail_since: new Date(NOW.getTime() - 30 * DAY) });
-    const before = { ...domain };
+  it('DNS SERVFAIL → inconclusive: grace state untouched, but the recheck stamp advances', async () => {
+    const failSince = new Date(NOW.getTime() - 30 * DAY);
+    const domain = makeDomain({ recheck_fail_since: failSince });
     const result = await revalidateVerifiedDomains(fakeDb([domain]), { now: NOW, resolveTxt: txtServfail });
     expect(result).toMatchObject({ checked: 0, inconclusive: 1, lost: 0, kept: 0 });
-    expect(domain).toEqual(before);
+    // Even with a fail state far past the grace, an inconclusive pass
+    // must never transition the domain or extend/reset the grace clock…
+    expect(domain.status).toBe('verified');
+    expect(domain.recheck_fail_since).toEqual(failSince);
+    // …but last_recheck_at IS stamped, so the row leaves the head of the
+    // sweep queue and re-enters on the normal 24h cadence.
+    expect(domain.last_recheck_at).toEqual(NOW);
+  });
+
+  it('an inconclusive domain is stamped and NOT re-selected on the next pass', async () => {
+    const domain = makeDomain();
+    const db = fakeDb([domain]);
+    let calls = 0;
+    const countingServfail: TxtResolver = async () => {
+      calls++;
+      throw dnsError('ESERVFAIL');
+    };
+    const first = await revalidateVerifiedDomains(db, { now: NOW, resolveTxt: countingServfail });
+    expect(first.inconclusive).toBe(1);
+    expect(domain.last_recheck_at).toEqual(NOW);
+    const second = await revalidateVerifiedDomains(db, { now: NOW, resolveTxt: countingServfail });
+    expect(calls).toBe(1);
+    expect(second).toMatchObject({ checked: 0, inconclusive: 0 });
   });
 
   it('skips domains rechecked recently (24h cadence)', async () => {
@@ -165,5 +191,64 @@ describe('revalidateVerifiedDomains', () => {
     });
     expect(calls).toBe(0);
     expect(result.checked).toBe(0);
+  });
+});
+
+describe('routing extension (target configured)', () => {
+  const TARGET = 'customers.webmaket.com';
+  const txtOk: TxtResolver = async () => [[TOKEN]];
+  const cnameToTarget = async () => [TARGET];
+  const cnameGone = async () => {
+    throw Object.assign(new Error('ENODATA'), { code: 'ENODATA' });
+  };
+  const probeOk = async () => 'ok' as const;
+  const probeUnreachable = async () => 'unreachable' as const;
+
+  it('TXT ok + CNAME reaches the target → kept', async () => {
+    const domain = makeDomain();
+    const result = await revalidateVerifiedDomains(fakeDb([domain]), { now: NOW, resolveTxt: txtOk, target: TARGET, resolveCname: cnameToTarget });
+    expect(result).toMatchObject({ checked: 1, kept: 1, lost: 0 });
+    expect(domain.status).toBe('verified');
+    expect(domain.recheck_fail_since).toBeNull();
+  });
+
+  it('TXT ok + probe ok with no CNAME (flattened apex) → kept', async () => {
+    const domain = makeDomain();
+    const result = await revalidateVerifiedDomains(fakeDb([domain]), { now: NOW, resolveTxt: txtOk, target: TARGET, resolveCname: cnameGone, probe: probeOk });
+    expect(result).toMatchObject({ checked: 1, kept: 1, lost: 0 });
+    expect(domain.status).toBe('verified');
+  });
+
+  it('TXT ok + routing conclusively gone → grace starts, same as TXT loss', async () => {
+    const domain = makeDomain();
+    const result = await revalidateVerifiedDomains(fakeDb([domain]), { now: NOW, resolveTxt: txtOk, target: TARGET, resolveCname: cnameGone, probe: probeUnreachable });
+    expect(result).toMatchObject({ checked: 1, graceStarted: 1, lost: 0 });
+    expect(domain.status).toBe('verified');
+    expect(domain.recheck_fail_since).toEqual(NOW);
+  });
+
+  it('TXT ok + routing gone past the grace → verification_lost', async () => {
+    const domain = makeDomain({ recheck_fail_since: new Date(NOW.getTime() - 8 * DAY) });
+    const result = await revalidateVerifiedDomains(fakeDb([domain]), { now: NOW, resolveTxt: txtOk, target: TARGET, resolveCname: cnameGone, probe: probeUnreachable });
+    expect(result).toMatchObject({ checked: 1, lost: 1 });
+    expect(domain.status).toBe('verification_lost');
+  });
+
+  it('TXT ok + routing inconclusive (DNS weather) → grace state untouched, stamp advances', async () => {
+    const failSince = new Date(NOW.getTime() - 30 * DAY);
+    const domain = makeDomain({ recheck_fail_since: failSince });
+    const result = await revalidateVerifiedDomains(fakeDb([domain]), {
+      now: NOW,
+      resolveTxt: txtOk,
+      target: TARGET,
+      resolveCname: async () => {
+        throw Object.assign(new Error('ESERVFAIL'), { code: 'ESERVFAIL' });
+      },
+      probe: probeUnreachable,
+    });
+    expect(result).toMatchObject({ checked: 0, inconclusive: 1, lost: 0, kept: 0 });
+    expect(domain.status).toBe('verified');
+    expect(domain.recheck_fail_since).toEqual(failSince);
+    expect(domain.last_recheck_at).toEqual(NOW);
   });
 });

@@ -37,7 +37,13 @@ export interface PlatformConfig {
   sessionRoleIdleHours: number;
   /** Idle timeout (hours since last_seen_at) for plain buyer accounts. */
   sessionBuyerIdleHours: number;
-  mailTransport: 'file' | 'disabled';
+  /**
+   * Outbound mail transport. 'file' writes .eml files (development only);
+   * 'resend' sends through the Resend API using the key configured in
+   * admin settings (DB row mail.resend — never an env var, so the owner
+   * can rotate it from the UI under step-up); 'disabled' sends nothing.
+   */
+  mailTransport: 'file' | 'resend' | 'disabled';
   mailDir: string;
   chromiumPath: string | null;
   screenshotsEnabled: boolean;
@@ -52,6 +58,11 @@ export interface PlatformConfig {
   /** Dev/test only: domain verification may accept the presented TXT value as
    * control proof. Production must use real DNS reads (default false). */
   dnsVerifyBodyProof: boolean;
+  /** Routing target buyers point custom domains at: they CNAME their
+   * hostname to this host (or flatten/ALIAS an apex to it), and traffic
+   * arrives at the site router through it. The router answers a probe on
+   * that path, so verification can confirm routing end to end. */
+  customDomainTarget: string;
   /** Platform selling currency (VND). */
   currency: string;
   /** Sandbox payment secret; a real provider replaces the mock at the integration milestone. */
@@ -174,7 +185,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     sessionBuyerTtlHours: Number(env('SESSION_BUYER_TTL_HOURS', '168')),
     sessionRoleIdleHours: Number(env('SESSION_ROLE_IDLE_HOURS', '12')),
     sessionBuyerIdleHours: Number(env('SESSION_BUYER_IDLE_HOURS', '48')),
-    mailTransport: env('MAIL_TRANSPORT', mode === 'production' ? 'disabled' : 'file') as 'file' | 'disabled',
+    mailTransport: env('MAIL_TRANSPORT', mode === 'production' ? 'disabled' : 'file') as 'file' | 'resend' | 'disabled',
     mailDir: resolve(env('MAIL_DIR', resolve(runtimeData, 'dev-mail'))),
     chromiumPath: process.env.CHROMIUM_PATH || null,
     screenshotsEnabled: env('SCREENSHOTS', 'off') === 'on',
@@ -186,6 +197,7 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
     githubWebhookSecret: env('GITHUB_WEBHOOK_SECRET', ''),
     demoMaxActiveSessions: Number(env('DEMO_MAX_ACTIVE_SESSIONS', '20')),
     dnsVerifyBodyProof: env('DNS_VERIFY_BODY_PROOF', 'false') === 'true' && mode !== 'production',
+    customDomainTarget: env('CUSTOM_DOMAIN_TARGET', 'customers.webmaket.com').trim().toLowerCase().replace(/\.+$/, ''),
     partnerLinkSecret: env('PARTNER_LINK_SECRET', mode === 'production' ? undefined : 'dev-partner-link-secret'),
     partnerWebhookAllowLoopback: env('PARTNER_WEBHOOK_ALLOW_LOOPBACK', 'false') === 'true' && mode !== 'production',
     partnerWebhookKey: env('PARTNER_WEBHOOK_KEY', mode === 'production' ? undefined : 'dev-partner-webhook-key'),
@@ -221,6 +233,13 @@ export function loadConfig(overrides: Partial<PlatformConfig> = {}): PlatformCon
   }
   if (!config.siteOriginTemplate.includes('{label}')) {
     throw new Error('SITE_ORIGIN_TEMPLATE must contain {label}');
+  }
+  // The custom-domain routing target is printed verbatim in buyer DNS
+  // instructions and compared against resolved CNAME chains; a malformed
+  // value would quietly break every custom-domain verification, so
+  // refuse to boot instead of failing buyers one by one.
+  if (!/^[a-z0-9][a-z0-9-]{0,61}(\.[a-z0-9][a-z0-9-]{0,61})+$/.test(config.customDomainTarget) || config.customDomainTarget.length > 253) {
+    throw new Error('CUSTOM_DOMAIN_TARGET must be a valid hostname (e.g. customers.example.com)');
   }
   return config;
 }

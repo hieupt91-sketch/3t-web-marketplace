@@ -158,6 +158,11 @@ services:
     # notes BEFORE first boot. Rollback: comment the user: line out
     # and `up -d` (the images also run as root).
     user: "10001:10001"
+    # Read-only appdata: the serve-time SEO identity for hosted statics
+    # reads the dynamic twin's seed from the object store (seo.ts layer b).
+    # The router still writes nothing.
+    volumes:
+      - appdata:/app/runtime-data:ro
     env_file: .env
     environment:
       - DATABASE_URL=postgres://marketplace:${DB_PASSWORD}@postgres:5432/marketplace

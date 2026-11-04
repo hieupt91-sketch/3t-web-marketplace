@@ -43,6 +43,7 @@ const PROVIDER_LABEL_KEYS: Record<string, string> = {
   usd_transfer: 'ui.checkout.method_usd',
   vnpay: 'ui.checkout.method_vnpay',
   momo: 'ui.checkout.method_momo',
+  payos: 'ui.checkout.method_payos',
 };
 
 /** A12 — reconciliation queue. Resolving never edits raw provider events; it audits the decision. */

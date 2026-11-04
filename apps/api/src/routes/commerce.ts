@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { mkdir, rm, stat } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -8,6 +9,7 @@ import {
   BankTransferProvider,
   CassoHubProvider,
   MoMoProvider,
+  PayosProvider,
   VnPayProvider,
   buildCleanSiteTree,
   buildSelfhostBundle,
@@ -37,6 +39,7 @@ import { emitPartnerEvent } from '../lib/partner-webhooks.ts';
 import { idempotent } from '../lib/idempotency.ts';
 import { sessionRateLimit } from '../lib/rate-limit.ts';
 import { openSettingSecret } from '../lib/secret-store.ts';
+import { findDynamicTwin, isStaticAdapter, versionAdapter } from '../lib/template-twin.ts';
 
 /**
  * Payment settings carry credentials (audit payments M2): the fields
@@ -50,6 +53,7 @@ const PAYMENT_SECRET_FIELDS: Record<string, string[]> = {
   'payment.bank_transfer': ['hub_api_key'],
   'payment.vnpay': ['secret_key'],
   'payment.momo': ['secret_key'],
+  'payment.payos': ['api_key', 'checksum_key'],
 };
 
 async function getPaymentSetting(db: Db, key: string, secretKey: string): Promise<Record<string, unknown> | null> {
@@ -149,6 +153,31 @@ export async function loadMoMoSettings(db: Db, secretKey: string): Promise<MoMoS
 
 export function moMoAvailable(s: MoMoSettings): boolean {
   return s.enabled && s.partner_code.trim() !== '' && s.access_key.trim() !== '' && s.secret_key !== '';
+}
+
+/** Owner-configured payOS merchant (settings key 'payment.payos'). payOS
+ *  issues a Client ID, an API key (sent as a header on the create call)
+ *  and a Checksum key (the HMAC signer); the API key and checksum key are
+ *  sealed at rest like the other gateways' secrets. */
+export interface PayosSettings {
+  enabled: boolean;
+  client_id: string;
+  api_key: string;
+  checksum_key: string;
+}
+
+export async function loadPayosSettings(db: Db, secretKey: string): Promise<PayosSettings> {
+  const raw = (await getPaymentSetting(db, 'payment.payos', secretKey)) as Partial<PayosSettings> | null;
+  return {
+    enabled: raw?.enabled === true,
+    client_id: typeof raw?.client_id === 'string' ? raw.client_id : '',
+    api_key: typeof raw?.api_key === 'string' ? raw.api_key : '',
+    checksum_key: typeof raw?.checksum_key === 'string' ? raw.checksum_key : '',
+  };
+}
+
+export function payosAvailable(s: PayosSettings): boolean {
+  return s.enabled && s.client_id.trim() !== '' && s.api_key !== '' && s.checksum_key !== '';
 }
 
 /** Owner-configured PayPal receiving account (settings key 'payment.paypal').
@@ -264,6 +293,26 @@ export function computeCharge(plan: PublicPlan, billingInterval?: 'monthly' | 'y
  *  the subdomain (and site name) while buying, so fulfilment can create
  *  the site the moment the order is paid. */
 export interface SiteRequest { subdomain: string; display_name: string; locale: 'vi' | 'en'; domain_interval?: 'once' | 'monthly' | 'yearly' }
+
+/** One-time setup info a buyer of a STATIC template submits exactly once
+ *  (migration 0045): staff bake these values into the delivered/hosted
+ *  files. Optional fields are stored only when non-empty. */
+export interface SetupInfo {
+  business_name: string;
+  phone?: string;
+  email?: string;
+  address?: string;
+  about?: string;
+  logo_url?: string;
+  facebook_url?: string;
+  zalo?: string;
+  google_sheet_url?: string;
+  note?: string;
+  /** Optional: when blank, the team composes them from the business
+   *  name + industry + area for the SEO+AI package. */
+  seo_title?: string;
+  seo_description?: string;
+}
 
 interface SubdomainFeeSetting { amount_minor?: number | null; period?: string }
 
@@ -788,6 +837,26 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         subtotal += amt;
         installation = true;
       }
+      // Static + hosting rule (owner model 2026-11-03): a static template
+      // has no admin, so on platform hosting the buyer could never change
+      // a single word of the delivered site. Hosted is therefore sold for
+      // a static template ONLY together with the one-time setup (the
+      // installation package): the buyer fills their info once on the
+      // order and the team bakes it in. Without it, steer the buyer to
+      // the dynamic twin (same design, editable anytime). This sits after
+      // the installation decision above so it sees the final flag, and it
+      // covers the standalone-hosting upgrade path too (same handler,
+      // hosted plan against an owned self-host entitlement).
+      if (found.plan.deployment_mode === 'hosted' && !installation) {
+        const adapter = await versionAdapter(db, found.versionId);
+        if (isStaticAdapter(adapter)) {
+          const twin = await findDynamicTwin(db, request.body.template_id);
+          throw errors.conflict('template.static_not_hosted', false, {
+            dynamic_twin_slug: twin?.slug ?? null,
+            dynamic_twin_template_id: twin?.id ?? null,
+          });
+        }
+      }
       const snapshot = {
         template_id: request.body.template_id,
         version_id: found.versionId,
@@ -1031,7 +1100,24 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const o = rows[0];
     if (!o || o.buyer_id !== auth.userId) throw errors.notFound();
     const items = await db.query('SELECT template_id, version_id, plan_id, deployment_mode, unit_price_minor::text, snapshot_json FROM order_items WHERE order_id = $1', [o.id]);
-    const svcTask = await db.query<{ status: string }>("SELECT status FROM service_tasks WHERE order_id = $1 AND kind = 'installation' ORDER BY created_at LIMIT 1", [o.id]);
+    const svcTask = await db.query<{ id: string; status: string; setup_info_json: SetupInfo | null; setup_info_submitted_at: Date | null }>("SELECT id, status, setup_info_json, setup_info_submitted_at FROM service_tasks WHERE order_id = $1 AND kind = 'installation' ORDER BY created_at LIMIT 1", [o.id]);
+    const task = svcTask.rows[0];
+    // One-time setup info (migration 0045) applies only when the order
+    // carries the installation package for a STATIC template: the buyer
+    // fills their business info exactly once and the team bakes it in.
+    // Dynamic buyers edit in their site admin instead, so the field
+    // stays null for them (and for orders without the package).
+    let setupInfo: { submitted: boolean; submitted_at: string | null; data: SetupInfo | null } | null = null;
+    if (task && items.rows.length > 0) {
+      const adapter = await versionAdapter(db, (items.rows[0] as { version_id: string }).version_id);
+      if (isStaticAdapter(adapter)) {
+        setupInfo = {
+          submitted: task.setup_info_submitted_at != null,
+          submitted_at: task.setup_info_submitted_at?.toISOString() ?? null,
+          data: task.setup_info_json ?? null,
+        };
+      }
+    }
     return {
       data: {
         id: o.id,
@@ -1043,7 +1129,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
         total_minor: o.total_minor,
         terms_version: o.terms_version,
         items: items.rows,
-        installation_status: svcTask.rows[0]?.status ?? null,
+        installation_status: task?.status ?? null,
+        setup_info: setupInfo,
         paid_at: o.paid_at?.toISOString() ?? null,
         payment_window_expires_at: o.payment_window_expires_at?.toISOString() ?? null,
         created_at: o.created_at.toISOString(),
@@ -1051,6 +1138,80 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       meta: { request_id: request.id, revision: null },
     };
   });
+
+  // One-time setup info for a static purchase (migration 0045): the
+  // buyer who added the installation package fills their business info
+  // EXACTLY ONCE; the submission itself is the only lock — the right
+  // never expires, so there is deliberately no age/deadline check here.
+  // Staff read the payload from the service task and bake it into the
+  // site's files. Not applicable (404) for orders without the package
+  // or with a dynamic template (those buyers edit in their site admin).
+  app.post<{ Params: { id: string }; Body: SetupInfo }>(
+    '/orders/:id/setup-info',
+    {
+      config: sessionRateLimit(30),
+      schema: {
+        body: {
+          type: 'object', additionalProperties: false, required: ['business_name'],
+          properties: {
+            business_name: { type: 'string', minLength: 1, maxLength: 200 },
+            phone: { type: 'string', maxLength: 32 },
+            email: { type: 'string', maxLength: 254 },
+            address: { type: 'string', maxLength: 500 },
+            about: { type: 'string', maxLength: 5000 },
+            logo_url: { type: 'string', maxLength: 1000, pattern: '^(https?://.*)?$' },
+            facebook_url: { type: 'string', maxLength: 1000, pattern: '^(https?://.*)?$' },
+            zalo: { type: 'string', maxLength: 100 },
+            google_sheet_url: { type: 'string', maxLength: 2000, pattern: '^(https?://.*)?$' },
+            note: { type: 'string', maxLength: 2000 },
+            seo_title: { type: 'string', maxLength: 200 },
+            seo_description: { type: 'string', maxLength: 500 },
+          },
+        },
+      },
+    },
+    async (request, reply) => {
+      const auth = requireUser(request);
+      assertId(request.params.id);
+      const orderRes = await db.query<{ id: string; buyer_id: string }>('SELECT id, buyer_id FROM orders WHERE id = $1', [request.params.id]);
+      const order = orderRes.rows[0];
+      if (!order || order.buyer_id !== auth.userId) throw errors.notFound();
+      const taskRes = await db.query<{ id: string; setup_info_submitted_at: Date | null }>(
+        "SELECT id, setup_info_submitted_at FROM service_tasks WHERE order_id = $1 AND kind = 'installation' ORDER BY created_at LIMIT 1",
+        [order.id],
+      );
+      const task = taskRes.rows[0];
+      if (!task) throw errors.notFound();
+      const items = await db.query<{ version_id: string }>('SELECT version_id FROM order_items WHERE order_id = $1 LIMIT 1', [order.id]);
+      if (!items.rows[0]) throw errors.notFound();
+      const adapter = await versionAdapter(db, items.rows[0].version_id);
+      if (!isStaticAdapter(adapter)) throw errors.notFound();
+      if (task.setup_info_submitted_at) throw errors.conflict('setup_info.already_submitted');
+      const clean = (v?: string): string | undefined => {
+        const s = v?.trim();
+        return s ? s : undefined;
+      };
+      const businessName = clean(request.body.business_name);
+      if (!businessName) throw errors.validation([{ field: 'business_name', code: 'required' }]);
+      const data: SetupInfo = { business_name: businessName };
+      const optional = ['phone', 'email', 'address', 'about', 'logo_url', 'facebook_url', 'zalo', 'google_sheet_url', 'note', 'seo_title', 'seo_description'] as const;
+      for (const field of optional) {
+        const value = clean(request.body[field]);
+        if (value !== undefined) data[field] = value;
+      }
+      // The IS NULL guard makes the once-only rule atomic: a racing
+      // second submission updates nothing and lands on the conflict.
+      const updated = await db.query<{ setup_info_submitted_at: Date }>(
+        'UPDATE service_tasks SET setup_info_json = $2::jsonb, setup_info_submitted_at = now() WHERE id = $1 AND setup_info_submitted_at IS NULL RETURNING setup_info_submitted_at',
+        [task.id, JSON.stringify(data)],
+      );
+      if (updated.rows.length === 0) throw errors.conflict('setup_info.already_submitted');
+      await writeAudit(db, { actorType: 'user', actorId: auth.userId, action: 'order.setup_info_submitted', resourceType: 'order', resourceId: order.id, traceId: request.id });
+      return reply.status(201).send({
+        data: { submitted: true, submitted_at: updated.rows[0]!.setup_info_submitted_at.toISOString(), data },
+      });
+    },
+  );
 
   // Create a payment session. The buyer may name a provider; the default is
   // bank transfer when the owner has enabled and configured it, otherwise
@@ -1077,6 +1238,8 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
     const vnpayAvailable = vnPayAvailable(vnpaySettings);
     const momoSettings = await loadMoMoSettings(db, config.partnerWebhookKey);
     const momoAvailable = moMoAvailable(momoSettings);
+    const payosSettings = await loadPayosSettings(db, config.partnerWebhookKey);
+    const payosOn = payosAvailable(payosSettings);
     const paypalSettings = await loadPayPalSettings(db);
     const paypalAvailable = payPalAvailable(paypalSettings);
     const usdSettings = await loadUsdTransferSettings(db);
@@ -1171,6 +1334,45 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       }
       return reply.status(201).send({ data: { provider: 'momo', sandbox: momoSettings.sandbox, provider_ref: orderRef, pay_url: payUrl, expires_at: expiresAt.toISOString(), ...(qrPayload ? { instructions: { qr_payload: qrPayload } } : {}) } });
     }
+    if (chosen === 'payos') {
+      if (!payosOn) throw errors.conflict('payment.method_unavailable');
+      const provider = new PayosProvider({ clientId: payosSettings.client_id, apiKey: payosSettings.api_key, checksumKey: payosSettings.checksum_key });
+      // payOS names each payment link with a numeric order code: 48 bits
+      // of a UUID stay exact in a double and effectively never repeat.
+      const orderCode = parseInt(randomUUID().replace(/-/g, '').slice(0, 12), 16);
+      const payPageUrl = `${config.portalOrigin}/checkout/orders/${o.id}/pay`;
+      let created: Awaited<ReturnType<PayosProvider['createPaymentLink']>>;
+      try {
+        created = await provider.createPaymentLink({
+          orderCode,
+          amountMinor: o.total_minor,
+          description: `WEBMAKET ${orderCode}`,
+          returnUrl: payPageUrl,
+          cancelUrl: payPageUrl,
+          expiredAt: Math.floor(expiresAt.getTime() / 1000),
+        });
+      } catch {
+        throw errors.conflict('payment.method_unavailable', true);
+      }
+      // The attempt is matched on the paymentLinkId (the provider_ref the
+      // webhook carries); the VietQR payload + receiving account freeze
+      // into the instructions so the pay page renders like a bank transfer.
+      const instructions = {
+        qr_payload: created.qrCode,
+        account_number: created.accountNumber,
+        account_name: created.accountName,
+        bank_bin: created.bin,
+        amount_minor: o.total_minor,
+        currency: o.currency,
+        order_code: orderCode,
+        checkout_url: created.checkoutUrl,
+      };
+      await db.query(
+        "INSERT INTO payment_attempts (order_id, provider, provider_ref, amount_minor, currency, status, instructions_json) VALUES ($1, 'payos', $2, $3, $4, 'pending', $5::jsonb)",
+        [o.id, created.paymentLinkId, o.total_minor, o.currency, JSON.stringify(instructions)],
+      );
+      return reply.status(201).send({ data: { provider: 'payos', sandbox: false, provider_ref: created.paymentLinkId, pay_url: created.checkoutUrl, expires_at: expiresAt.toISOString(), instructions } });
+    }
     if (chosen === 'paypal') {
       if (!paypalAvailable) throw errors.conflict('payment.method_unavailable');
       // Manual method: freeze the receiving account + the per-order
@@ -1262,7 +1464,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       'SELECT id, provider, provider_ref, amount_minor::text, currency, status, created_at, instructions_json FROM payment_attempts WHERE order_id = $1 ORDER BY created_at DESC',
       [request.params.id],
     );
-    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' || r.provider === 'paypal' || r.provider === 'usd_transfer' || r.provider === 'momo' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
+    return { data: rows.map((r) => ({ id: r.id, provider: r.provider, provider_ref: r.provider_ref, amount_minor: r.amount_minor, currency: r.currency, status: r.status, created_at: r.created_at.toISOString(), instructions: r.provider === 'bank_transfer' || r.provider === 'paypal' || r.provider === 'usd_transfer' || r.provider === 'momo' || r.provider === 'payos' ? r.instructions_json : undefined })), page: { next_cursor: null, has_more: false } };
   });
 
   // Buyer requests a refund (B05). Amount must not exceed the not-yet-refunded remainder;
@@ -1402,7 +1604,7 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
   // Real webhook endpoint: verify, dedupe, process. Returns 2xx after a durable record.
   // Signatures are verified over the exact raw bytes captured by the
   // preParsing hook below (audit code L-01) for every provider on this
-  // route — mock, bank hub, Casso, VNPay and MoMo alike.
+  // route — mock, bank hub, Casso, VNPay, MoMo and payOS alike.
 
   // VNPay IPN (GET or POST): always HTTP 200 with VNPay's own RspCode body.
   async function handleVnPayIpn(params: Record<string, string>, reply: FastifyReply) {
@@ -1485,6 +1687,22 @@ export async function commerceRoutes(app: FastifyInstance): Promise<void> {
       }
       await processPaymentEvent(db, 'momo', raw, event);
       return reply.status(204).send();
+    }
+    // payOS webhook: HMAC-verified over the sorted data object; a validly
+    // signed webhook for an unknown payment link (payOS's own confirm
+    // probe) is answered 200 through the pipeline's "ignored" outcome.
+    if (providerName === 'payos') {
+      const settings = await loadPayosSettings(db, config.partnerWebhookKey);
+      if (!payosAvailable(settings)) throw errors.notFound();
+      const provider = new PayosProvider({ clientId: settings.client_id, apiKey: settings.api_key, checksumKey: settings.checksum_key });
+      let event: NormalizedEvent;
+      try {
+        event = provider.verifyWebhook(raw);
+      } catch {
+        throw errors.badRequest('payment.webhook_invalid');
+      }
+      const outcome = await processPaymentEvent(db, 'payos', raw, event);
+      return reply.status(200).send({ success: true, received: true, outcome });
     }
     if (providerName !== payment.name) throw errors.notFound();
     // Production: the mock provider is entirely unavailable (audit payments L1).

@@ -56,3 +56,16 @@ describe('site-runner config (Phase 1)', () => {
     expect(config.runtimeAgentUrl).toBe('');
   });
 });
+
+describe('customDomainTarget validation', () => {
+  it('accepts the default and other plausible hostnames', () => {
+    expect(loadConfig({ env: 'test' }).customDomainTarget).toBe('customers.webmaket.com');
+    expect(loadConfig({ env: 'test', customDomainTarget: 'customers.example.org' }).customDomainTarget).toBe('customers.example.org');
+  });
+
+  it('refuses malformed routing targets at load', () => {
+    for (const bad of ['not a host', 'singlelabel', 'bad..example.com', '-bad.example.com', 'under_score.example.com', '']) {
+      expect(() => loadConfig({ env: 'test', customDomainTarget: bad })).toThrow('CUSTOM_DOMAIN_TARGET must be a valid hostname');
+    }
+  });
+});

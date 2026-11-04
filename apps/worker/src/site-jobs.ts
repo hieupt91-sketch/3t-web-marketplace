@@ -1,27 +1,30 @@
-import { execFile } from 'node:child_process';
-import { copyFile, cp, mkdir, mkdtemp, readFile, rename, rm, writeFile } from 'node:fs/promises';
+import { copyFile, cp, mkdir, mkdtemp, readFile, readdir, rename, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createReadStream, existsSync } from 'node:fs';
 import { Readable } from 'node:stream';
 import {
+  applyReplacements,
   completeJob,
+  countForms,
   emitEvent,
   encryptSecret,
   failJob,
   setJobResult,
   validateDynamicContent,
+  zipDirectory,
   type Db,
   type JobRow,
   type LocalObjectStore,
   type PlatformConfig,
+  type ReplacementPair,
 } from '@3t/core';
 import { extractArchive } from '@3t/template-sdk';
 import { httpStatus, siteLimitsOf, writeSiteMeta, type SpawnSpec } from './runtime-agent.ts';
 import { spawnSiteProcess, stopSiteProcess } from './process-agent.ts';
 import { allocateSiteUid, fenceSiteTree, releaseSiteUid, sandboxEnabled } from './sandbox.ts';
 
-export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore', 'site.setup-token', 'site.purge', 'site.stop'] as const;
+export const SITE_JOB_TYPES = ['site.provision', 'site.backup', 'site.restore', 'site.update', 'site.restart', 'site.content-backup', 'site.content-restore', 'site.setup-token', 'site.purge', 'site.stop', 'site.visual_edit_apply'] as const;
 
 interface SiteRow {
   id: string;
@@ -48,15 +51,6 @@ interface VersionRow {
   adapter: string;
   manifest_json: { runtime?: { start?: string[]; healthPath?: string }; env?: { name: string; scope: string; defaultValue?: string }[] };
   artifact_key: string;
-}
-
-function execFileAsync(file: string, args: string[], cwd: string): Promise<void> {
-  return new Promise((resolve, reject) => {
-    execFile(file, args, { cwd, timeout: 300_000, maxBuffer: 1024 * 1024 }, (error, _stdout, stderr) => {
-      if (error) reject(new Error(`${file} failed: ${String(stderr).slice(0, 500)}`));
-      else resolve();
-    });
-  });
 }
 
 async function loadSite(db: Db, id: string): Promise<SiteRow> {
@@ -251,7 +245,11 @@ async function runBackup(deps: { config: PlatformConfig; db: Db; store: LocalObj
   const tmp = await mkdtemp(join(tmpdir(), 'mp-backup-'));
   try {
     const zipPath = join(tmp, 'backup.zip');
-    await execFileAsync('zip', ['-q', '-r', zipPath, '.'], dir);
+    // In-process zip (core zipDirectory): the worker image ships no
+    // `zip` binary — shelling out failed every production backup with
+    // ENOENT. Same layout as `zip -r .`: the site dir's contents at
+    // the archive root.
+    await zipDirectory(dir, zipPath);
     const stored = await store.putStream(`backups/${site.id}/${backupId}.zip`, createReadStream(zipPath), 1024 * 1024 * 1024);
     const artifact = await db.query<{ id: string }>(
       `INSERT INTO artifacts (object_key, sha256, size_bytes, media_type, kind, retention_class, metadata_json)
@@ -629,9 +627,111 @@ async function runStop(deps: { config: PlatformConfig; db: Db; store: LocalObjec
   );
 }
 
+async function listSiteHtmlFiles(dir: string): Promise<string[]> {
+  const out: string[] = [];
+  async function walk(current: string, depth: number): Promise<void> {
+    if (depth > 6 || out.length >= 500) return;
+    const entries = await readdir(current, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+      if (entry.name.startsWith('.')) continue;
+      const full = join(current, entry.name);
+      if (entry.isDirectory()) await walk(full, depth + 1);
+      else if (/\.html?$/i.test(entry.name)) out.push(full);
+    }
+  }
+  await walk(dir, 0);
+  return out.sort();
+}
+
+/**
+ * site.visual_edit_apply (migration 0046): the worker half of the
+ * visual editor for hosted static sites. The router's finalize has
+ * ALREADY claimed the one-time setup right before enqueueing this job
+ * (claim first, files second — files must never change while the right
+ * is unconsumed). This job re-verifies that claim before touching
+ * anything: the service task must carry THIS session's visual-editor
+ * submission; any other state (the form door won and this job is an
+ * orphan, a replay, a hand-crafted enqueue) fails as
+ * visual_edit_claim_missing with the tree untouched and no backup
+ * taken. Then, strictly in order: a full backup through the normal
+ * runBackup path, and only then the exact-match rewrite of every HTML
+ * file, using the same match rules the API used to build the candidate
+ * set (@3t/core visual-edit: raw + HTML-escaped forms, all
+ * occurrences). All new contents are computed in memory first — a
+ * total miss fails as visual_edit_no_match BEFORE any file is written,
+ * with the pre-edit backup already stored for staff. No restart: the
+ * static server reads files per request.
+ */
+async function runVisualEditApply(
+  deps: { config: PlatformConfig; db: Db; store: LocalObjectStore },
+  job: JobRow,
+  site: SiteRow,
+  payload: { task_id?: string; session_id?: string; pairs?: ReplacementPair[] },
+): Promise<void> {
+  const { config, db } = deps;
+  const pairs = (payload.pairs ?? []).filter(
+    (p) => p && typeof p.from === 'string' && typeof p.to === 'string' && p.from.length > 0 && p.from !== p.to,
+  );
+  if (!payload.task_id || !payload.session_id || pairs.length === 0) {
+    throw new SiteJobError('visual_edit_bad_payload', 'visual edit apply refused: payload is missing the task, session or replacement pairs');
+  }
+  const claim = await db.query<{ setup_info_json: { source?: string; session_id?: string } | null; setup_info_submitted_at: Date | null }>(
+    'SELECT setup_info_json, setup_info_submitted_at FROM service_tasks WHERE id = $1',
+    [payload.task_id],
+  );
+  const claimed = claim.rows[0];
+  if (!claimed?.setup_info_submitted_at || claimed.setup_info_json?.source !== 'visual_editor' || claimed.setup_info_json?.session_id !== payload.session_id) {
+    throw new SiteJobError('visual_edit_claim_missing', 'visual edit apply refused: the setup right was not claimed by this edit session');
+  }
+  const inserted = await db.query<{ id: string }>(
+    "INSERT INTO backups (site_id, kind, expires_at) VALUES ($1, 'backup', now() + interval '30 days') RETURNING id",
+    [site.id],
+  );
+  const backupId = inserted.rows[0]!.id;
+  await runBackup(deps, job, site, backupId);
+
+  const dir = siteDir(config, site.id);
+  const files = await listSiteHtmlFiles(dir);
+  const rewritten = new Map<string, string>();
+  const totals = new Array<number>(pairs.length).fill(0);
+  const corpusParts: string[] = [];
+  for (const file of files) {
+    const content = await readFile(file, 'utf8');
+    corpusParts.push(content);
+    const result = applyReplacements(content, pairs);
+    result.counts.forEach((n, i) => {
+      totals[i] = (totals[i] ?? 0) + n;
+    });
+    if (result.content !== content) rewritten.set(file, result.content);
+  }
+  const totalReplaced = totals.reduce((sum, n) => sum + n, 0);
+  if (totalReplaced === 0) {
+    // A retry after a completed apply finds every pair already in
+    // place (from gone, to present) — that is success, not a miss.
+    const corpus = corpusParts.join('\n');
+    const alreadyApplied = pairs.every((p) => countForms(corpus, p.from) === 0 && countForms(corpus, p.to) > 0);
+    if (!alreadyApplied) {
+      throw new SiteJobError('visual_edit_no_match', 'visual edit apply found none of the finalized strings in the site files (pre-edit backup kept)');
+    }
+  }
+  for (const [file, content] of rewritten) {
+    const tmp = `${file}.t3e-tmp`;
+    await writeFile(tmp, content, 'utf8');
+    await rename(tmp, file);
+  }
+  await setJobResult(db, job, {
+    backup_id: backupId,
+    files_changed: rewritten.size,
+    replacements: totalReplaced,
+    pairs_matched: totals.filter((n) => n > 0).length,
+    pairs_total: pairs.length,
+  });
+  await emitEvent(db, 'site.visual_edit_applied', 'site', site.id, { site_id: site.id, backup_id: backupId, replacements: totalReplaced });
+}
+
 /** Site job runner: owns job completion like runImportJob (no auto-retry for site jobs). */
 export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: LocalObjectStore }, job: JobRow): Promise<void> {
-  const payload = job.payload_json as { site_id: string; deployment_id?: string; backup_id?: string; version_id?: string; row_version?: number };
+  const payload = job.payload_json as { site_id: string; deployment_id?: string; backup_id?: string; version_id?: string; row_version?: number; task_id?: string; session_id?: string; pairs?: ReplacementPair[] };
   const site = await loadSite(deps.db, payload.site_id);
   try {
     if (job.type === 'site.provision') await runProvision(deps, job, site, payload.deployment_id ?? null);
@@ -644,6 +744,7 @@ export async function runSiteJob(deps: { config: PlatformConfig; db: Db; store: 
     else if (job.type === 'site.setup-token') await runSetupToken(deps, job, site);
     else if (job.type === 'site.purge') await runPurge(deps, job, site);
     else if (job.type === 'site.stop') await runStop(deps, job, site, payload.row_version);
+    else if (job.type === 'site.visual_edit_apply') await runVisualEditApply(deps, job, site, payload);
     else throw new Error(`unknown site job type: ${job.type}`);
     await completeJob(deps.db, job);
   } catch (error) {

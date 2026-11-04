@@ -1,11 +1,17 @@
 import { LocalObjectStore, MockPaymentProvider, createPool, loadConfig } from '@3t/core';
 import { buildApp } from './app.ts';
-import { DisabledMailer, FileMailer } from './mail.ts';
+import { loadMailResendSettings } from './lib/settings-mail.ts';
+import { DisabledMailer, FileMailer, ResendMailer } from './mail.ts';
 
 const config = loadConfig();
 const db = createPool(config.databaseUrl);
+const mailer = config.mailTransport === 'file'
+  ? new FileMailer(config.mailDir)
+  : config.mailTransport === 'resend'
+    ? new ResendMailer(() => loadMailResendSettings(db, config.partnerWebhookKey))
+    : new DisabledMailer();
 const app = await buildApp(
-  { config, db, store: new LocalObjectStore(config.storageDir), mailer: config.mailTransport === 'file' ? new FileMailer(config.mailDir) : new DisabledMailer(),
+  { config, db, store: new LocalObjectStore(config.storageDir), mailer,
     payment: new MockPaymentProvider(config.mockPaymentSecret, config.portalOrigin) },
   { logger: true },
 );

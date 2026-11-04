@@ -12,7 +12,9 @@ interface Site {
   default_locale: string; subscription: { current_period_end: string; status: string } | null;
   deployments: { id: string; operation: string; status: string }[];
   capabilities?: string[]; domain_paid_until?: string | null; storage_quota_gb?: number | null;
+  visual_edit?: { available: boolean; reason: string } | null;
 }
+interface VisualEditSession { edit_url: string; expires_at: string; candidates_count: number }
 interface AdminSetup { setup_pending: boolean; setup_url: string | null; login_url: string | null; token: string | null }
 
 /** C07 — site overview: URL, admin, status, version, expiry, quota, recent tasks. */
@@ -29,6 +31,16 @@ export default function SiteOverviewPage() {
     const res = await api<AdminSetup>(`/sites/${params.id}/admin-setup`);
     setSetupBusy(false);
     if (res.ok) setSetup(res.data); else setError(res.error);
+  }
+  const [editBusy, setEditBusy] = useState(false);
+  const [editError, setEditError] = useState<ApiError | null>(null);
+  async function openVisualEditor() {
+    setEditBusy(true);
+    setEditError(null);
+    const res = await api<VisualEditSession>(`/sites/${params.id}/visual-edit/session`, { method: 'POST' });
+    setEditBusy(false);
+    if (res.ok) window.open(res.data.edit_url, '_blank', 'noopener');
+    else setEditError(res.error);
   }
   const load = useCallback(async () => {
     const res = await api<Site>(`/sites/${params.id}`);
@@ -69,6 +81,21 @@ export default function SiteOverviewPage() {
           ) : (
             <p style={{ margin: 0 }}>{t('ui.sites.admin_setup_done')}{setup.login_url ? <> <Link href={setup.login_url} target="_blank" rel="noopener">{t('ui.sites.open_admin')}</Link></> : null}</p>
           )}
+        </div>
+      ) : null}
+      {site.visual_edit && (site.visual_edit.available || site.visual_edit.reason === 'already_submitted') ? (
+        <div className="card stack">
+          <strong>{t('ui.visual_edit.card_title')}</strong>
+          {site.visual_edit.available ? (
+            <>
+              <p className="muted" style={{ margin: 0 }}>{t('ui.visual_edit.card_body')}</p>
+              <p style={{ margin: 0 }}>⚠ {t('ui.visual_edit.card_warning')}</p>
+              {editError ? <ErrorState error={editError} /> : null}
+              <div className="row"><button type="button" className="button" disabled={editBusy} onClick={() => void openVisualEditor()}>{editBusy ? t('ui.state.loading') : t('ui.visual_edit.open_button')}</button></div>
+            </>
+          ) : site.visual_edit.reason === 'already_submitted' ? (
+            <p className="muted" style={{ margin: 0 }}>{t('ui.visual_edit.used_note')}</p>
+          ) : null}
         </div>
       ) : null}
       {site.subdomain ? (

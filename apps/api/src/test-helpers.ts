@@ -2,7 +2,7 @@ import { mkdtemp } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
-import { LocalObjectStore, MockPaymentProvider, hashPassword, loadConfig, type Db, type PlatformConfig } from '@3t/core';
+import { LocalObjectStore, MockPaymentProvider, hashPassword, loadConfig, type Db, type DomainDnsDeps, type PlatformConfig } from '@3t/core';
 import { createTestDatabase } from '@3t/core/testing';
 import { buildApp } from './app.ts';
 import { MemoryMailer } from './mail.ts';
@@ -20,7 +20,7 @@ export interface TestContext {
   close: () => Promise<void>;
 }
 
-export async function createTestContext(overrides: Partial<PlatformConfig> = {}): Promise<TestContext> {
+export async function createTestContext(overrides: Partial<PlatformConfig> = {}, extraDeps: { domainDns?: DomainDnsDeps } = {}): Promise<TestContext> {
   const { pool, url, drop } = await createTestDatabase();
   const base = await mkdtemp(join(tmpdir(), 'mp-api-'));
   const config = loadConfig({
@@ -36,7 +36,7 @@ export async function createTestContext(overrides: Partial<PlatformConfig> = {})
   const store = new LocalObjectStore(config.storageDir);
   const mailer = new MemoryMailer();
   const payment = new MockPaymentProvider(config.mockPaymentSecret, config.portalOrigin);
-  const app = await buildApp({ config, db: pool, store, mailer, payment });
+  const app = await buildApp({ config, db: pool, store, mailer, payment, domainDns: extraDeps.domainDns });
   return {
     app,
     db: pool,

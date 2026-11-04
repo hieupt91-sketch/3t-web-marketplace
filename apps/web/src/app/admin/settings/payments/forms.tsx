@@ -3,13 +3,14 @@
 import Link from 'next/link';
 import { useEffect, useState, type FormEvent } from 'react';
 import { Alert, ErrorState, Loading } from '@/components/ui';
-import { api, type ApiError } from '@/lib/api';
+import { api, type ApiError, type ApiResult } from '@/lib/api';
 import { useT } from '@/lib/i18n';
 import { VN_BANKS } from '@/lib/vn-banks';
+import { useStepUp } from '../step-up';
 
 /** Back link shared by the per-method payment settings pages: each method
- *  has its OWN page (bank / vnpay / momo / paypal / usd) under the payments
- *  settings index — nothing is mixed into one long form page. */
+ *  has its OWN page (bank / vnpay / momo / payos / paypal / usd) under the
+ *  payments settings index — nothing is mixed into one long form page. */
 export function PaymentSettingsBackLink() {
   const { t } = useT();
   return (
@@ -60,6 +61,19 @@ export function BankTransferForm() {
     });
   }, []);
 
+  const doSave = async (): Promise<ApiResult<PaymentSettings>> => {
+    const body: Record<string, unknown> = {
+      enabled,
+      bank_name: bankName,
+      bank_bin: bankBin,
+      account_number: accountNumber,
+      account_holder: accountHolder,
+    };
+    if (hubKey.trim() !== '') body.hub_api_key = hubKey.trim();
+    return api<PaymentSettings>('/admin/settings/payment', { method: 'POST', body });
+  };
+  const stepUp = useStepUp(doSave);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -71,15 +85,7 @@ export function BankTransferForm() {
       return;
     }
     setBusy(true);
-    const body: Record<string, unknown> = {
-      enabled,
-      bank_name: bankName,
-      bank_bin: bankBin,
-      account_number: accountNumber,
-      account_holder: accountHolder,
-    };
-    if (hubKey.trim() !== '') body.hub_api_key = hubKey.trim();
-    const res = await api<PaymentSettings>('/admin/settings/payment', { method: 'POST', body });
+    const res = await stepUp.submit();
     setBusy(false);
     if (!res.ok) setError(res.error);
     else {
@@ -102,6 +108,7 @@ export function BankTransferForm() {
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.invalid')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
+      {stepUp.prompt}
       <form className="stack card" onSubmit={submit}>
         <label className="row">
           <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
@@ -195,6 +202,13 @@ export function VnPayForm() {
     });
   }, []);
 
+  const doSave = async (): Promise<ApiResult<VnPaySettings>> => {
+    const body: Record<string, unknown> = { enabled, tmn_code: tmnCode, sandbox };
+    if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
+    return api<VnPaySettings>('/admin/settings/payment-vnpay', { method: 'POST', body });
+  };
+  const stepUp = useStepUp(doSave);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -204,9 +218,7 @@ export function VnPayForm() {
       return;
     }
     setBusy(true);
-    const body: Record<string, unknown> = { enabled, tmn_code: tmnCode, sandbox };
-    if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
-    const res = await api<VnPaySettings>('/admin/settings/payment-vnpay', { method: 'POST', body });
+    const res = await stepUp.submit();
     setBusy(false);
     if (!res.ok) setError(res.error);
     else { setSettings(res.data); setSecretKey(''); setSaved(true); }
@@ -224,6 +236,7 @@ export function VnPayForm() {
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
+      {stepUp.prompt}
       <label className="row">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
         <span>{t('ui.payment_settings.vnpay_enabled')}</span>
@@ -286,6 +299,14 @@ export function MoMoForm() {
     });
   }, []);
 
+  const doSave = async (): Promise<ApiResult<MoMoSettings>> => {
+    const body: Record<string, unknown> = { enabled, partner_code: partnerCode, sandbox };
+    if (accessKey.trim() !== '') body.access_key = accessKey.trim();
+    if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
+    return api<MoMoSettings>('/admin/settings/payment-momo', { method: 'POST', body });
+  };
+  const stepUp = useStepUp(doSave);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -295,10 +316,7 @@ export function MoMoForm() {
       return;
     }
     setBusy(true);
-    const body: Record<string, unknown> = { enabled, partner_code: partnerCode, sandbox };
-    if (accessKey.trim() !== '') body.access_key = accessKey.trim();
-    if (secretKey.trim() !== '') body.secret_key = secretKey.trim();
-    const res = await api<MoMoSettings>('/admin/settings/payment-momo', { method: 'POST', body });
+    const res = await stepUp.submit();
     setBusy(false);
     if (!res.ok) setError(res.error);
     else { setSettings(res.data); setAccessKey(''); setSecretKey(''); setSaved(true); }
@@ -316,6 +334,7 @@ export function MoMoForm() {
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
+      {stepUp.prompt}
       <label className="row">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
         <span>{t('ui.payment_settings.momo_enabled')}</span>
@@ -343,6 +362,107 @@ export function MoMoForm() {
       <label className="row">
         <input type="checkbox" checked={sandbox} onChange={(e) => setSandbox(e.target.checked)} disabled={busy} />
         <span>{t('ui.payment_settings.sandbox')}</span>
+      </label>
+      <div className="row">
+        <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
+      </div>
+    </form>
+  );
+}
+
+interface PayosSettings {
+  enabled: boolean;
+  client_id: string;
+  api_key_configured: boolean;
+  checksum_key_configured: boolean;
+  webhook_url: string;
+}
+
+/** payOS merchant settings. The API key and checksum key are write-only,
+ *  exactly like the other gateways' secrets: the form only sends a key
+ *  when the owner types a new one; leaving a field blank keeps the
+ *  configured key. */
+export function PayosForm() {
+  const { t } = useT();
+  const [settings, setSettings] = useState<PayosSettings | null>(null);
+  const [enabled, setEnabled] = useState(false);
+  const [clientId, setClientId] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [checksumKey, setChecksumKey] = useState('');
+  const [error, setError] = useState<ApiError | null>(null);
+  const [formError, setFormError] = useState(false);
+  const [saved, setSaved] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    void api<PayosSettings>('/admin/settings/payment-payos').then((res) => {
+      if (res.ok) {
+        setSettings(res.data);
+        setEnabled(res.data.enabled);
+        setClientId(res.data.client_id);
+      } else setError(res.error);
+    });
+  }, []);
+
+  const doSave = async (): Promise<ApiResult<PayosSettings>> => {
+    const body: Record<string, unknown> = { enabled, client_id: clientId };
+    if (apiKey.trim() !== '') body.api_key = apiKey.trim();
+    if (checksumKey.trim() !== '') body.checksum_key = checksumKey.trim();
+    return api<PayosSettings>('/admin/settings/payment-payos', { method: 'POST', body });
+  };
+  const stepUp = useStepUp(doSave);
+
+  async function submit(event: FormEvent) {
+    event.preventDefault();
+    if (busy) return;
+    setFormError(false); setSaved(false); setError(null);
+    if (enabled && (!clientId.trim() || (!settings?.api_key_configured && !apiKey.trim()) || (!settings?.checksum_key_configured && checksumKey.trim() === ''))) {
+      setFormError(true);
+      return;
+    }
+    setBusy(true);
+    const res = await stepUp.submit();
+    setBusy(false);
+    if (!res.ok) setError(res.error);
+    else { setSettings(res.data); setApiKey(''); setChecksumKey(''); setSaved(true); }
+  }
+
+  if (error && !settings) return <ErrorState error={error} />;
+  if (!settings) return <Loading />;
+  return (
+    <form className="stack card" onSubmit={submit}>
+      <div className="row" style={{ justifyContent: 'space-between' }}>
+        <h2 style={{ margin: 0 }}>{t('ui.payment_settings.payos_title')}</h2>
+        <span className={`status-pill${settings.enabled ? ' status-pill--on' : ''}`}>{settings.enabled ? t('ui.payment_settings.status_on') : t('ui.payment_settings.status_off')}</span>
+      </div>
+      <p className="muted" style={{ margin: 0 }}>{t('ui.payment_settings.payos_hint')}</p>
+      {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
+      {formError ? <Alert tone="error"><p>{t('ui.payment_settings.gateway_invalid')}</p></Alert> : null}
+      {error ? <ErrorState error={error} /> : null}
+      {stepUp.prompt}
+      <label className="row">
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
+        <span>{t('ui.payment_settings.payos_enabled')}</span>
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.client_id')}</span>
+        <input className="input" value={clientId} onChange={(e) => setClientId(e.target.value)} disabled={busy} autoComplete="off" />
+      </label>
+      <dl className="details">
+        <dt>{t('ui.payment_settings.webhook_url')}</dt>
+        <dd className="mono">{settings.webhook_url}</dd>
+        <dt>{t('ui.payment_settings.api_key')}</dt>
+        <dd>{settings.api_key_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
+        <dt>{t('ui.payment_settings.checksum_key')}</dt>
+        <dd>{settings.checksum_key_configured ? t('ui.payment_settings.hub_configured') : t('ui.payment_settings.hub_missing')}</dd>
+      </dl>
+      <label className="field">
+        <span>{t('ui.payment_settings.api_key')}</span>
+        <input className="input" type="password" value={apiKey} onChange={(e) => setApiKey(e.target.value)} disabled={busy} autoComplete="new-password" placeholder={t('ui.payment_settings.hub_api_key_hint')} />
+      </label>
+      <label className="field">
+        <span>{t('ui.payment_settings.checksum_key')}</span>
+        <input className="input" type="password" value={checksumKey} onChange={(e) => setChecksumKey(e.target.value)} disabled={busy} autoComplete="new-password" placeholder={t('ui.payment_settings.hub_api_key_hint')} />
       </label>
       <div className="row">
         <button type="submit" className="button" disabled={busy}>{t('ui.action.save')}</button>
@@ -379,13 +499,17 @@ export function PayPalForm() {
     });
   }, []);
 
+  const doSave = async (): Promise<ApiResult<PayPalSettings>> =>
+    api<PayPalSettings>('/admin/settings/payment-paypal', { method: 'POST', body: { enabled, email, holder } });
+  const stepUp = useStepUp(doSave);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
     setFormError(false); setSaved(false); setError(null);
     if (enabled && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email.trim())) { setFormError(true); return; }
     setBusy(true);
-    const res = await api<PayPalSettings>('/admin/settings/payment-paypal', { method: 'POST', body: { enabled, email, holder } });
+    const res = await stepUp.submit();
     setBusy(false);
     if (!res.ok) setError(res.error);
     else { setSettings(res.data); setSaved(true); }
@@ -403,6 +527,7 @@ export function PayPalForm() {
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.invalid')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
+      {stepUp.prompt}
       <label className="row">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
         <span>{t('ui.payment_settings.paypal_enabled')}</span>
@@ -464,6 +589,15 @@ export function UsdForm() {
     });
   }, []);
 
+  const doSave = async (): Promise<ApiResult<UsdSettings>> => {
+    const rateNum = Number(rate.replace(/[^\d]/g, ''));
+    return api<UsdSettings>('/admin/settings/payment-usd', {
+      method: 'POST',
+      body: { enabled, bank_name: bankName, account_number: accountNumber, account_holder: accountHolder, swift_code: swiftCode, usd_rate: rateNum, fee_percent: Number(fee) || 0 },
+    });
+  };
+  const stepUp = useStepUp(doSave);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     if (busy) return;
@@ -471,10 +605,7 @@ export function UsdForm() {
     const rateNum = Number(rate.replace(/[^\d]/g, ''));
     if (enabled && (!bankName.trim() || !accountNumber.trim() || !accountHolder.trim() || !(rateNum > 0))) { setFormError(true); return; }
     setBusy(true);
-    const res = await api<UsdSettings>('/admin/settings/payment-usd', {
-      method: 'POST',
-      body: { enabled, bank_name: bankName, account_number: accountNumber, account_holder: accountHolder, swift_code: swiftCode, usd_rate: rateNum, fee_percent: Number(fee) || 0 },
-    });
+    const res = await stepUp.submit();
     setBusy(false);
     if (!res.ok) setError(res.error);
     else { setSettings(res.data); setFee(String(res.data.fee_percent)); setSaved(true); }
@@ -502,6 +633,7 @@ export function UsdForm() {
       {saved ? <Alert tone="success"><p>{t('ui.payment_settings.saved')}</p></Alert> : null}
       {formError ? <Alert tone="error"><p>{t('ui.payment_settings.usd_invalid')}</p></Alert> : null}
       {error ? <ErrorState error={error} /> : null}
+      {stepUp.prompt}
       <label className="row">
         <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} disabled={busy} />
         <span>{t('ui.payment_settings.usd_enabled')}</span>

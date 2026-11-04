@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from 'fastify';
 import cookie from '@fastify/cookie';
 import rateLimit from '@fastify/rate-limit';
-import { hashToken, sessionLimits, sessionRejectionReason, shouldRefreshLastSeen, type Db, type LocalObjectStore, type MockPaymentProvider, type PlatformConfig } from '@3t/core';
+import { hashToken, sessionLimits, sessionRejectionReason, shouldRefreshLastSeen, type Db, type DomainDnsDeps, type LocalObjectStore, type MockPaymentProvider, type PlatformConfig } from '@3t/core';
 import { MESSAGES, negotiateLocale, translate, type Locale } from '@3t/i18n';
 import { AppError, errors } from './errors.ts';
 import type { Mailer } from './mail.ts';
@@ -14,7 +14,7 @@ import { meRoutes } from './routes/me.ts';
 import { adminImportRoutes } from './routes/admin-imports.ts';
 import { adminCatalogRoutes } from './routes/admin-catalog.ts';
 import { adminContentRoutes } from './routes/admin-content.ts';
-import { adminAdsSettingsRoutes, adminGatewaySettingsRoutes, adminManualPaymentRoutes, adminPaymentSettingsRoutes, adminSettingsRoutes } from './routes/admin-settings.ts';
+import { adminAdsSettingsRoutes, adminGatewaySettingsRoutes, adminMailSettingsRoutes, adminManualPaymentRoutes, adminPaymentSettingsRoutes, adminSettingsRoutes } from './routes/admin-settings.ts';
 import { adminTemplateRoutes } from './routes/admin-templates.ts';
 import { jobRoutes } from './routes/jobs.ts';
 import { commerceRoutes } from './routes/commerce.ts';
@@ -53,6 +53,9 @@ export interface AppDeps {
   store: LocalObjectStore;
   mailer: Mailer;
   payment: MockPaymentProvider;
+  /** Custom-domain DNS/probe seams (tests inject fakes; production leaves
+   *  undefined and the routes use the core defaults). */
+  domainDns?: DomainDnsDeps;
 }
 
 declare module 'fastify' {
@@ -317,6 +320,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
         field_errors: appError.fieldErrors,
         request_id: request.id,
         retryable: appError.retryable,
+        ...(appError.details ? { details: appError.details } : {}),
       },
     });
   });
@@ -342,6 +346,7 @@ export async function buildApp(deps: AppDeps, opts: { logger?: boolean } = {}): 
       await api.register(adminGatewaySettingsRoutes, { prefix: '/admin' });
       await api.register(adminAdsSettingsRoutes, { prefix: '/admin' });
       await api.register(adminManualPaymentRoutes, { prefix: '/admin' });
+      await api.register(adminMailSettingsRoutes, { prefix: '/admin' });
       await api.register(jobRoutes);
       await api.register(commerceRoutes);
       await api.register(adminCommerceRoutes, { prefix: '/admin' });

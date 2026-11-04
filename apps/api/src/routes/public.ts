@@ -6,6 +6,7 @@ import { loadActivePlans, previewOrigin, startingPrices, usdAppliedRate, type Pl
 import { DEFAULT_LOCALE, LOCALES, type Locale } from '@3t/i18n';
 import { ADAPTERS, IMPLEMENTED_ADAPTERS } from '@3t/template-sdk';
 import { errors } from '../errors.ts';
+import { findDynamicTwin, isStaticAdapter } from '../lib/template-twin.ts';
 import { decodeCursor, page, parseLimit } from '../lib/pagination.ts';
 
 const PLATFORM_CURRENCY = 'VND';
@@ -57,6 +58,8 @@ interface PublicTemplateRow {
   id: string;
   published_version_id: string;
   created_at: Date;
+  /** GREATEST(template row, published translations) — see TEMPLATE_SELECT. */
+  updated_at: Date;
   slug: string;
   manifest_json: { adapter?: string; export?: { modes?: string[] }; locales?: { supported?: string[] }; capabilities?: string[]; demo?: { mode?: string } };
   size_bytes: string | null;
@@ -81,6 +84,7 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
   return {
     id: row.id,
     slug: translated ? row.requested_slug : row.fallback_slug,
+    updated_at: row.updated_at.toISOString(),
     locale,
     requested_locale: locale,
     resolved_locale: translated ? locale : DEFAULT_LOCALE,
@@ -119,8 +123,18 @@ function toSummary(row: PublicTemplateRow, locale: Locale, config: PlatformConfi
 const RT_LOOKUP = (column: string) =>
   `(SELECT rt.${column} FROM template_translations rt WHERE rt.template_id = t.id AND rt.locale = $1 AND rt.status = 'published')`;
 
+/**
+ * updated_at is the last real change to anything the detail page renders:
+ * the template row itself (publish/archive/hide/price ops — touch-trigger
+ * maintained) or any published translation (title/summary/SEO edits, which
+ * never touch the template row). The sitemap's <lastmod> consumes it; a
+ * scalar max() subquery keeps the cost bounded by the page size, like the
+ * RT_LOOKUP lookups above.
+ */
 const TEMPLATE_SELECT = `
-  SELECT t.id, t.published_version_id, t.created_at, t.slug, cat.code AS category_code, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
+  SELECT t.id, t.published_version_id, t.created_at,
+         GREATEST(t.updated_at, (SELECT max(tt.updated_at) FROM template_translations tt WHERE tt.template_id = t.id AND tt.status = 'published')) AS updated_at,
+         t.slug, cat.code AS category_code, v.manifest_json, v.source_sha AS source_sha, a.size_bytes::text AS size_bytes, a.object_key AS artifact_key,
          (SELECT p.host_label FROM previews p
           WHERE p.version_id = t.published_version_id AND p.status = 'active' AND p.visibility = 'public' LIMIT 1) AS demo_label,
          ${RT_LOOKUP('title')} AS requested_title, ${RT_LOOKUP('summary')} AS requested_summary, ${RT_LOOKUP('slug')} AS requested_slug,
@@ -232,6 +246,9 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     const momoRow = await db.query<{ value_json: { enabled?: boolean; partner_code?: string; access_key?: string; secret_key?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.momo'");
     const momoRaw = momoRow.rows[0]?.value_json;
     const momo_enabled = momoRaw?.enabled === true && typeof momoRaw.partner_code === 'string' && momoRaw.partner_code.trim() !== '' && typeof momoRaw.access_key === 'string' && momoRaw.access_key.trim() !== '' && typeof momoRaw.secret_key === 'string' && momoRaw.secret_key !== '';
+    const payosRow = await db.query<{ value_json: { enabled?: boolean; client_id?: string; api_key?: string; checksum_key?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.payos'");
+    const payosRaw = payosRow.rows[0]?.value_json;
+    const payos_enabled = payosRaw?.enabled === true && typeof payosRaw.client_id === 'string' && payosRaw.client_id.trim() !== '' && typeof payosRaw.api_key === 'string' && payosRaw.api_key !== '' && typeof payosRaw.checksum_key === 'string' && payosRaw.checksum_key !== '';
     const ppRow = await db.query<{ value_json: { enabled?: boolean; email?: string } }>("SELECT value_json FROM settings WHERE key = 'payment.paypal'");
     const ppRaw = ppRow.rows[0]?.value_json;
     const paypal_enabled = ppRaw?.enabled === true && typeof ppRaw.email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(ppRaw.email.trim());
@@ -265,7 +282,7 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
         subdomain_fee,
         installation_service,
         hosting_storage,
-        payment: { bank_transfer: bank_transfer_enabled, vnpay: vnpay_enabled, momo: momo_enabled, paypal: paypal_enabled, usd_transfer: usd_enabled },
+        payment: { bank_transfer: bank_transfer_enabled, vnpay: vnpay_enabled, momo: momo_enabled, payos: payos_enabled, paypal: paypal_enabled, usd_transfer: usd_enabled },
         ads,
         adapters: ADAPTERS.map((code) => ({ code, status: IMPLEMENTED_ADAPTERS.includes(code) ? 'supported' : 'not_implemented' })),
       },
@@ -380,8 +397,13 @@ export async function publicRoutes(app: FastifyInstance): Promise<void> {
     if (!row) throw errors.notFound();
     const plans = await loadActivePlans(db, row.id, PLATFORM_CURRENCY);
     const hero = await heroFileCached(app.deps.store, row.artifact_key, row.source_sha);
+    // The dynamic twin (same design, slug + '-dong') is the steer target
+    // when a static template cannot serve a purchase mode — the detail
+    // page and checkout link to it. Null for dynamic templates and for
+    // static ones without a published twin.
+    const twin = isStaticAdapter(row.manifest_json.adapter) ? await findDynamicTwin(db, row.id) : null;
     return {
-      data: { ...toSummary(row, request.locale, config, startingPrices(plans), hero ? previewImageUrl(row.slug) : null), plans },
+      data: { ...toSummary(row, request.locale, config, startingPrices(plans), hero ? previewImageUrl(row.slug) : null), dynamic_twin_slug: twin?.slug ?? null, plans },
       meta: { request_id: request.id, revision: null },
     };
   });

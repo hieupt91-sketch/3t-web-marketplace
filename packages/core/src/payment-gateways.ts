@@ -236,3 +236,155 @@ export class MoMoProvider {
     };
   }
 }
+
+// ---------------------------------------------------------------- payOS
+
+export interface PayosConfig {
+  clientId: string;
+  apiKey: string;
+  checksumKey: string;
+}
+
+const PAYOS_HOST = 'https://api-merchant.payos.vn';
+
+/** Shallow key sort — the shape payOS's documented webhook signer uses
+ *  when it stringifies object values. */
+function sortKeysShallow(obj: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const key of Object.keys(obj).sort()) out[key] = obj[key];
+  return out;
+}
+
+/**
+ * payOS webhook signing string: the data object's entries sorted by key
+ * ascending, undefined values skipped, null rendered as an empty string,
+ * arrays and plain objects JSON-stringified with their keys sorted, all
+ * joined as `key=value` pairs with '&'.
+ */
+export function payosWebhookQueryString(data: Record<string, unknown>): string {
+  const parts: string[] = [];
+  for (const key of Object.keys(data).sort()) {
+    const value = data[key];
+    if (value === undefined) continue;
+    if (value === null) {
+      parts.push(`${key}=`);
+    } else if (Array.isArray(value)) {
+      const normalized = value.map((el) =>
+        el !== null && typeof el === 'object' && !Array.isArray(el) ? sortKeysShallow(el as Record<string, unknown>) : el,
+      );
+      parts.push(`${key}=${JSON.stringify(normalized)}`);
+    } else if (typeof value === 'object') {
+      parts.push(`${key}=${JSON.stringify(sortKeysShallow(value as Record<string, unknown>))}`);
+    } else {
+      parts.push(`${key}=${String(value)}`);
+    }
+  }
+  return parts.join('&');
+}
+
+/**
+ * The useful bits of a payOS create-payment-link response: the hosted
+ * checkout URL plus the VietQR payload the buyer's banking app scans.
+ * Returns null when the create did not succeed (code !== "00").
+ */
+export function parsePayosCreateResponse(json: Record<string, unknown>): { checkoutUrl: string; qrCode: string; paymentLinkId: string; bin: string; accountNumber: string; accountName: string } | null {
+  if (json.code !== '00') return null;
+  const d = (typeof json.data === 'object' && json.data !== null ? json.data : {}) as Record<string, unknown>;
+  const str = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+  const checkoutUrl = str(d.checkoutUrl);
+  const paymentLinkId = str(d.paymentLinkId);
+  if (checkoutUrl === '' || paymentLinkId === '') return null;
+  return {
+    checkoutUrl,
+    qrCode: str(d.qrCode),
+    paymentLinkId,
+    bin: str(d.bin),
+    accountNumber: str(d.accountNumber),
+    accountName: str(d.accountName),
+  };
+}
+
+/**
+ * payOS (api-merchant.payos.vn). Amounts are plain dong, matching the
+ * platform's VND minor unit 1:1. Creating a payment link is a signed
+ * server call — the signature covers only the five documented fields, in
+ * the documented order — so the class exposes the builder plus a create
+ * method taking an injectable fetch. Webhooks are HMAC-signed over the
+ * sorted data object; the paymentLinkId is the attempt reference and,
+ * with the bank transaction reference, the idempotent event id.
+ */
+export class PayosProvider {
+  readonly name = 'payos';
+
+  constructor(private readonly cfg: PayosConfig) {}
+
+  get createEndpoint(): string {
+    return `${PAYOS_HOST}/v2/payment-requests`;
+  }
+
+  /** Signature for the create call: exactly the documented field string. */
+  buildCreateSignature(input: { amount: number; cancelUrl: string; description: string; orderCode: number; returnUrl: string }): string {
+    const data = `amount=${input.amount}&cancelUrl=${input.cancelUrl}&description=${input.description}&orderCode=${input.orderCode}&returnUrl=${input.returnUrl}`;
+    return hmacHex('sha256', this.cfg.checksumKey, data);
+  }
+
+  /** Create a payment link; throws with the gateway's desc on failure. */
+  async createPaymentLink(
+    input: { orderCode: number; amountMinor: string; description: string; returnUrl: string; cancelUrl: string; expiredAt?: number },
+    fetchFn: typeof fetch = fetch,
+  ): Promise<NonNullable<ReturnType<typeof parsePayosCreateResponse>>> {
+    const amount = Number(input.amountMinor);
+    const body: Record<string, unknown> = {
+      orderCode: input.orderCode,
+      amount,
+      description: input.description,
+      returnUrl: input.returnUrl,
+      cancelUrl: input.cancelUrl,
+      ...(input.expiredAt !== undefined ? { expiredAt: input.expiredAt } : {}),
+      signature: this.buildCreateSignature({ amount, cancelUrl: input.cancelUrl, description: input.description, orderCode: input.orderCode, returnUrl: input.returnUrl }),
+    };
+    const res = await fetchFn(this.createEndpoint, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-client-id': this.cfg.clientId, 'x-api-key': this.cfg.apiKey },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const json = (await res.json()) as Record<string, unknown>;
+    const parsed = parsePayosCreateResponse(json);
+    if (!parsed) {
+      throw new Error(`payos create failed: ${typeof json.desc === 'string' && json.desc !== '' ? json.desc : 'unknown error'}`);
+    }
+    return parsed;
+  }
+
+  /** Verify a webhook body and normalize it. Throws on a bad signature. */
+  verifyWebhook(rawBody: string): NormalizedEvent {
+    let p: Record<string, unknown>;
+    try {
+      p = JSON.parse(rawBody) as Record<string, unknown>;
+    } catch {
+      throw new WebhookVerificationError('invalid_json');
+    }
+    const str = (v: unknown): string => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+    const data = (typeof p.data === 'object' && p.data !== null && !Array.isArray(p.data) ? p.data : null) as Record<string, unknown> | null;
+    const provided = str(p.signature);
+    if (!data || provided === '') throw new WebhookVerificationError('missing_fields');
+    const expected = hmacHex('sha256', this.cfg.checksumKey, payosWebhookQueryString(data));
+    if (!safeEqual(expected, provided.toLowerCase())) {
+      throw new WebhookVerificationError('bad_signature');
+    }
+    const paymentLinkId = str(data.paymentLinkId);
+    if (paymentLinkId === '') throw new WebhookVerificationError('missing_fields');
+    // A payment counts as settled only when every layer reports success.
+    const settled = p.success === true && p.code === '00' && str(data.code) === '00';
+    const reference = str(data.reference);
+    return {
+      providerEventId: `payos_${paymentLinkId}_${reference !== '' ? reference : str(data.orderCode)}`,
+      providerRef: paymentLinkId,
+      status: settled ? 'settled' : 'failed',
+      amountMinor: str(data.amount),
+      currency: str(data.currency) !== '' ? str(data.currency) : 'VND',
+      occurredAt: new Date(),
+    };
+  }
+}
